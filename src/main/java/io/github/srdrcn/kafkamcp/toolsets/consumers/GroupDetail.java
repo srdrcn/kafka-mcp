@@ -23,9 +23,15 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.OffsetLookup;
 public record GroupDetail(String groupId, ConsumerGroupDescription description, GroupLagInfo lag,
 		Map<TopicPartition, MemberDescription> owners) {
 
-	/** Grubu yükler; grup yoksa Türkçe {@link ToolException}. topicFilter null değilse sadece uyan topic'ler. */
+	/** describe adımında committed + end offset sorguları için deadline'dan ayrılan pay. */
+	static final long DESCRIBE_RESERVE_MS = 5_000;
+
+	/**
+	 * Grubu yükler; grup yoksa Türkçe {@link ToolException}. topicFilter null değilse sadece uyan topic'ler. End
+	 * offset'i süre içinde alınamayan partition'lar (ör. leader'ı yok) satırda error ile döner, araç düşmez.
+	 */
 	public static GroupDetail load(ToolCall call, String group, Predicate<String> topicFilter) {
-		ConsumerGroupDescription d = ConsumerGroups.describeExisting(call, group);
+		ConsumerGroupDescription d = ConsumerGroups.describeExisting(call, group, DESCRIBE_RESERVE_MS);
 		Committed c = GroupLag.committed(call, List.of(group), topicFilter).get(group);
 		if (c.error() != null) {
 			if (c.notFound()) {

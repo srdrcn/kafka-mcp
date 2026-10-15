@@ -17,7 +17,26 @@ final class Params {
 	static final int DEFAULT_INTERVAL_SECONDS = 5;
 
 	/** İkinci örnek (committed + end offset) için deadline'dan ayrılan pay. */
-	private static final long SECOND_SAMPLE_RESERVE_MS = 4_000;
+	static final long SECOND_SAMPLE_RESERVE_MS = 4_000;
+
+	/**
+	 * İki örnekli araçlarda ilk örneğin adımları için paylar (grup listesi, committed, end offset): yanıt
+	 * vermeyen grup/partition ilk örnekte bütün süreyi yiyemez; bekleme + ikinci örnek için süre kalır.
+	 */
+	static final long FIRST_LIST_RESERVE_MS = 9_000;
+
+	static final long FIRST_COMMITTED_RESERVE_MS = 7_000;
+
+	static final long FIRST_END_RESERVE_MS = 5_000;
+
+	/** İkinci örneğin adımları için paylar (committed, end offset, son describe). */
+	static final long SECOND_COMMITTED_RESERVE_MS = 2_000;
+
+	static final long SECOND_END_RESERVE_MS = 800;
+
+	static final long FINAL_DESCRIBE_RESERVE_MS = 300;
+
+	private static final long MIN_PAUSE_MS = 500;
 
 	private Params() {
 	}
@@ -65,16 +84,20 @@ final class Params {
 
 	/**
 	 * İki örnek arası bekler; ikinci örneğe süre kalsın diye gerekirse beklemeyi kısaltır. Gerçek bekleme
-	 * süresini (ms) döner.
+	 * süresini (ms) döner; ikinci örneğe süre kalmadıysa beklemeden -1 döner.
 	 */
 	static long pause(ToolCall call, int seconds) {
 		long wanted = seconds * 1000L;
 		long ms = Math.min(wanted, call.remainingMillis() - SECOND_SAMPLE_RESERVE_MS);
-		if (ms < 500) {
-			throw new ToolException("İkinci örnek için süre kalmadı (araç zaman sınırı 15 sn); daha dar filtre deneyin");
+		if (ms < MIN_PAUSE_MS) {
+			return -1;
 		}
 		call.sleep(ms);
 		return ms;
+	}
+
+	static ToolException noTimeForSecondSample() {
+		return new ToolException("İkinci örnek için süre kalmadı (araç zaman sınırı 15 sn); daha dar filtre deneyin");
 	}
 
 	/** Saniye başına oran, 2 ondalık. */

@@ -35,11 +35,30 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.PartitionLag;
 @Component
 public class GroupTools {
 
-	/** consumer_groups_get'te en fazla gösterilen partition satırı (fazlası sayılarak atlanır). */
+	/**
+	 * consumer_groups_get/_lag'de en fazla gösterilen partition satırı; get'te üye atamalarındaki partition
+	 * numaraları için de ayrı bütçe (fazlası sayılarak atlanır).
+	 */
 	static final int MAX_PARTITION_ROWS = 1000;
+
+	/** consumer_groups_get totals.lagByTopic'te gösterilen en fazla topic (lag'e göre azalan). */
+	static final int MAX_LAG_BY_TOPIC = 50;
 
 	/** consumer_groups_empty'de grup başına gösterilen en fazla topic. */
 	static final int MAX_TOPICS_PER_GROUP = 20;
+
+	/** consumer_groups_find_by_member sınırları: grup, grup başına üye, üye başına topic. */
+	static final int MAX_MEMBER_GROUPS = 100;
+
+	static final int MAX_MEMBERS_PER_GROUP = 10;
+
+	static final int MAX_TOPICS_PER_MEMBER = 10;
+
+	/** consumer_groups_list: listGroups'tan sonra sadece çıktı için ayrılan pay. */
+	private static final long LIST_ONLY_RESERVE_MS = 1_000;
+
+	/** consumer_groups_find_by_member: listGroups'tan sonra describeConsumerGroups + çıktı için ayrılan pay. */
+	private static final long LIST_BEFORE_DESCRIBE_RESERVE_MS = 2_000;
 
 	private static final String NO_ACL_NOTE = "Bu gruba uyan ACL yok "
 			+ "(allow.everyone.if.no.acl.found=false ise sadece süper kullanıcılar erişir)";
@@ -81,7 +100,7 @@ public class GroupTools {
 		if (state != null && STATES.stream().noneMatch(state::equalsIgnoreCase)) {
 			throw new ToolException("Geçersiz state: " + state + " (geçerli: " + STATES + ")");
 		}
-		GroupList list = ConsumerGroups.list(call);
+		GroupList list = ConsumerGroups.list(call, LIST_ONLY_RESERVE_MS);
 		Map<String, Integer> byState = new TreeMap<>();
 		List<Map<String, Object>> rows = new ArrayList<>();
 		for (GroupSummary g : list.groups()) {
@@ -93,19 +112,32 @@ public class GroupTools {
 				rows.add(g.toMap());
 			}
 		}
-		Map<String, Object> out = Results.map("byState", byState, "listErrors",
-				list.errors().isEmpty() ? null : list.errors());
+		Map<String, Object> out = Results.map("byState", byState, "partial", list.partial() ? Boolean.TRUE : null,
+				"listErrors", list.errors().isEmpty() ? null : list.errors());
 		out.putAll(Results.page("groups", rows, call.limit()));
 		return out;
 	}
 
 	Object get(ToolCall call) {
+		return get(call, MAX_PARTITION_ROWS, MAX_LAG_BY_TOPIC);
+	}
+
+	/**
+	 * maxRows: offsets bölümündeki partition satırı ve üye atamalarındaki partition numarası bütçesi;
+	 * maxLagByTopic: totals.lagByTopic'teki en fazla topic.
+	 */
+	Object get(ToolCall call, int maxRows, int maxLagByTopic) {
 		String group = call.str("group");
 		GroupDetail g = GroupDetail.load(call, group, null);
 		ConsumerGroupDescription d = g.description();
 		List<Map<String, Object>> members = new ArrayList<>();
+		int assignmentBudget = maxRows;
+		int assignmentOmitted = 0;
 		for (MemberDescription m : ConsumerGroups.sortedMembers(d)) {
-			members.add(ConsumerGroups.memberMap(m));
+			int assigned = ConsumerGroups.assignedCount(m);
+			members.add(ConsumerGroups.memberMap(m, assignmentBudget));
+			assignmentOmitted += Math.max(0, assigned - assignmentBudget);
+			assignmentBudget = Math.max(0, assignmentBudget - assigned);
 		}
 		Map<String, List<PartitionLag>> byTopic = new TreeMap<>();
 		for (PartitionLag p : g.lag().partitions()) {
@@ -113,13 +145,20 @@ public class GroupTools {
 		}
 		Map<String, Long> lagByTopic = g.lag().lagByTopic();
 		List<Map<String, Object>> topics = new ArrayList<>();
-		int budget = MAX_PARTITION_ROWS;
+		int budget = maxRows;
 		int omitted = 0;
+		int topicsOmitted = 0;
 		for (Map.Entry<String, List<PartitionLag>> e : byTopic.entrySet()) {
+			if (budget <= 0) {
+				topicsOmitted++;
+				omitted += e.getValue().size();
+				continue;
+			}
 			List<Map<String, Object>> rows = new ArrayList<>();
+			int topicOmitted = 0;
 			for (PartitionLag p : e.getValue()) {
 				if (budget <= 0) {
-					omitted++;
+					topicOmitted++;
 					continue;
 				}
 				budget--;
@@ -128,43 +167,73 @@ public class GroupTools {
 						p.lag(), "owner", owner == null ? null : owner.consumerId(), "noCommit",
 						p.committed() == null ? Boolean.TRUE : null, "error", p.error()));
 			}
-			topics.add(Results.map("topic", e.getKey(), "lag", lagByTopic.get(e.getKey()), "partitions", rows));
+			omitted += topicOmitted;
+			topics.add(Results.map("topic", e.getKey(), "lag", lagByTopic.get(e.getKey()), "partitions", rows,
+					"partitionsOmitted", topicOmitted > 0 ? topicOmitted : null));
 		}
 		int withoutCommit = g.lag().withoutCommit();
-		Map<String, Object> totals = Results.map("lag", g.lag().totalLag(), "lagByTopic", lagByTopic, "topics",
+		int withoutEnd = (int) g.lag().partitions().stream().filter(p -> p.end() == null).count();
+		Map<String, Object> totals = Results.map("lag", g.lag().totalLag(), "lagByTopic",
+				first(lagByTopic, maxLagByTopic), "lagByTopicOmitted",
+				lagByTopic.size() > maxLagByTopic ? lagByTopic.size() - maxLagByTopic : null, "topics",
 				byTopic.size(), "partitions", g.lag().partitions().size(), "partitionsWithoutCommit",
-				withoutCommit > 0 ? withoutCommit : null);
+				withoutCommit > 0 ? withoutCommit : null, "partitionsWithoutEndOffset",
+				withoutEnd > 0 ? withoutEnd : null);
 		String assignor = d.partitionAssignor() == null || d.partitionAssignor().isBlank() ? null
 				: d.partitionAssignor();
 		return Results.map("groupId", d.groupId(), "state", g.state(), "type", ConsumerGroups.type(d.type()),
 				"simple", d.isSimpleConsumerGroup() ? Boolean.TRUE : null, "coordinator",
 				ConsumerGroups.node(d.coordinator()), "partitionAssignor", assignor, "memberCount", members.size(),
-				"members", members, "offsets", topics, "totals", totals, "partitionRowsOmitted",
-				omitted > 0 ? omitted : null, "note",
+				"members", members, "assignmentPartitionsOmitted", assignmentOmitted > 0 ? assignmentOmitted : null,
+				"offsets", topics, "totals", totals, "partitionRowsOmitted", omitted > 0 ? omitted : null,
+				"topicsOmitted", topicsOmitted > 0 ? topicsOmitted : null, "partial",
+				withoutEnd > 0 ? Boolean.TRUE : null, "note",
 				withoutCommit > 0 ? "noCommit: atanmış ama commit edilmiş offset'i olmayan partition (lag hesaplanmadı)"
 						: null);
 	}
 
+	/** Sıralı map'in ilk max girdisi. */
+	static <K, V> Map<K, V> first(Map<K, V> map, int max) {
+		if (map.size() <= max) {
+			return map;
+		}
+		Map<K, V> out = new LinkedHashMap<>();
+		map.entrySet().stream().limit(max).forEach(e -> out.put(e.getKey(), e.getValue()));
+		return out;
+	}
+
 	Object findByMember(ToolCall call) {
+		return findByMember(call, MAX_MEMBER_GROUPS, MAX_MEMBERS_PER_GROUP, MAX_TOPICS_PER_MEMBER);
+	}
+
+	/** maxGroups/maxMembers/maxTopics: çıktıdaki grup, grup başına üye ve üye başına topic sınırları. */
+	Object findByMember(ToolCall call, int maxGroups, int maxMembers, int maxTopics) {
 		Pattern host = call.regex("host");
 		Pattern clientId = call.regex("clientId");
 		if (host == null && clientId == null) {
 			throw new ToolException("host ya da clientId parametrelerinden en az biri gerekli");
 		}
-		GroupList list = ConsumerGroups.list(call);
+		GroupList list = ConsumerGroups.list(call, LIST_BEFORE_DESCRIBE_RESERVE_MS);
 		List<GroupSummary> candidates = list.groups().stream().filter(GroupSummary::mayHaveMembers).toList();
 		Map<String, Settled<ConsumerGroupDescription>> described = ConsumerGroups.describe(call,
 				candidates.stream().map(GroupSummary::groupId).toList());
 		List<Map<String, Object>> groups = new ArrayList<>();
+		int matchedGroups = 0;
 		int matchedMembers = 0;
 		int skipped = 0;
+		int noResponse = 0;
 		for (Map.Entry<String, Settled<ConsumerGroupDescription>> e : described.entrySet()) {
 			if (!e.getValue().ok()) {
-				skipped++;
+				if (e.getValue().timedOut()) {
+					noResponse++;
+				}
+				else {
+					skipped++;
+				}
 				continue;
 			}
 			ConsumerGroupDescription d = e.getValue().value();
-			List<Map<String, Object>> members = new ArrayList<>();
+			List<MemberDescription> matching = new ArrayList<>();
 			for (MemberDescription m : ConsumerGroups.sortedMembers(d)) {
 				if (host != null && (m.host() == null || !host.matcher(m.host()).find())) {
 					continue;
@@ -172,20 +241,34 @@ public class GroupTools {
 				if (clientId != null && (m.clientId() == null || !clientId.matcher(m.clientId()).find())) {
 					continue;
 				}
-				Collection<String> topics = m.assignment() == null ? List.of()
-						: ConsumerGroups.byTopic(m.assignment().topicPartitions()).keySet();
+				matching.add(m);
+			}
+			if (matching.isEmpty()) {
+				continue;
+			}
+			matchedGroups++;
+			matchedMembers += matching.size();
+			if (groups.size() >= maxGroups) {
+				continue;
+			}
+			List<Map<String, Object>> members = new ArrayList<>();
+			for (MemberDescription m : matching.subList(0, Math.min(maxMembers, matching.size()))) {
+				List<String> topics = m.assignment() == null ? List.of()
+						: new ArrayList<>(ConsumerGroups.byTopic(m.assignment().topicPartitions()).keySet());
 				members.add(Results.map("memberId", m.consumerId(), "groupInstanceId",
 						m.groupInstanceId().orElse(null), "clientId", m.clientId(), "host", m.host(), "topics",
-						new ArrayList<>(topics)));
+						topics.subList(0, Math.min(maxTopics, topics.size())), "topicsOmitted",
+						topics.size() > maxTopics ? topics.size() - maxTopics : null));
 			}
-			if (!members.isEmpty()) {
-				matchedMembers += members.size();
-				groups.add(Results.map("groupId", d.groupId(), "state", ConsumerGroups.state(d.groupState()),
-						"members", members));
-			}
+			groups.add(Results.map("groupId", d.groupId(), "state", ConsumerGroups.state(d.groupState()),
+					"matchedMembers", matching.size(), "members", members, "membersOmitted",
+					matching.size() > maxMembers ? matching.size() - maxMembers : null));
 		}
 		return Results.map("scannedGroups", candidates.size(), "skippedGroups", skipped > 0 ? skipped : null,
-				"matchedGroups", groups.size(), "matchedMembers", matchedMembers, "listErrors",
+				"groupsWithoutResponse", noResponse > 0 ? noResponse : null, "partial",
+				noResponse > 0 || list.partial() ? Boolean.TRUE : null, "matchedGroups", matchedGroups,
+				"matchedMembers", matchedMembers, "groupsOmitted",
+				matchedGroups > groups.size() ? matchedGroups - groups.size() : null, "listErrors",
 				list.errors().isEmpty() ? null : list.errors(), "groups", groups);
 	}
 
@@ -196,19 +279,27 @@ public class GroupTools {
 			.filter(GroupSummary::isEmptyState)
 			.filter(g -> call.matches(g.groupId()))
 			.toList();
-		Map<String, GroupLagInfo> lags = GroupLag.snapshot(call, empty.stream().map(GroupSummary::groupId).toList(),
+		GroupLag.Snapshot snapshot = GroupLag.lagSnapshot(call, empty.stream().map(GroupSummary::groupId).toList(),
 				null);
+		Map<String, GroupLagInfo> lags = snapshot.groups();
 		List<Map<String, Object>> rows = new ArrayList<>();
 		int disappeared = 0;
+		ScanIssues issues = new ScanIssues();
 		for (GroupSummary g : empty) {
 			GroupLagInfo info = lags.get(g.groupId());
 			if (info == null) {
 				continue;
 			}
 			if (info.error() != null) {
-				disappeared++;
+				if (info.notFound()) {
+					disappeared++;
+				}
+				else {
+					issues.groupError(info);
+				}
 				continue;
 			}
+			issues.unknownLag(info);
 			Map<String, Long> byTopic = new TreeMap<>(info.lagByTopic());
 			List<Map<String, Object>> topics = new ArrayList<>();
 			byTopic.entrySet()
@@ -222,8 +313,9 @@ public class GroupTools {
 					byTopic.size() > MAX_TOPICS_PER_GROUP ? byTopic.size() - MAX_TOPICS_PER_GROUP : null,
 					"partitionsWithoutEndOffset", withoutEnd > 0 ? withoutEnd : null));
 		}
-		Map<String, Object> out = Results.map("skippedGroups", disappeared > 0 ? disappeared : null, "listErrors",
-				list.errors().isEmpty() ? null : list.errors());
+		Map<String, Object> out = Results.map("skippedGroups", disappeared > 0 ? disappeared : null);
+		issues.endErrors(snapshot.end());
+		out.putAll(issues.toMap(list));
 		out.putAll(Results.page("groups", rows, call.limit()));
 		return out;
 	}

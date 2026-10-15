@@ -180,6 +180,36 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 	}
 
 	@Test
+	void offsetsDeleteDoesNotReportPartitionsWithoutCommitAsDeleted() throws Exception {
+		String prefix = unique("odn");
+		String topic = prefix + "-t";
+		createTopic(topic, 3);
+		produce(topic, 0, 5);
+		String group = prefix + "-g";
+		alter(group, topic, Map.of(0, 3L));
+
+		assertThat(error("consumer_groups_offsets_delete", args("group", group, "topic", topic, "partitions", List.of(1, 2))))
+			.contains("commit edilmiş offset'i yok")
+			.contains("[1, 2]");
+		assertThat(committed(group, topic)).isEqualTo(Map.of(0, 3L));
+
+		JsonNode r = ok("consumer_groups_offsets_delete",
+				args("group", group, "topic", topic, "partitions", List.of(0, 1, 99)));
+		assertThat(r.get("deletedPartitions").asInt()).isEqualTo(1);
+		assertThat(r.get("failedPartitions").asInt()).isZero();
+		assertThat(r.get("partitionsWithoutCommit").asInt()).isEqualTo(2);
+		assertThat(r.at("/partitions/0/partition").asInt()).isZero();
+		assertThat(r.at("/partitions/0/deleted").asBoolean()).isTrue();
+		assertThat(r.at("/partitions/0/committedBefore").asLong()).isEqualTo(3);
+		assertThat(r.at("/partitions/1/partition").asInt()).isEqualTo(1);
+		assertThat(r.at("/partitions/1/deleted").asBoolean()).isFalse();
+		assertThat(r.at("/partitions/1/note").asText()).contains("Commit edilmiş offset yoktu");
+		assertThat(r.at("/partitions/2/partition").asInt()).isEqualTo(99);
+		assertThat(r.at("/partitions/2/deleted").asBoolean()).isFalse();
+		assertThat(committed(group, topic)).isEmpty();
+	}
+
+	@Test
 	void deleteGroupOnlyWhenEmpty() throws Exception {
 		String[] gt = emptyGroupWithData(unique("gdl"));
 		String group = gt[0];

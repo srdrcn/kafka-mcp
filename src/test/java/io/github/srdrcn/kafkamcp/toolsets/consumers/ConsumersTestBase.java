@@ -1,6 +1,7 @@
 package io.github.srdrcn.kafkamcp.toolsets.consumers;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -24,16 +25,43 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
+import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 /** consumers testleri için ortak hazırlık: topic, veri, gerçek consumer group'lar (subscribe + commit). */
 abstract class ConsumersTestBase extends KafkaIntegrationTest {
 
+	private static final ObjectMapper MAPPER = new ObjectMapper();
+
 	private static KafkaProducer<byte[], byte[]> producer;
 
 	private final List<KafkaConsumer<byte[], byte[]>> consumers = new ArrayList<>();
+
+	@Autowired
+	protected KafkaClients clients;
+
+	@Autowired
+	protected GroupTools groupTools;
+
+	@Autowired
+	protected LagTools lagTools;
+
+	/** Handler'ı doğrudan çağırmak için ToolCall (test cluster'ı, 15 sn deadline). */
+	protected ToolCall call(String tool, Map<String, Object> args) {
+		return new ToolCall(tool, args, clients, Instant.now().plusMillis(KafkaClients.TIMEOUT_MS));
+	}
+
+	/** Handler sonucunu (Map/List) JSON ağacına çevirir. */
+	protected static JsonNode json(Object result) {
+		return MAPPER.valueToTree(result);
+	}
 
 	protected static synchronized KafkaProducer<byte[], byte[]> producer() {
 		if (producer == null) {
@@ -102,6 +130,41 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 
 	/** Gruba katılan aktif consumer (assignment gelene kadar poll eder; test sonunda kapanır). */
 	protected KafkaConsumer<byte[], byte[]> join(String group, String clientId, String topic) {
+		KafkaConsumer<byte[], byte[]> c = newGroupConsumer(group, clientId);
+		c.subscribe(List.of(topic));
+		long deadline = System.currentTimeMillis() + 90_000;
+		while (c.assignment().isEmpty()) {
+			if (System.currentTimeMillis() > deadline) {
+				throw new IllegalStateException("Consumer gruba katılamadı: " + group);
+			}
+			c.poll(Duration.ofMillis(200));
+		}
+		return c;
+	}
+
+	/**
+	 * count consumer'ı aynı gruba topics aboneliğiyle katar; rebalance tamamlansın diye hepsi atama alana kadar
+	 * sırayla poll eder (test sonunda kapanır). clientId'ler clientIdPrefix-0, -1, ...
+	 */
+	protected List<KafkaConsumer<byte[], byte[]>> joinAll(String group, String clientIdPrefix, int count,
+			List<String> topics) {
+		List<KafkaConsumer<byte[], byte[]>> members = new ArrayList<>();
+		for (int i = 0; i < count; i++) {
+			KafkaConsumer<byte[], byte[]> c = newGroupConsumer(group, clientIdPrefix + "-" + i);
+			c.subscribe(topics);
+			members.add(c);
+		}
+		long deadline = System.currentTimeMillis() + 90_000;
+		while (members.stream().anyMatch(c -> c.assignment().isEmpty()) || state(group) != GroupState.STABLE) {
+			if (System.currentTimeMillis() > deadline) {
+				throw new IllegalStateException("Consumer'lar gruba katılamadı: " + group);
+			}
+			members.forEach(c -> c.poll(Duration.ofMillis(100)));
+		}
+		return members;
+	}
+
+	private KafkaConsumer<byte[], byte[]> newGroupConsumer(String group, String clientId) {
 		Map<String, Object> p = KafkaTestCluster.clientProperties("admin");
 		p.put(ConsumerConfig.GROUP_ID_CONFIG, group);
 		p.put(ConsumerConfig.CLIENT_ID_CONFIG, clientId);
@@ -111,14 +174,6 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
 		KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(p);
 		consumers.add(c);
-		c.subscribe(List.of(topic));
-		long deadline = System.currentTimeMillis() + 90_000;
-		while (c.assignment().isEmpty()) {
-			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("Consumer gruba katılamadı: " + group);
-			}
-			c.poll(Duration.ofMillis(200));
-		}
 		return c;
 	}
 

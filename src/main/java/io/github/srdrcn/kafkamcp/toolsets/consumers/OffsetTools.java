@@ -48,6 +48,33 @@ public class OffsetTools {
 
 	static final List<String> TARGETS = List.of("earliest", "latest", "offset", "timestamp", "shift");
 
+	/**
+	 * reset'in okuma adımları için deadline'dan ayrılan paylar: leader'ı olmayan partition okuma adımlarında
+	 * bütün süreyi yiyemez, offset'leri değiştiren son istek için en az ~3 sn kalır.
+	 */
+	private static final long RESET_DESCRIBE_RESERVE_MS = 10_000;
+
+	private static final long RESET_EARLIEST_RESERVE_MS = 8_000;
+
+	private static final long RESET_LATEST_RESERVE_MS = 6_500;
+
+	private static final long RESET_TIMESTAMP_RESERVE_MS = 5_000;
+
+	private static final long RESET_COMMITTED_RESERVE_MS = 3_500;
+
+	/** Bir partition'ın hedef offset'i (clamp öncesi) ya da atlanma sebebi. */
+	record Target(Long offset, String skipped) {
+
+		static Target of(long offset) {
+			return new Target(offset, null);
+		}
+
+		static Target skip(String reason) {
+			return new Target(null, reason);
+		}
+
+	}
+
 	public List<ToolSpec> tools() {
 		Map<String, Object> offset = P.integer("to=offset için hedef offset");
 		offset.put("minimum", 0);
@@ -104,11 +131,17 @@ public class OffsetTools {
 		}
 		String groupNote = checkResettable(call, group);
 		List<TopicPartition> tps = targetPartitions(call, topic);
-		OffsetLookup earliest = GroupLag.offsets(call, tps, OffsetSpec.earliest());
-		OffsetLookup latest = GroupLag.endOffsets(call, tps);
+		OffsetLookup earliest = GroupLag.offsets(call, tps, OffsetSpec.earliest(), RESET_EARLIEST_RESERVE_MS);
+		OffsetLookup latest = GroupLag.endOffsets(call, tps, RESET_LATEST_RESERVE_MS);
 		OffsetLookup byTime = timestamp == null ? null
-				: GroupLag.offsets(call, tps, OffsetSpec.forTimestamp(timestamp.toEpochMilli()));
-		Committed committed = GroupLag.committed(call, List.of(group), topic::equals).get(group);
+				: GroupLag.offsets(call, tps, OffsetSpec.forTimestamp(timestamp.toEpochMilli()),
+						RESET_TIMESTAMP_RESERVE_MS);
+		Committed committed = GroupLag.committed(call, List.of(group), topic::equals, RESET_COMMITTED_RESERVE_MS)
+			.get(group);
+		if (committed.error() != null && !committed.notFound()) {
+			throw new ToolException("'" + group + "' grubunun mevcut offset'leri okunamadı; offset'ler değiştirilmedi: "
+					+ committed.error());
+		}
 		Map<TopicPartition, Long> before = committed.error() == null ? committed.offsets() : Map.of();
 
 		Map<TopicPartition, OffsetAndMetadata> targets = new LinkedHashMap<>();
@@ -123,25 +156,16 @@ public class OffsetTools {
 						"Offset aralığı alınamadı: " + err));
 				continue;
 			}
-			Long target = switch (to) {
-				case "earliest" -> lo;
-				case "latest" -> hi;
-				case "offset" -> offset;
-				case "timestamp" -> {
-					Long t = byTime.offsets().get(tp);
-					yield t == null || t < 0 ? hi : t;
-				}
-				default -> current == null ? null : current + shiftBy;
-			};
-			if (target == null) {
-				rows.put(tp.partition(), Results.map("partition", tp.partition(), "skipped",
-						"Commit edilmiş offset yok; shift uygulanamaz"));
+			Target target = target(to, tp, lo, hi, current, offset, shiftBy, byTime);
+			if (target.skipped() != null) {
+				rows.put(tp.partition(),
+						Results.map("partition", tp.partition(), "before", current, "skipped", target.skipped()));
 				continue;
 			}
-			long clamped = Math.max(lo, Math.min(hi, target));
+			long clamped = Math.max(lo, Math.min(hi, target.offset()));
 			targets.put(tp, new OffsetAndMetadata(clamped));
 			rows.put(tp.partition(), Results.map("partition", tp.partition(), "before", current, "after", clamped,
-					"earliest", lo, "latest", hi, "clamped", clamped != target ? Boolean.TRUE : null));
+					"earliest", lo, "latest", hi, "clamped", clamped != target.offset() ? Boolean.TRUE : null));
 		}
 		if (targets.isEmpty()) {
 			throw new ToolException("Hiçbir partition için hedef offset hesaplanamadı: " + rows.values());
@@ -176,9 +200,33 @@ public class OffsetTools {
 				"changedPartitions", changed, "partitions", new ArrayList<>(rows.values()));
 	}
 
+	/**
+	 * Partition'ın hedef offset'i (clamp öncesi). timestamp: o andan sonra kayıt yoksa (offset -1) latest;
+	 * timestamp sorgusu o partition için başarısız olduysa atlanır (asla sessizce latest'e taşınmaz).
+	 */
+	static Target target(String to, TopicPartition tp, long earliest, long latest, Long current, Long offset,
+			Long shiftBy, OffsetLookup byTime) {
+		return switch (to) {
+			case "earliest" -> Target.of(earliest);
+			case "latest" -> Target.of(latest);
+			case "offset" -> Target.of(offset);
+			case "timestamp" -> {
+				Long t = byTime.offsets().get(tp);
+				if (t == null) {
+					String err = byTime.errors().get(tp);
+					yield Target.skip("Timestamp offset'i alınamadı: " + (err == null ? "yanıt yok" : err));
+				}
+				yield Target.of(t < 0 ? latest : t);
+			}
+			default -> current == null ? Target.skip("Commit edilmiş offset yok; shift uygulanamaz")
+					: Target.of(current + shiftBy);
+		};
+	}
+
 	/** Grubun offset'i sıfırlanabilir mi; değilse ToolException. Grup state'ini, grup yoksa null döner. */
 	private static String checkResettable(ToolCall call, String group) {
-		Settled<ConsumerGroupDescription> s = ConsumerGroups.describe(call, List.of(group)).get(group);
+		Settled<ConsumerGroupDescription> s = ConsumerGroups.describe(call, List.of(group), RESET_DESCRIBE_RESERVE_MS)
+			.get(group);
 		if (!s.ok()) {
 			if (ConsumerGroups.notFound(s.error())) {
 				return null;
@@ -279,22 +327,34 @@ public class OffsetTools {
 		if (committed.error() != null) {
 			throw committed.notFound() ? ConsumerGroups.notFoundError(group) : new ToolException(committed.error());
 		}
+		// Sadece commit'i olan partition'lar silinir: broker commit'i olmayan (ya da olmayan) partition için de
+		// hatasız döner; bunlar "silindi" diye raporlanmasın.
 		Set<TopicPartition> tps = new TreeSet<>(
 				Comparator.comparing(TopicPartition::topic).thenComparingInt(TopicPartition::partition));
 		List<Integer> requested = Params.partitions(call);
+		Map<Integer, Map<String, Object>> rows = new TreeMap<>();
 		if (requested.isEmpty()) {
 			tps.addAll(committed.offsets().keySet());
-			tps.addAll(committed.withoutOffset());
 		}
 		else {
-			requested.forEach(p -> tps.add(new TopicPartition(topic, p)));
+			for (int p : requested) {
+				TopicPartition tp = new TopicPartition(topic, p);
+				if (committed.offsets().containsKey(tp)) {
+					tps.add(tp);
+				}
+				else {
+					rows.put(p, Results.map("partition", p, "deleted", false, "note",
+							"Commit edilmiş offset yoktu (silinecek bir şey yok)"));
+				}
+			}
 		}
 		if (tps.isEmpty()) {
-			throw new ToolException("'" + group + "' grubunun '" + topic + "' topic'inde commit edilmiş offset'i yok");
+			throw new ToolException("'" + group + "' grubunun '" + topic + "' topic'inde"
+					+ (requested.isEmpty() ? "" : " istenen partition'larda " + requested)
+					+ " commit edilmiş offset'i yok");
 		}
 		DeleteConsumerGroupOffsetsResult r = call.admin().deleteConsumerGroupOffsets(group, tps);
 		Settled<Void> all = Settled.of(call, r.all());
-		List<Map<String, Object>> rows = new ArrayList<>();
 		int deleted = 0;
 		Throwable first = null;
 		for (TopicPartition tp : tps) {
@@ -302,12 +362,13 @@ public class OffsetTools {
 			Long before = committed.offsets().get(tp);
 			if (s.ok()) {
 				deleted++;
-				rows.add(Results.map("partition", tp.partition(), "committedBefore", before, "deleted", true));
+				rows.put(tp.partition(),
+						Results.map("partition", tp.partition(), "committedBefore", before, "deleted", true));
 			}
 			else {
 				first = first == null ? s.error() : first;
-				rows.add(Results.map("partition", tp.partition(), "committedBefore", before, "deleted", false, "error",
-						deleteOffsetsError(group, topic, s.error())));
+				rows.put(tp.partition(), Results.map("partition", tp.partition(), "committedBefore", before, "deleted",
+						false, "error", deleteOffsetsError(group, topic, s.error())));
 			}
 		}
 		if (deleted == 0) {
@@ -317,8 +378,10 @@ public class OffsetTools {
 			}
 			throw new ToolException("Offset'ler silinemedi: " + deleteOffsetsError(group, topic, e), e);
 		}
+		int withoutCommit = rows.size() - tps.size();
 		return Results.map("group", group, "topic", topic, "deletedPartitions", deleted, "failedPartitions",
-				rows.size() - deleted, "partitions", rows);
+				tps.size() - deleted, "partitionsWithoutCommit", withoutCommit > 0 ? withoutCommit : null,
+				"partitions", new ArrayList<>(rows.values()));
 	}
 
 	private static String deleteOffsetsError(String group, String topic, Throwable e) {

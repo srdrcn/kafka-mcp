@@ -158,6 +158,88 @@ class ConsumerGroupsReadTest extends ConsumersTestBase {
 	}
 
 	@Test
+	void findByMemberCapsGroupsMembersAndTopics() throws Exception {
+		String prefix = unique("cgfc");
+		String t1 = prefix + "-a";
+		String t2 = prefix + "-b";
+		createTopic(t1, 2);
+		createTopic(t2, 2);
+		String big = prefix + "-g0";
+		joinAll(big, prefix + "-cid-big", 2, List.of(t1, t2));
+		join(prefix + "-g1", prefix + "-cid-1", t1);
+		join(prefix + "-g2", prefix + "-cid-2", t1);
+		Map<String, Object> a = args("clientId", "^" + prefix + "-cid");
+
+		JsonNode all = json(groupTools.findByMember(call("consumer_groups_find_by_member", a)));
+		assertThat(all.get("matchedGroups").asInt()).isEqualTo(3);
+		assertThat(all.get("matchedMembers").asInt()).isEqualTo(4);
+		assertThat(all.has("groupsOmitted")).isFalse();
+		assertThat(all.at("/groups/0/members").size()).isEqualTo(2);
+
+		JsonNode capped = json(groupTools.findByMember(call("consumer_groups_find_by_member", a), 2, 1, 1));
+		assertThat(capped.get("matchedGroups").asInt()).isEqualTo(3);
+		assertThat(capped.get("matchedMembers").asInt()).isEqualTo(4);
+		assertThat(capped.get("groupsOmitted").asInt()).isEqualTo(1);
+		assertThat(texts(capped.get("groups"), "groupId")).containsExactly(big, prefix + "-g1");
+		JsonNode g0 = capped.at("/groups/0");
+		assertThat(g0.get("matchedMembers").asInt()).isEqualTo(2);
+		assertThat(g0.get("members").size()).isEqualTo(1);
+		assertThat(g0.get("membersOmitted").asInt()).isEqualTo(1);
+		assertThat(g0.at("/members/0/topics").size()).isEqualTo(1);
+		assertThat(g0.at("/members/0/topicsOmitted").asInt()).isEqualTo(1);
+	}
+
+	@Test
+	void getAndLagBoundOutputForLargeAssignments() throws Exception {
+		String prefix = unique("cgb");
+		String t1 = prefix + "-a";
+		String t2 = prefix + "-b";
+		createTopic(t1, 3);
+		createTopic(t2, 2);
+		for (int p = 0; p < 3; p++) {
+			produce(t1, p, 10);
+		}
+		produce(t2, 0, 50);
+		String group = prefix + "-g";
+		var consumer = joinAll(group, prefix + "-cid", 1, List.of(t1, t2)).get(0);
+		commit(consumer, t1, Map.of(0, 1L, 1, 2L, 2, 3L));
+		commit(consumer, t2, Map.of(0, 0L, 1, 0L));
+
+		JsonNode full = json(groupTools.get(call("consumer_groups_get", args("group", group))));
+		assertThat(full.has("partitionRowsOmitted")).isFalse();
+		assertThat(full.at("/members/0").has("assignmentPartitionsOmitted")).isFalse();
+		assertThat(full.at("/totals/lagByTopic").size()).isEqualTo(2);
+
+		JsonNode get = json(groupTools.get(call("consumer_groups_get", args("group", group)), 2, 1));
+		JsonNode member = get.at("/members/0");
+		assertThat(member.get("assignedPartitions").asInt()).isEqualTo(5);
+		assertThat(member.get("assignmentPartitionsOmitted").asInt()).isEqualTo(3);
+		assertThat(member.at("/assignment/" + t1).toString()).isEqualTo("[0,1]");
+		assertThat(member.at("/assignment").has(t2)).isFalse();
+		assertThat(get.get("assignmentPartitionsOmitted").asInt()).isEqualTo(3);
+		assertThat(get.get("offsets").size()).as("bütçe bitince kalan topic'ler boş dizi olarak eklenmemeli").isEqualTo(1);
+		assertThat(get.at("/offsets/0/topic").asText()).isEqualTo(t1);
+		assertThat(get.at("/offsets/0/partitions").size()).isEqualTo(2);
+		assertThat(get.at("/offsets/0/partitionsOmitted").asInt()).isEqualTo(1);
+		assertThat(get.get("partitionRowsOmitted").asInt()).isEqualTo(3);
+		assertThat(get.get("topicsOmitted").asInt()).isEqualTo(1);
+		assertThat(get.at("/totals/lag").asLong()).isEqualTo(74);
+		assertThat(get.at("/totals/lagByTopic").size()).isEqualTo(1);
+		assertThat(get.at("/totals/lagByTopic/" + t2).asLong()).isEqualTo(50);
+		assertThat(get.at("/totals/lagByTopicOmitted").asInt()).isEqualTo(1);
+
+		JsonNode lag = json(lagTools.lag(call("consumer_groups_lag", args("group", group)), 1));
+		assertThat(lag.get("totalLag").asLong()).isEqualTo(74);
+		assertThat(lag.get("topics").size()).isEqualTo(1);
+		assertThat(lag.at("/topics/0/topic").asText()).isEqualTo(t2);
+		assertThat(lag.at("/topics/0/partitions/0/lag").asLong()).isEqualTo(50);
+		assertThat(lag.at("/topics/0/partitionsOmitted").asInt()).isEqualTo(1);
+		assertThat(lag.get("topicsOmitted").asInt()).isEqualTo(1);
+		assertThat(lag.get("omittedTopicsLag").asLong()).isEqualTo(24);
+		assertThat(lag.get("partitionRowsOmitted").asInt()).isEqualTo(4);
+	}
+
+	@Test
 	void emptyListsStaleGroupsWithLag() throws Exception {
 		String prefix = unique("cge");
 		String t1 = prefix + "-a";

@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
+import org.apache.kafka.clients.admin.DescribeConsumerGroupsOptions;
 import org.apache.kafka.clients.admin.GroupListing;
 import org.apache.kafka.clients.admin.ListGroupsOptions;
 import org.apache.kafka.clients.admin.ListGroupsResult;
@@ -29,9 +30,15 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
  * Consumer group listeleme ve toplu describe yardımcıları (state/type adları, üyeler, partition sahipleri).
- * Tüm çağrılar tek admin isteğiyle yapılır; tek bir grubun hatası diğerlerini etkilemez.
+ * Tüm çağrılar tek admin isteğiyle yapılır; tek bir grubun hatası ya da yanıtsız kalması diğerlerini etkilemez.
  */
 public final class ConsumerGroups {
+
+	/** list(): ardından gelen committed + end offset sorguları için deadline'dan ayrılan varsayılan pay. */
+	public static final long LIST_RESERVE_MS = 6_000;
+
+	/** describe(): çıktı için deadline'dan ayrılan varsayılan pay. */
+	public static final long DESCRIBE_RESERVE_MS = 1_000;
 
 	/** Group listesindeki bir satır. state/type broker bildirmezse null. */
 	public record GroupSummary(String groupId, String state, String type, String protocol, boolean simple) {
@@ -52,8 +59,16 @@ public final class ConsumerGroups {
 
 	}
 
-	/** listGroups sonucu: başarıyla listelenen gruplar (groupId'ye göre sıralı) ve broker hataları. */
+	/**
+	 * listGroups sonucu: başarıyla listelenen gruplar (groupId'ye göre sıralı) ve broker hataları (hata varsa
+	 * liste eksik olabilir).
+	 */
 	public record GroupList(List<GroupSummary> groups, List<String> errors) {
+
+		/** Yanıt vermeyen/hata veren broker'lar yüzünden liste eksik olabilir mi? */
+		public boolean partial() {
+			return !errors.isEmpty();
+		}
 
 		public Map<String, GroupSummary> byId() {
 			Map<String, GroupSummary> m = new LinkedHashMap<>();
@@ -66,12 +81,28 @@ public final class ConsumerGroups {
 	private ConsumerGroups() {
 	}
 
-	/** Tüm consumer group'lar (classic + consumer protokolü) tek listGroups çağrısıyla. */
+	/**
+	 * Tüm consumer group'lar (classic + consumer protokolü) tek listGroups çağrısıyla; deadline'dan
+	 * {@link #LIST_RESERVE_MS} pay bırakır.
+	 */
 	public static GroupList list(ToolCall call) {
-		ListGroupsResult r = call.admin().listGroups(ListGroupsOptions.forConsumerGroups());
-		Settled<Collection<GroupListing>> valid = Settled.of(call, r.valid());
-		Settled<Collection<Throwable>> errors = Settled.of(call, r.errors());
+		return list(call, LIST_RESERVE_MS);
+	}
+
+	/**
+	 * Tüm consumer group'lar; istek en geç (kalan süre - reserveMillis) içinde biter. Yanıt vermeyen broker'lar
+	 * {@link GroupList#errors()}'a düşer.
+	 */
+	public static GroupList list(ToolCall call, long reserveMillis) {
+		ListGroupsResult r = call.admin()
+			.listGroups(ListGroupsOptions.forConsumerGroups().timeoutMs(Settled.timeoutMs(call, reserveMillis)));
+		Settled<Collection<GroupListing>> valid = Settled.within(call, r.valid(), reserveMillis);
+		Settled<Collection<Throwable>> errors = Settled.within(call, r.errors(), reserveMillis);
 		if (!valid.ok()) {
+			if (valid.timedOut()) {
+				throw new ToolException("Consumer group listesi süre içinde alınamadı (broker'lar yanıt vermedi)",
+						valid.error());
+			}
 			throw new ToolException(valid.errorMessage(), valid.error());
 		}
 		List<String> errorMessages = new ArrayList<>();
@@ -91,15 +122,26 @@ public final class ConsumerGroups {
 		return new GroupList(groups, errorMessages);
 	}
 
-	/** Grupları tek describeConsumerGroups çağrısıyla describe eder; kaybolan gruplar hata olarak döner. */
+	/**
+	 * Grupları tek describeConsumerGroups çağrısıyla describe eder; kaybolan gruplar hata, yanıt gelmeyenler
+	 * {@link Settled#timedOut()} olarak döner. {@link #DESCRIBE_RESERVE_MS} pay bırakır.
+	 */
 	public static Map<String, Settled<ConsumerGroupDescription>> describe(ToolCall call, Collection<String> groups) {
+		return describe(call, groups, DESCRIBE_RESERVE_MS);
+	}
+
+	/** {@link #describe(ToolCall, Collection)}; istek en geç (kalan süre - reserveMillis) içinde biter. */
+	public static Map<String, Settled<ConsumerGroupDescription>> describe(ToolCall call, Collection<String> groups,
+			long reserveMillis) {
 		Map<String, Settled<ConsumerGroupDescription>> out = new LinkedHashMap<>();
 		if (groups.isEmpty()) {
 			return out;
 		}
 		List<String> ids = new ArrayList<>(new LinkedHashSet<>(groups));
+		DescribeConsumerGroupsOptions options = new DescribeConsumerGroupsOptions()
+			.timeoutMs(Settled.timeoutMs(call, reserveMillis));
 		Map<String, Settled<ConsumerGroupDescription>> settled = Settled.all(call,
-				call.admin().describeConsumerGroups(ids).describedGroups());
+				call.admin().describeConsumerGroups(ids, options).describedGroups(), reserveMillis);
 		for (String id : ids) {
 			out.put(id, settled.get(id));
 		}
@@ -108,7 +150,12 @@ public final class ConsumerGroups {
 
 	/** Tek grubu describe eder; grup yoksa Türkçe {@link ToolException}. */
 	public static ConsumerGroupDescription describeExisting(ToolCall call, String group) {
-		Settled<ConsumerGroupDescription> s = describe(call, List.of(group)).get(group);
+		return describeExisting(call, group, DESCRIBE_RESERVE_MS);
+	}
+
+	/** {@link #describeExisting(ToolCall, String)}; deadline'dan reserveMillis pay bırakır. */
+	public static ConsumerGroupDescription describeExisting(ToolCall call, String group, long reserveMillis) {
+		Settled<ConsumerGroupDescription> s = describe(call, List.of(group), reserveMillis).get(group);
 		if (s == null || !s.ok()) {
 			if (s != null && notFound(s.error())) {
 				throw notFoundError(group);
@@ -185,10 +232,39 @@ public final class ConsumerGroups {
 
 	/** Üye satırı: memberId, groupInstanceId, clientId, host ve topic → partition ataması. */
 	public static Map<String, Object> memberMap(MemberDescription m) {
-		Map<String, List<Integer>> assignment = m.assignment() == null ? Map.of()
-				: byTopic(m.assignment().topicPartitions());
+		return memberMap(m, Integer.MAX_VALUE);
+	}
+
+	/** Üyeye atanmış partition sayısı. */
+	public static int assignedCount(MemberDescription m) {
+		return m.assignment() == null ? 0 : m.assignment().topicPartitions().size();
+	}
+
+	/**
+	 * Üye satırı; atamada en fazla maxPartitions partition numarası gösterilir (topic adına göre sırayla, son
+	 * topic yarım kalabilir). Kesilirse assignedPartitions ve assignmentPartitionsOmitted sayıları eklenir.
+	 */
+	public static Map<String, Object> memberMap(MemberDescription m, int maxPartitions) {
+		Map<String, List<Integer>> full = m.assignment() == null ? Map.of() : byTopic(m.assignment().topicPartitions());
+		int total = assignedCount(m);
+		Map<String, List<Integer>> assignment = full;
+		if (total > maxPartitions) {
+			assignment = new LinkedHashMap<>();
+			int budget = Math.max(0, maxPartitions);
+			for (Map.Entry<String, List<Integer>> e : full.entrySet()) {
+				if (budget <= 0) {
+					break;
+				}
+				List<Integer> shown = e.getValue().subList(0, Math.min(budget, e.getValue().size()));
+				assignment.put(e.getKey(), shown);
+				budget -= shown.size();
+			}
+		}
+		int omitted = total - assignment.values().stream().mapToInt(List::size).sum();
 		return Results.map("memberId", m.consumerId(), "groupInstanceId", m.groupInstanceId().orElse(null),
-				"clientId", m.clientId(), "host", m.host(), "assignment", assignment);
+				"clientId", m.clientId(), "host", m.host(), "assignment",
+				assignment.isEmpty() && omitted > 0 ? null : assignment, "assignedPartitions",
+				omitted > 0 ? total : null, "assignmentPartitionsOmitted", omitted > 0 ? omitted : null);
 	}
 
 }
