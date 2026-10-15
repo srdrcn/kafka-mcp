@@ -60,8 +60,17 @@ public class QuotaTools {
 	}
 
 	Object list(ToolCall call) {
-		Map<ClientQuotaEntity, Map<String, Double>> all = call
-			.await(call.admin().describeClientQuotas(ClientQuotaFilter.all()).entities());
+		Map<ClientQuotaEntity, Map<String, Double>> all;
+		try {
+			all = call.await(call.admin().describeClientQuotas(ClientQuotaFilter.all()).entities());
+		}
+		catch (ToolException e) {
+			String note = Acls.unsupportedNote(e, SecurityTools.QUOTA_REQUIREMENT);
+			if (note != null) {
+				return Acls.unsupported(note);
+			}
+			throw e;
+		}
 		Map<String, Map<String, Object>> rows = new TreeMap<>();
 		for (Map.Entry<ClientQuotaEntity, Map<String, Double>> e : all.entrySet()) {
 			String text = entityText(e.getKey());

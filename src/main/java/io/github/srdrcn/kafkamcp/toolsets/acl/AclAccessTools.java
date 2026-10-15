@@ -42,7 +42,7 @@ public class AclAccessTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("acls_explain",
-					"Principal'ın kaynakta bir işlemi yapıp yapamayacağını StandardAuthorizer kurallarıyla açıklar (ALLOW/DENY ve nedeni)")
+					"Principal'ın kaynakta bir işlemi yapıp yapamayacağını Kafka authorizer kurallarıyla (KRaft StandardAuthorizer, ZooKeeper AclAuthorizer) açıklar (ALLOW/DENY ve nedeni)")
 			.required("principal", P.string("Principal (ör. User:alice; sadece ad verilirse User: eklenir)"))
 			.required("operation", Acls.operationParam("İşlem", false))
 			.required("resourceType", Acls.resourceTypeParam("Kaynak tipi", false))
@@ -106,11 +106,14 @@ public class AclAccessTools {
 		if (type == ResourceType.CLUSTER && !Acls.CLUSTER_NAME.equals(name)) {
 			notes.add("CLUSTER kaynağının adı her zaman " + Acls.CLUSTER_NAME + " olmalı");
 		}
+		if (broker.customAuthorizerNote() != null) {
+			notes.add(broker.customAuthorizerNote());
+		}
 		return Results.map("decision", d.decision(), "reason", d.reason(), "principal", principal, "operation",
-				operation.name(), "resourceType", type.name(), "resourceName", name, "host", host, "superUser",
-				d.superUser(), "allowEveryoneIfNoAclFound", allowEveryone.value(), "resourceAclCount",
-				d.resourceAclCount(), "matchedAllow", Acls.render(d.matchedAllow()), "matchedDeny",
-				Acls.render(d.matchedDeny()), "notes", notes.isEmpty() ? null : notes);
+				operation.name(), "resourceType", type.name(), "resourceName", name, "host", host, "authorizer",
+				broker.authorizer(), "superUser", d.superUser(), "allowEveryoneIfNoAclFound", allowEveryone.value(),
+				"resourceAclCount", d.resourceAclCount(), "matchedAllow", Acls.render(d.matchedAllow()),
+				"matchedDeny", Acls.render(d.matchedDeny()), "notes", notes.isEmpty() ? null : notes);
 	}
 
 	Object whoCanAccessTopic(ToolCall call) {
@@ -204,6 +207,9 @@ public class AclAccessTools {
 		}
 		if (superUsers.note() != null) {
 			notes.add(superUsers.note());
+		}
+		if (broker.customAuthorizerNote() != null) {
+			notes.add(broker.customAuthorizerNote());
 		}
 		return Results.map("topic", topic, "topicExists", exists, "aclCount", bindings.size(), "superUsers",
 				superUsers.known() ? List.copyOf(superUsers.users()) : null, "allowEveryoneIfNoAclFound",

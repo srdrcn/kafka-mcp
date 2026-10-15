@@ -14,13 +14,17 @@ import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.config.ConfigResource;
 
+import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Tek bir broker'ın güvenlik config'leri (tek describeConfigs). Kafka 4.x {@code super.users} ve
- * {@code allow.everyone.if.no.acl.found}'u sensitive (değersiz) döndürebilir; bu durumda değerleri
- * "gizli" kabul edilir ve çağıran not düşer.
+ * Tek bir broker'ın güvenlik config'leri (tek describeConfigs). {@code super.users} ve
+ * {@code allow.everyone.if.no.acl.found} broker config tanımında olmayan authorizer ayarları olduğundan
+ * Kafka bunları sensitive (değersiz) döndürür (ölçülen: ZooKeeper 3.9 AclAuthorizer ve KRaft 4.1
+ * StandardAuthorizer); bu durumda değerleri "gizli" kabul edilir ve çağıran not düşer. Metadata modu
+ * (KRaft/ZooKeeper) aynı config'lerden çıkarılır: {@code process.roles} doluysa KRaft, değilse
+ * {@code zookeeper.connect} doluysa ZooKeeper.
  */
 public final class BrokerSecurity {
 
@@ -36,6 +40,34 @@ public final class BrokerSecurity {
 			AUTHORIZER, SUPER_USERS, ALLOW_EVERYONE, "ssl.client.auth");
 
 	public static final String HIDDEN = "gizli (broker sensitive döndürdü)";
+
+	/** KRaft broker'ında dolu (broker, controller); ZooKeeper broker'ında boş ya da yok. */
+	public static final String PROCESS_ROLES = "process.roles";
+
+	/** ZooKeeper broker'ında dolu; KRaft'ta boş (3.x) ya da yok (4.x). */
+	public static final String ZOOKEEPER_CONNECT = "zookeeper.connect";
+
+	/** ZooKeeper modunda ACL'leri ve SCRAM bilgilerini tutan znode'ların ZooKeeper ACL'iyle korunup korunmadığı. */
+	public static final String ZOOKEEPER_SET_ACL = "zookeeper.set.acl";
+
+	/**
+	 * Sadece KRaft broker'larında anlamlı güvenlik anahtarları (broker→controller bağlantısı). ZooKeeper 3.x
+	 * broker'ları bunları varsayılan değerleriyle (ör. sasl.mechanism.controller.protocol=GSSAPI) döndürür,
+	 * bu yüzden mod bilinmeden gösterilmez.
+	 */
+	public static final List<String> KRAFT_KEYS = List.of(PROCESS_ROLES, "controller.listener.names",
+			"sasl.mechanism.controller.protocol");
+
+	/**
+	 * Sadece ZooKeeper broker'larında anlamlı güvenlik anahtarları (ACL ve SCRAM bilgileri ZooKeeper'da
+	 * saklanır). KRaft 3.x broker'ları bunları varsayılan değerleriyle döndürür, 4.x hiç döndürmez.
+	 */
+	public static final List<String> ZOOKEEPER_KEYS = List.of(ZOOKEEPER_SET_ACL, "zookeeper.ssl.client.enable");
+
+	/** Kuralları {@link AclEvaluator}'ın uyguladığı yerleşik authorizer'lar (KRaft, ZooKeeper, eski ZooKeeper adı). */
+	public static final List<String> BUILT_IN_AUTHORIZERS = List.of(
+			"org.apache.kafka.metadata.authorizer.StandardAuthorizer", "kafka.security.authorizer.AclAuthorizer",
+			"kafka.security.auth.SimpleAclAuthorizer");
 
 	private final int brokerId;
 
@@ -132,6 +164,48 @@ public final class BrokerSecurity {
 		return value(AUTHORIZER) != null;
 	}
 
+	/** authorizer.class.name; tanımsızsa ya da config'ler okunamadıysa null. */
+	public String authorizer() {
+		return value(AUTHORIZER);
+	}
+
+	/**
+	 * Authorizer yerleşik değilse (ör. Ranger, Confluent RBAC) kararların farklı olabileceğini söyleyen not;
+	 * yerleşikse, tanımsızsa ya da bilinmiyorsa null.
+	 */
+	public String customAuthorizerNote() {
+		String a = authorizer();
+		if (a == null || BUILT_IN_AUTHORIZERS.contains(a)) {
+			return null;
+		}
+		return "authorizer.class.name=" + a + " yerleşik değil (KRaft: StandardAuthorizer, ZooKeeper: AclAuthorizer); "
+				+ "bu authorizer'ın ek kuralları (ör. RBAC rolleri, Ranger politikaları) değerlendirilmedi";
+	}
+
+	/**
+	 * Broker config'lerinden metadata modu: {@link ClusterMeta#KRAFT} (process.roles dolu),
+	 * {@link ClusterMeta#ZOOKEEPER} (process.roles boş, zookeeper.connect dolu; ZK→KRaft geçişindeki ZooKeeper
+	 * broker'ları dahil) ya da config'ler okunamadıysa/belirsizse null.
+	 */
+	public String mode() {
+		if (error != null) {
+			return null;
+		}
+		if (value(PROCESS_ROLES) != null) {
+			return ClusterMeta.KRAFT;
+		}
+		return value(ZOOKEEPER_CONNECT) != null ? ClusterMeta.ZOOKEEPER : null;
+	}
+
+	/** Moda özgü gösterilecek anahtarlar (mod bilinmiyorsa boş). */
+	public List<String> modeKeys() {
+		String mode = mode();
+		if (ClusterMeta.KRAFT.equals(mode)) {
+			return KRAFT_KEYS;
+		}
+		return ClusterMeta.ZOOKEEPER.equals(mode) ? ZOOKEEPER_KEYS : List.of();
+	}
+
 	/** listeners değerinden sadece listener adları (ör. SASL, INTERNAL). */
 	public List<String> listenerNames() {
 		String v = value("listeners");
@@ -215,7 +289,10 @@ public final class BrokerSecurity {
 		return new AllowEveryone(v, null);
 	}
 
-	/** security_summary için seçili config'ler (gizliler "gizli ..." olarak). */
+	/**
+	 * security_summary için seçili config'ler (gizliler "gizli ..." olarak): {@link #KEYS} ve moda özgü
+	 * {@link #KRAFT_KEYS} / {@link #ZOOKEEPER_KEYS}; mod bilinmiyorsa moda özgü anahtarlar gösterilmez.
+	 */
 	public Map<String, Object> render() {
 		Map<String, Object> m = new LinkedHashMap<>();
 		if (error != null) {
@@ -223,7 +300,9 @@ public final class BrokerSecurity {
 			return m;
 		}
 		m.put("brokerId", brokerId);
-		for (String k : KEYS) {
+		List<String> keys = new ArrayList<>(KEYS);
+		keys.addAll(modeKeys());
+		for (String k : keys) {
 			if ("listeners".equals(k)) {
 				List<String> names = listenerNames();
 				if (!names.isEmpty()) {

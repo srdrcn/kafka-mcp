@@ -18,7 +18,8 @@ import org.apache.kafka.common.resource.ResourceType;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Kafka StandardAuthorizer kurallarıyla yetki kararı verir: süper kullanıcı → ALLOW; eşleşen DENY her
+ * Kafka'nın yerleşik authorizer kurallarıyla yetki kararı verir (KRaft StandardAuthorizer ile ZooKeeper
+ * AclAuthorizer/SimpleAclAuthorizer aynı kuralları uygular): süper kullanıcı → ALLOW; eşleşen DENY her
  * zaman kazanır; yoksa eşleşen ALLOW; kaynakta hiç ACL yoksa allow.everyone.if.no.acl.found; aksi halde
  * DENY. Eşleşme: aynı kaynak tipi + (LITERAL tam ad | LITERAL "*" | PREFIXED önek), principal birebir ya
  * da User:*, host birebir ya da *, işlem çıkarımı (ALL her şeyi; ALLOW için READ/WRITE/DELETE/ALTER →
