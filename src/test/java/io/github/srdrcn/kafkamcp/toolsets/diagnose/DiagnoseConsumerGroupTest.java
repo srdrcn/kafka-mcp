@@ -2,11 +2,15 @@ package io.github.srdrcn.kafkamcp.toolsets.diagnose;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.RecordsToDelete;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.acl.AccessControlEntry;
 import org.apache.kafka.common.acl.AclBinding;
@@ -19,7 +23,12 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** diagnose_consumer_group: KRaft ve ZooKeeper cluster'larında takılı/boş grup, lag, log başı ve ACL tespiti. */
+import io.github.srdrcn.kafkamcp.support.TestConfigs;
+
+/**
+ * diagnose_consumer_group: KRaft ve ZooKeeper cluster'larında takılı/boş grup, seyrek commit eden sağlıklı grup
+ * (yanlış pozitif yok), lag, log başı ve ACL tespiti.
+ */
 class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 
 	@Test
@@ -28,7 +37,8 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			String topic = unique("diag-gstuck");
 			String group = topic + "-g";
 			createTopic(cluster, topic, 1, Map.of());
-			produce(cluster, topic, 0, 10);
+			// backlog 30 dk önce yazılmış: commit'i 3'te duran consumer gerçekten takılı (kayıt yaşı kanıtı)
+			produceAged(cluster, topic, 0, 10, 30 * 60_000L);
 			joinAndCommit(cluster, group, topic, Map.of(0, 3L));
 			produceInBackground(cluster, topic, 0);
 
@@ -42,8 +52,11 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			assertThat(p.get("topic").asText()).isEqualTo(topic);
 			assertThat(p.get("committed").asLong()).isEqualTo(3);
 			assertThat(p.get("endDelta").asLong()).isPositive();
+			assertThat(p.get("ageBasis").asText()).isEqualTo("recordAge");
+			assertThat(p.get("oldestPendingAgeSeconds").asLong()).isGreaterThanOrEqualTo(StuckCheck.STUCK_SECONDS);
+			assertThat(stuck.at("/evidence/windowSeconds").asDouble()).isPositive();
 			assertThat(stuck.get("recommendation").asText()).contains("max.poll.interval.ms");
-			assertThat(codes(r)).doesNotContain("NO_ACTIVE_MEMBERS", "LAG_GROWING");
+			assertThat(codes(r)).doesNotContain("NO_ACTIVE_MEMBERS", "LAG_GROWING", "STUCK_SUSPECT");
 
 			JsonNode facts = r.get("facts");
 			assertThat(facts.get("state").asText()).isEqualTo("Stable");
@@ -54,9 +67,101 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			assertThat(facts.at("/coordinator/id").asInt()).isEqualTo(1);
 			assertThat(facts.at("/lag/trend").asText()).isEqualTo("growing");
 			assertThat(facts.at("/lag/stuckPartitions").asInt()).isEqualTo(1);
+			assertThat(facts.at("/lag/commitNotAdvancedPartitions").asInt()).as(r.toString()).isEqualTo(1);
 			assertThat(facts.at("/lag/produceRate").asDouble()).isPositive();
 			assertThat(facts.at("/lagByTopic/0/topic").asText()).isEqualTo(topic);
 			closeResources();
+		}
+	}
+
+	/**
+	 * Sağlıklı ama seyrek commit eden grup (Streams 30 sn, Connect sink 60 sn gibi): ölçüm penceresinde commit
+	 * ilerlemez ve lag büyür görünür; bekleyen kayıtlar yeni olduğu için kritik takılma ya da büyüyen lag uyarısı
+	 * verilmez, sadece bilgi notu.
+	 */
+	@Test
+	void healthyGroupThatCommitsRarelyIsNotReportedAsStuckOnBothClusters() throws Exception {
+		for (String cluster : CLUSTERS) {
+			String topic = unique("diag-grare");
+			String group = topic + "-g";
+			createTopic(cluster, topic, 1, Map.of());
+			produceInBackground(cluster, topic, 0);
+			consumeWithRareCommits(cluster, group, topic);
+
+			// intervalSeconds verilmedi: varsayılan pencere (5 sn)
+			JsonNode r = ok("diagnose_consumer_group", on(cluster, "group", group));
+			assertThat(r.get("status").asText()).as(r.toString()).isNotEqualTo("critical");
+			assertThat(codes(r)).as(r.toString())
+				.doesNotContain("STUCK_PARTITIONS", "STUCK_SUSPECT", "LAG_GROWING", "NO_ACTIVE_MEMBERS");
+			JsonNode facts = r.get("facts");
+			assertThat(facts.get("state").asText()).isEqualTo("Stable");
+			assertThat(facts.at("/lag/stuckPartitions").asInt()).isZero();
+			// pencerede commit yok, yeni mesaj var: takılma adayı ama bekleyen kayıtlar yeni → sadece bilgi notu
+			assertThat(facts.at("/lag/commitNotAdvancedPartitions").asInt()).as(r.toString()).isEqualTo(1);
+			JsonNode note = finding(r, "COMMIT_NOT_ADVANCED");
+			assertThat(note.get("severity").asText()).isEqualTo("info");
+			assertThat(note.get("message").asText()).contains("periyodik commit");
+			assertThat(note.at("/evidence/partitions/0/ageBasis").asText()).isEqualTo("recordAge");
+			assertThat(note.at("/evidence/partitions/0/oldestPendingAgeSeconds").asLong())
+				.isLessThan(StuckCheck.COMMIT_ALLOWANCE_SECONDS);
+			// topic teşhisi de aynı grubu takılı/büyüyen saymaz
+			JsonNode t = ok("diagnose_topic", on(cluster, "topic", topic));
+			assertThat(codes(t)).as(t.toString())
+				.doesNotContain("CONSUMER_STUCK", "CONSUMER_STUCK_SUSPECT", "CONSUMER_LAG_GROWING");
+			assertThat(t.at("/facts/consumers/groups/0/groupId").asText()).isEqualTo(group);
+			assertThat(t.at("/facts/consumers/groups/0/stuckPartitions").asInt()).isZero();
+			closeResources();
+		}
+	}
+
+	/** ACL kontrolü en fazla 20 topic'i değerlendirir; kalanı ve gösterilmeyen listeler sayıyla raporlanır. */
+	@Test
+	void aclCheckReportsTopicsItDidNotEvaluate() throws Exception {
+		String cluster = TestConfigs.CLUSTER;
+		String prefix = unique("diag-gacl");
+		String group = prefix + "-g";
+		List<NewTopic> topics = new ArrayList<>();
+		Map<TopicPartition, OffsetAndMetadata> offsets = new LinkedHashMap<>();
+		for (int i = 0; i <= DiagnoseGroupTools.MAX_ACL_TOPICS; i++) {
+			String t = prefix + "-" + String.format("%02d", i);
+			topics.add(new NewTopic(t, 1, (short) 1));
+			offsets.put(new TopicPartition(t, 0), new OffsetAndMetadata(0));
+		}
+		admin(cluster).createTopics(topics).all().get(60, TimeUnit.SECONDS);
+		admin(cluster).alterConsumerGroupOffsets(group, offsets).all().get(60, TimeUnit.SECONDS);
+		AclBinding groupRead = new AclBinding(new ResourcePattern(ResourceType.GROUP, group, PatternType.LITERAL),
+				new AccessControlEntry("User:bob", "*", AclOperation.READ, AclPermissionType.ALLOW));
+		admin(cluster).createAcls(List.of(groupRead)).all().get(30, TimeUnit.SECONDS);
+		try {
+			waitUntil(() -> {
+				try {
+					return admin(cluster).describeAcls(groupRead.toFilter()).values().get(30, TimeUnit.SECONDS)
+						.size() == 1;
+				}
+				catch (Exception e) {
+					return false;
+				}
+			}, "ACL görünmedi");
+			JsonNode r = ok("diagnose_consumer_group", on(cluster, "group", group, "intervalSeconds", 1));
+			String last = prefix + "-" + String.format("%02d", DiagnoseGroupTools.MAX_ACL_TOPICS);
+			JsonNode skipped = finding(r, "ACL_TOPICS_NOT_EVALUATED");
+			assertThat(skipped.get("severity").asText()).isEqualTo("info");
+			assertThat(skipped.get("message").asText()).startsWith("1 topic").contains("en fazla 20");
+			assertThat(texts(skipped.at("/evidence/topics"))).containsExactly(last);
+			JsonNode missing = finding(r, "ACL_TOPIC_READ_MISSING");
+			assertThat(missing.at("/evidence/principals/0/principal").asText()).isEqualTo("User:bob");
+			assertThat(missing.at("/evidence/principals/0/topics").size()).isEqualTo(DiagnoseParams.MAX_EVIDENCE);
+			assertThat(missing.at("/evidence/principals/0/topicsOmitted").asInt())
+				.isEqualTo(DiagnoseGroupTools.MAX_ACL_TOPICS - DiagnoseParams.MAX_EVIDENCE);
+			JsonNode facts = r.get("facts");
+			assertThat(facts.at("/access/topicsEvaluated").asInt()).isEqualTo(DiagnoseGroupTools.MAX_ACL_TOPICS);
+			assertThat(facts.at("/access/topicsNotEvaluated").asInt()).isEqualTo(1);
+			assertThat(facts.get("topics").size()).isEqualTo(DiagnoseGroupTools.MAX_TOPICS);
+			assertThat(facts.get("topicsOmitted").asInt()).isEqualTo(1);
+			assertThat(r.has("partial")).as("üst sınır örneklemedir, zaman aşımı değil").isFalse();
+		}
+		finally {
+			admin(cluster).deleteAcls(List.of(groupRead.toFilter())).all().get(30, TimeUnit.SECONDS);
 		}
 	}
 

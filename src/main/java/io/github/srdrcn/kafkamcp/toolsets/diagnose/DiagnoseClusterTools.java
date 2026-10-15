@@ -91,6 +91,9 @@ public class DiagnoseClusterTools {
 
 	private static final long GROUP_STEP_MAX_MS = 4_000;
 
+	/** Bağımlı kontrollerin (config, log dir) kendi işi için deadline'dan ayrılan süre. */
+	private static final long DEPENDENT_WORK_MS = 3_500;
+
 	private final ConnectApi connect;
 
 	public DiagnoseClusterTools(ConnectApi connect) {
@@ -123,15 +126,15 @@ public class DiagnoseClusterTools {
 			Check<Topics.Reassignments> reassign = checks.start("reassignment'lar",
 					() -> Topics.reassignments(call, Topics.submitReassignments(call)));
 			Check<ConfigScan> topicConfigs = checks.start("topic config'leri", () -> {
-				Map<String, TopicDescription> t = topics.await(8_000);
+				Map<String, TopicDescription> t = topics.require(call.remainingMillis() - DEPENDENT_WORK_MS);
 				return t == null ? null : topicConfigs(call, t.keySet());
 			});
 			Check<Futures.Each<ConfigResource, Config>> brokerConfigs = checks.start("broker config'leri", () -> {
-				ClusterMeta.Info i = meta.await(6_000);
+				ClusterMeta.Info i = meta.require(call.remainingMillis() - DEPENDENT_WORK_MS);
 				return i == null ? null : Configs.describe(call, i.brokerIds().stream().map(Configs::broker).toList());
 			});
 			Check<Futures.Each<Integer, Map<String, LogDirDescription>>> dirs = checks.start("log dizinleri", () -> {
-				ClusterMeta.Info i = meta.await(6_000);
+				ClusterMeta.Info i = meta.require(call.remainingMillis() - DEPENDENT_WORK_MS);
 				return i == null ? null : LogDirs.describe(call, i.brokerIds(), i.brokerIds());
 			});
 			Check<GroupLagScan> groups = checks.start("consumer group lag'i", () -> groupLag(call));
@@ -260,6 +263,9 @@ public class DiagnoseClusterTools {
 		info.brokers().stream().limit(50).forEach(n -> brokers.add(ClusterMeta.node(n)));
 		facts.put("brokerCount", info.brokers().size());
 		facts.put("brokers", brokers);
+		if (info.brokers().size() > 50) {
+			facts.put("brokersOmitted", info.brokers().size() - 50);
+		}
 		if (info.brokers().size() == 1) {
 			dx.info("SINGLE_BROKER", "Cluster'da tek broker var: yedeklilik yok", null, null);
 		}
@@ -314,7 +320,8 @@ public class DiagnoseClusterTools {
 		}
 		facts.put("quorum", Results.map("leaderId", q.leaderId(), "leaderEpoch", q.leaderEpoch(), "highWatermark",
 				q.highWatermark(), "voters", voters, "observers", q.observers().size(), "laggingObservers",
-				laggingObservers.isEmpty() ? null : first(laggingObservers, MAX_EVIDENCE)));
+				laggingObservers.isEmpty() ? null : first(laggingObservers, MAX_EVIDENCE), "laggingObserversOmitted",
+				omitted(laggingObservers)));
 		if (q.leaderId() < 0) {
 			dx.critical("NO_ACTIVE_CONTROLLER", "KRaft metadata quorum'unun lideri yok: metadata değişiklikleri yapılamaz",
 					evidence("voters", q.voters().size()),
@@ -328,7 +335,7 @@ public class DiagnoseClusterTools {
 		if (!laggingObservers.isEmpty()) {
 			dx.warning("QUORUM_OBSERVER_LAGGING",
 					laggingObservers.size() + " broker (observer) metadata log'unda " + VOTER_LAG_RECORDS + "+ kayıt geride",
-					evidence("brokers", first(laggingObservers, MAX_EVIDENCE)),
+					evidence("brokers", first(laggingObservers, MAX_EVIDENCE), "omitted", omitted(laggingObservers)),
 					"Bu broker'lar güncel olmayan metadata ile çalışıyor olabilir; ağ ve broker loglarını kontrol edin");
 		}
 		if (q.voters().size() == 1) {
@@ -526,7 +533,8 @@ public class DiagnoseClusterTools {
 					"leaderDeviationPct", Format.round(ld, 1), "replicaDeviationPct", Format.round(rd, 1)));
 		}
 		facts.put("distribution", Results.map("maxLeaderDeviationPct", Format.round(maxLeaderDev, 1),
-				"maxReplicaDeviationPct", Format.round(maxReplicaDev, 1), "brokers", first(rows, 50)));
+				"maxReplicaDeviationPct", Format.round(maxReplicaDev, 1), "brokers", first(rows, 50), "brokersOmitted",
+				omitted50(rows)));
 		if (maxReplicaDev > SKEW_PCT && replicas >= 10L * counts.size()) {
 			dx.warning("REPLICA_SKEW", "Replika dağılımı dengesiz: en büyük sapma %" + Format.round(maxReplicaDev, 1),
 					evidence("brokers", first(rows, MAX_EVIDENCE)),

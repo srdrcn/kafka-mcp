@@ -66,7 +66,7 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 			String topic = unique("diag-stuck");
 			String group = topic + "-g";
 			createTopic(cluster, topic, 2, Map.of());
-			produce(cluster, topic, 0, 10);
+			produceAged(cluster, topic, 0, 10, 30 * 60_000L);
 			commit(cluster, group, topic, Map.of(0, 3L));
 			produceInBackground(cluster, topic, 0);
 
@@ -77,6 +77,9 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 			assertThat(g.get("groupId").asText()).isEqualTo(group);
 			assertThat(g.get("members").asInt()).isZero();
 			assertThat(texts(g.get("stuckPartitions"))).containsExactly("0");
+			assertThat(g.get("oldestPendingAgeSeconds").asLong()).isGreaterThanOrEqualTo(StuckCheck.STUCK_SECONDS);
+			assertThat(stuck.at("/evidence/commitAllowanceSeconds").asLong())
+				.isEqualTo(StuckCheck.COMMIT_ALLOWANCE_SECONDS);
 			assertThat(stuck.get("recommendation").asText()).contains("consumer_groups_offsets_reset");
 
 			JsonNode facts = r.get("facts");
@@ -87,6 +90,7 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 			assertThat(row.get("groupId").asText()).isEqualTo(group);
 			assertThat(row.get("trend").asText()).isEqualTo("growing");
 			assertThat(row.get("stuckPartitions").asInt()).isEqualTo(1);
+			assertThat(row.get("commitNotAdvancedPartitions").asInt()).isEqualTo(1);
 			assertThat(row.get("lag").asLong()).isGreaterThan(7);
 			closeResources();
 		}

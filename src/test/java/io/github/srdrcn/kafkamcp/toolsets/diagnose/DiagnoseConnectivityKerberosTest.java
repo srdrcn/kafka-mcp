@@ -73,6 +73,10 @@ class DiagnoseConnectivityKerberosTest {
 		cluster.setName("krb");
 		cluster.setBootstrapServers(KafkaTestCluster.bootstrap());
 		config.setClusters(List.of(cluster));
+		return run(config);
+	}
+
+	private JsonNode run(KafkaMcpConfig config) throws Exception {
 		KafkaClients clients = new KafkaClients(config) {
 
 			@Override
@@ -132,6 +136,34 @@ class DiagnoseConnectivityKerberosTest {
 		assertThat(f.get("recommendation").asText()).contains("88");
 		assertThat(DiagnoseTestBase.findings(r, "KEYTAB_NOT_FOUND")).isEmpty();
 		assertThat(step(r, "kafka").get("status").asText()).isEqualTo("skipped");
+	}
+
+	/**
+	 * Bilet önbelleğiyle (kinit sidecar, useTicketCache=true) GSSAPI: keytab/principal tanımsız olması kritik değil,
+	 * login denenmediği için ("skipped") Kafka adımı atlanmaz, yeni AdminClient ile denenir.
+	 */
+	@Test
+	void ticketCacheSetupStillTriesKafka() throws Exception {
+		Path conf = krb5Conf(dir, "EXAMPLE.TEST");
+		System.setProperty(KerberosCheck.KRB5_CONF_PROPERTY, conf.toString());
+		KafkaMcpConfig config = new KafkaMcpConfig();
+		ClusterConfig cluster = new ClusterConfig();
+		cluster.setName("krb");
+		cluster.setBootstrapServers(KafkaTestCluster.bootstrap());
+		cluster.setProperties(Map.of("security.protocol", "SASL_PLAINTEXT", "sasl.mechanism", "GSSAPI",
+				"sasl.kerberos.service.name", "kafka", "sasl.jaas.config",
+				"com.sun.security.auth.module.Krb5LoginModule required useTicketCache=true;"));
+		config.setClusters(List.of(cluster));
+		JsonNode r = run(config);
+		assertThat(step(r, "kerberos").get("status").asText()).isEqualTo("skipped");
+		assertThat(step(r, "kerberos").get("ticketCache").asBoolean()).isTrue();
+		JsonNode kafka = step(r, "kafka");
+		assertThat(kafka.get("status").asText()).as(r.toString()).isNotEqualTo("skipped");
+		List<JsonNode> notes = DiagnoseTestBase.findings(r, "KERBEROS_TICKET_CACHE");
+		assertThat(notes).isNotEmpty();
+		assertThat(notes).allSatisfy(n -> assertThat(n.get("severity").asText()).isEqualTo("info"));
+		assertThat(DiagnoseTestBase.texts(r.get("findings")).toString()).contains("keytab tanımlı değil");
+		assertThat(DiagnoseTestBase.findings(r, "KERBEROS_PROBLEM")).isEmpty();
 	}
 
 	/** KDC'si erişilemeyen (127.0.0.1:1, kısa timeout, tek deneme) krb5.conf. */

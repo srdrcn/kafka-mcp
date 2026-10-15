@@ -74,13 +74,20 @@ public class DiagnoseTopicTools {
 
 	private static final long LIST_GROUPS_MAX_MS = 3_000;
 
-	private static final long WINDOW_RESERVE_MS = 2_500;
+	/** İkinci örnekten sonra kayıt yaşı okuması ve grup describe'ı için bırakılan süre. */
+	private static final long WINDOW_RESERVE_MS = 4_000;
 
 	private static final long DESCRIBE_GROUPS_RESERVE_MS = 1_500;
 
 	private static final long CONNECTOR_CHECK_MS = 5_000;
 
 	private static final long LAST_RECORD_BUDGET_MS = 2_000;
+
+	/** facts.config.nonDefault'ta gösterilen en fazla ayar (fazlası sayılır). */
+	static final int MAX_NON_DEFAULT = 15;
+
+	/** facts.access listelerinde gösterilen en fazla principal (fazlası sayılır). */
+	static final int MAX_PRINCIPALS = 20;
 
 	private final ConnectApi connect;
 
@@ -93,7 +100,7 @@ public class DiagnoseTopicTools {
 			.read("diagnose_topic",
 					"Topic sağlık teşhisi: partition/ISR, config, boyut/dağılım, yazma, consumer lag/takılma, transaction, connector, ACL")
 			.required("topic", P.string("Topic adı"))
-			.param("intervalSeconds", DiagnoseParams.interval())
+			.param("intervalSeconds", DiagnoseParams.interval(DiagnoseParams.TOPIC_INTERVAL_SECONDS))
 			.handler(this::diagnose));
 	}
 
@@ -104,7 +111,7 @@ public class DiagnoseTopicTools {
 	}
 
 	record GroupScan(int listed, List<String> listErrors, OffsetWindow window,
-			Map<String, Settled<ConsumerGroupDescription>> described) {
+			Map<String, Settled<ConsumerGroupDescription>> described, StuckCheck stuck) {
 	}
 
 	record ProducerScan(int activeProducers, int partitionsWithOpenTxn, int openTransactions,
@@ -114,7 +121,7 @@ public class DiagnoseTopicTools {
 
 	Object diagnose(ToolCall call) {
 		String topic = call.str("topic");
-		long intervalMs = DiagnoseParams.intervalMs(call);
+		long intervalMs = DiagnoseParams.intervalMs(call, DiagnoseParams.TOPIC_INTERVAL_SECONDS);
 		TopicDescription d = Topics.describeOne(call, topic);
 		List<TopicPartition> online = Topics.onlinePartitions(List.of(d));
 		Diagnosis dx = new Diagnosis();
@@ -214,9 +221,11 @@ public class DiagnoseTopicTools {
 		}
 		OffsetWindow w = OffsetWindow.measure(call, online, ids, true, intervalMs, WINDOW_RESERVE_MS);
 		List<String> withCommits = w.groupsWithCommits();
+		StuckCheck stuck = StuckCheck.of(call, w, withCommits,
+				Math.min(StuckCheck.READ_BUDGET_MS, call.remainingMillis() - DESCRIBE_GROUPS_RESERVE_MS - 1_000));
 		Map<String, Settled<ConsumerGroupDescription>> described = withCommits.isEmpty() ? Map.of()
 				: ConsumerGroups.describe(call, withCommits, DESCRIBE_GROUPS_RESERVE_MS);
-		return new GroupScan(listed, listErrors, w, described);
+		return new GroupScan(listed, listErrors, w, described, stuck);
 	}
 
 	private static ProducerScan producers(ToolCall call, List<TopicPartition> online, String topic) {
@@ -375,7 +384,8 @@ public class DiagnoseTopicTools {
 			}
 		}
 		if (!nonDefault.isEmpty()) {
-			config.put("nonDefault", first(nonDefault, 15));
+			config.putAll(Results.map("nonDefault", first(nonDefault, MAX_NON_DEFAULT), "nonDefaultOmitted",
+					omitted(nonDefault, MAX_NON_DEFAULT)));
 		}
 		facts.put("config", config);
 		int brokers = info == null ? -1 : info.brokers().size();
@@ -515,7 +525,7 @@ public class DiagnoseTopicTools {
 		}
 	}
 
-	private static void consumers(Diagnosis dx, Map<String, Object> facts, GroupScan gs, OffsetsInfo oi,
+	static void consumers(Diagnosis dx, Map<String, Object> facts, GroupScan gs, OffsetsInfo oi,
 			TopicDescription d) {
 		if (gs == null) {
 			return;
@@ -527,40 +537,62 @@ public class DiagnoseTopicTools {
 		rate.putAll(w.describe());
 		facts.put("writeRate", rate);
 
-		record Row(String groupId, String state, Integer members, OffsetWindow.GroupProgress p) {
+		record Row(String groupId, String state, Integer members, OffsetWindow.GroupProgress p, StuckCheck.Verdict v) {
+
+			int stalled() {
+				return v.stuck().size() + v.suspect().size();
+			}
+
 		}
 		List<Row> rows = new ArrayList<>();
 		for (String g : w.groupsWithCommits()) {
 			Settled<ConsumerGroupDescription> s = gs.described().get(g);
 			ConsumerGroupDescription desc = s != null && s.ok() ? s.value() : null;
 			rows.add(new Row(g, desc == null ? null : ConsumerGroups.state(desc.groupState()),
-					desc == null ? null : desc.members().size(), w.progress(g)));
+					desc == null ? null : desc.members().size(), w.progress(g), gs.stuck().verdict(g)));
 		}
-		rows.sort(Comparator.comparingInt((Row r) -> -r.p().stuck().size())
+		rows.sort(Comparator.comparingInt((Row r) -> -r.v().stuck().size())
+			.thenComparingInt(r -> -r.stalled())
 			.thenComparing(Comparator.comparingLong((Row r) -> r.p().lag()).reversed())
 			.thenComparing(Row::groupId));
 		List<Map<String, Object>> stuckActive = new ArrayList<>();
 		List<Map<String, Object>> stuckIdle = new ArrayList<>();
+		List<Map<String, Object>> suspect = new ArrayList<>();
+		List<Map<String, Object>> periodic = new ArrayList<>();
 		List<Map<String, Object>> growing = new ArrayList<>();
 		List<Map<String, Object>> high = new ArrayList<>();
 		List<Map<String, Object>> beforeStart = new ArrayList<>();
 		long totalLag = 0;
 		for (Row r : rows) {
 			OffsetWindow.GroupProgress p = r.p();
+			StuckCheck.Verdict v = r.v();
 			totalLag += p.lag();
 			Map<String, Object> ev = Results.map("groupId", r.groupId(), "state", r.state(), "members", r.members(),
-					"lag", p.lag(), "stuckPartitions", p.stuck().isEmpty() ? null : partitionNumbers(
-							p.stuck().stream().map(OffsetWindow.PartitionProgress::partition).toList()));
-			if (!p.stuck().isEmpty()) {
-				(r.members() != null && r.members() > 0 ? stuckActive : stuckIdle).add(ev);
+					"lag", p.lag());
+			boolean active = r.members() != null && r.members() > 0;
+			if (!v.stuck().isEmpty()) {
+				ev.put("stuckPartitions", partitionNumbers(v.stuck().stream().map(StuckCheck.Assessed::partition).toList()));
+				ev.put("oldestPendingAgeSeconds", v.maxBehindSeconds(StuckCheck.Level.STUCK));
+				(active ? stuckActive : stuckIdle).add(ev);
 			}
-			else if ("growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN) {
+			else if (!v.suspect().isEmpty()) {
+				ev.put("stuckSuspectPartitions",
+						partitionNumbers(v.suspect().stream().map(StuckCheck.Assessed::partition).toList()));
+				ev.put("oldestPendingAgeSeconds", v.maxBehindSeconds(StuckCheck.Level.SUSPECT));
+				(active ? suspect : stuckIdle).add(ev);
+			}
+			else if ("growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN && p.lagBeyondCommitAllowance()) {
 				ev.put("consumeRate", p.consumeRate());
 				ev.put("produceRate", p.produceRate());
 				growing.add(ev);
 			}
 			else if (p.lag() >= HIGH_LAG) {
 				high.add(ev);
+			}
+			if (v.stuck().isEmpty() && v.suspect().isEmpty() && !v.periodic().isEmpty()) {
+				periodic.add(Results.map("groupId", r.groupId(), "partitions",
+						partitionNumbers(v.periodic().stream().map(StuckCheck.Assessed::partition).toList()),
+						"oldestPendingAgeSeconds", v.maxBehindSeconds(StuckCheck.Level.PERIODIC)));
 			}
 			if (oi != null) {
 				List<Integer> lost = new ArrayList<>();
@@ -572,23 +604,46 @@ public class DiagnoseTopicTools {
 				}
 				if (!lost.isEmpty()) {
 					beforeStart.add(Results.map("groupId", r.groupId(), "state", r.state(), "partitions",
-							first(lost, MAX_EVIDENCE)));
+							first(lost, MAX_EVIDENCE), "partitionsOmitted", omitted(lost)));
 				}
 			}
 		}
+		Map<String, Object> window = Results.map("windowSeconds", Format.round(w.elapsedSeconds(), 1),
+				"commitAllowanceSeconds", StuckCheck.COMMIT_ALLOWANCE_SECONDS, "stuckAfterSeconds",
+				StuckCheck.STUCK_SECONDS);
 		if (!stuckActive.isEmpty()) {
+			Map<String, Object> ev = evidence("groups", first(stuckActive, MAX_EVIDENCE), "omitted", omitted(stuckActive));
+			ev.putAll(window);
 			dx.critical("CONSUMER_STUCK",
-					stuckActive.size() + " aktif consumer group bu topic'te ilerlemiyor: commit sabit, yeni mesaj geliyor",
-					evidence("groups", first(stuckActive, MAX_EVIDENCE), "omitted", omitted(stuckActive)),
-					"Bu grupların consumer loglarını inceleyin (poison pill, uzun işleme, max.poll.interval.ms, commit "
+					stuckActive.size() + " aktif consumer group bu topic'te ilerlemiyor: commit sabit, yeni mesaj geliyor ve "
+							+ "bekleyen en eski kayıt " + StuckCheck.STUCK_SECONDS / 60 + "+ dk önce yazılmış",
+					ev, "Bu grupların consumer loglarını inceleyin (poison pill, uzun işleme, max.poll.interval.ms, commit "
 							+ "hatası); detay için diagnose_consumer_group");
 		}
 		if (!stuckIdle.isEmpty()) {
+			Map<String, Object> ev = evidence("groups", first(stuckIdle, MAX_EVIDENCE), "omitted", omitted(stuckIdle));
+			ev.putAll(window);
 			dx.warning("CONSUMER_STUCK",
 					stuckIdle.size() + " consumer group üyesiz ve geride kalıyor: commit ilerlemiyor, yeni mesaj geliyor",
-					evidence("groups", first(stuckIdle, MAX_EVIDENCE), "omitted", omitted(stuckIdle)),
-					"Consumer uygulamasını başlatın; grup artık kullanılmıyorsa consumer_groups_delete ya da (grup EMPTY "
+					ev, "Consumer uygulamasını başlatın; grup artık kullanılmıyorsa consumer_groups_delete ya da (grup EMPTY "
 							+ "iken) consumer_groups_offsets_reset");
+		}
+		if (!suspect.isEmpty()) {
+			Map<String, Object> ev = evidence("groups", first(suspect, MAX_EVIDENCE), "omitted", omitted(suspect));
+			ev.putAll(window);
+			dx.warning("CONSUMER_STUCK_SUSPECT",
+					suspect.size() + " aktif consumer group'un commit'i pencerede ilerlemedi ve bekleyen en eski kayıt "
+							+ "periyodik commit payından (" + StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn) eski",
+					ev, "Birkaç dakika sonra diagnose_consumer_group ile tekrar bakın; ilerlemiyorsa consumer loglarını "
+							+ "inceleyin");
+		}
+		if (!periodic.isEmpty()) {
+			Map<String, Object> ev = evidence("groups", first(periodic, MAX_EVIDENCE), "omitted", omitted(periodic));
+			ev.putAll(window);
+			dx.info("COMMIT_NOT_ADVANCED",
+					periodic.size() + " grubun commit'i pencerede ilerlemedi ama bekleyen kayıtlar yeni: periyodik commit "
+							+ "(auto commit 5 sn, Streams 30 sn, Connect 60 sn) olası, takılma kanıtı yok",
+					ev, null);
 		}
 		if (!growing.isEmpty()) {
 			dx.warning("CONSUMER_LAG_GROWING",
@@ -610,8 +665,17 @@ public class DiagnoseTopicTools {
 					"Grup çalıştığında auto.offset.reset devreye girer; retention.ms'i artırmayı ya da tüketimi "
 							+ "hızlandırmayı değerlendirin");
 		}
+		if (!w.groupErrors().isEmpty()) {
+			List<String> failed = List.copyOf(w.groupErrors().keySet());
+			dx.warning("GROUP_OFFSETS_UNAVAILABLE",
+					failed.size() + " grubun commit'li offset'leri alınamadı: bu topic'i tüketen gruplar eksik olabilir",
+					evidence("groups", first(failed, MAX_EVIDENCE), "omitted", omitted(failed), "firstError",
+							w.groupErrors().values().iterator().next()),
+					"Coordinator'ların (__consumer_offsets) sağlığını ve GROUP DESCRIBE yetkisini kontrol edin; "
+							+ "aracı tekrar çalıştırın");
+		}
 		long messages = oi == null ? -1 : oi.ranges().values().stream().mapToLong(Offsets.Range::count).sum();
-		if (rows.isEmpty() && messages != 0 && gs.listErrors().isEmpty()) {
+		if (rows.isEmpty() && messages != 0 && gs.listErrors().isEmpty() && w.groupErrors().isEmpty()) {
 			dx.info("NO_CONSUMER_GROUPS",
 					"Bu topic'te commit eden consumer group yok (assign() ile okuyan ya da commit etmeyen istemciler görünmez)",
 					evidence("groupsScanned", gs.listed()), null);
@@ -623,6 +687,12 @@ public class DiagnoseTopicTools {
 		for (Row r : rows.subList(0, Math.min(MAX_EVIDENCE, rows.size()))) {
 			Map<String, Object> m = Results.map("groupId", r.groupId(), "state", r.state(), "members", r.members());
 			m.putAll(r.p().summary());
+			if (r.p().complete()) {
+				m.put("stuckPartitions", r.v().stuck().size());
+				if (!r.v().suspect().isEmpty()) {
+					m.put("stuckSuspectPartitions", r.v().suspect().size());
+				}
+			}
 			top.add(m);
 		}
 		facts.put("consumers", Results.map("groupsScanned", gs.listed(), "groupsOnTopic", rows.size(), "totalLag",
@@ -642,13 +712,14 @@ public class DiagnoseTopicTools {
 			dx.critical("HANGING_TRANSACTION",
 					p.hanging().size() + " partition'da askıda (hanging) transaction şüphesi: LSO ilerlemez, "
 							+ "read_committed consumer'lar takılır",
-					evidence("partitions", first(p.hanging(), MAX_EVIDENCE), "thresholdMs", p.hangingThresholdMs()),
+					evidence("partitions", first(p.hanging(), MAX_EVIDENCE), "omitted", omitted(p.hanging()), "thresholdMs",
+							p.hangingThresholdMs()),
 					"topics_transactions ile doğrulayın; kafka-transactions.sh find-hanging / abort ile kapatın");
 		}
 		if (!p.longRunning().isEmpty()) {
 			dx.warning("LONG_RUNNING_TRANSACTION",
 					p.longRunning().size() + " açık transaction kendi timeout'undan uzun süredir açık",
-					evidence("transactions", first(p.longRunning(), MAX_EVIDENCE)),
+					evidence("transactions", first(p.longRunning(), MAX_EVIDENCE), "omitted", omitted(p.longRunning())),
 					"Producer uygulamasını kontrol edin (commit/abort çağrılmıyor olabilir); topics_transactions");
 		}
 	}
@@ -669,7 +740,7 @@ public class DiagnoseTopicTools {
 		}
 		if (!failed.isEmpty()) {
 			dx.warning("CONNECTOR_FAILED", failed.size() + " connector bu topic'i kullanıyor ve hata durumunda",
-					evidence("connectors", first(failed, MAX_EVIDENCE)),
+					evidence("connectors", first(failed, MAX_EVIDENCE), "omitted", omitted(failed)),
 					"connectors_restart (includeTasks=true, onlyFailed=true) ile yeniden başlatın; tekrar düşerse "
 							+ "diagnose_connector ile config/yetki sorununa bakın");
 		}
@@ -691,9 +762,12 @@ public class DiagnoseTopicTools {
 		List<String> deniedWrite = v.deniedPrincipals(AclOperation.WRITE, ResourceType.TOPIC, topic);
 		int acls = v.resourceAclCount(ResourceType.TOPIC, topic);
 		facts.put("access", Results.map("authorizer", true, "authorizerClass", v.authorizerClass(), "aclCount", acls,
-				"readers", first(readers, 20), "writers", first(writers, 20), "deniedRead",
-				deniedRead.isEmpty() ? null : first(deniedRead, 20), "deniedWrite",
-				deniedWrite.isEmpty() ? null : first(deniedWrite, 20), "superUsers",
+				"readers", first(readers, MAX_PRINCIPALS), "readersOmitted", omitted(readers, MAX_PRINCIPALS), "writers",
+				first(writers, MAX_PRINCIPALS), "writersOmitted", omitted(writers, MAX_PRINCIPALS), "deniedRead",
+				deniedRead.isEmpty() ? null : first(deniedRead, MAX_PRINCIPALS), "deniedReadOmitted",
+				omitted(deniedRead, MAX_PRINCIPALS), "deniedWrite",
+				deniedWrite.isEmpty() ? null : first(deniedWrite, MAX_PRINCIPALS), "deniedWriteOmitted",
+				omitted(deniedWrite, MAX_PRINCIPALS), "superUsers",
 				v.superUsers().known() ? List.copyOf(v.superUsers().users()) : "bilinmiyor (broker gizliyor)",
 				"allowEveryoneIfNoAclFound", v.allowEveryone().value(), "note",
 				"Süper kullanıcılar ACL'den bağımsız erişir; readers/writers ACL'i olan principal'lardır"));

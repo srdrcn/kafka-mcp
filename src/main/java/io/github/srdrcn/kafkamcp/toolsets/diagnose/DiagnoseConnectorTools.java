@@ -6,6 +6,7 @@ import static io.github.srdrcn.kafkamcp.toolsets.diagnose.DiagnoseParams.omitted
 import static io.github.srdrcn.kafkamcp.toolsets.diagnose.Diagnosis.evidence;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -60,7 +61,20 @@ public class DiagnoseConnectorTools {
 
 	private static final int CONFIG_VALUE_MAX = 200;
 
-	private static final long WINDOW_RESERVE_MS = 2_000;
+	/** Bağımlı alt kontrollerin connector config'i / aktif topic'leri en fazla bekleme süresi. */
+	private static final long DEPENDENCY_WAIT_MS = 5_000;
+
+	/** İkinci örnekten sonra kayıt yaşı okuması / son yazma zamanı için bırakılan süre. */
+	private static final long WINDOW_RESERVE_MS = 3_500;
+
+	/** facts.topics listelerinde gösterilen en fazla topic (fazlası sayılır). */
+	static final int MAX_TOPICS_SHOWN = 20;
+
+	/** facts.workers.clusterTasksByWorker'da gösterilen en fazla worker. */
+	static final int MAX_WORKERS_SHOWN = 20;
+
+	/** Plugin tipleri: connector'lar dışındakiler (converter vb.) yanıtta varsa converter kontrolü yapılabilir. */
+	private static final Set<String> CONNECTOR_TYPES = Set.of("source", "sink");
 
 	private static final Set<String> SINGLE_TOPIC_KEYS = Set.of("topic", "topics", "kafka.topic", "topic.name");
 
@@ -76,11 +90,15 @@ public class DiagnoseConnectorTools {
 					"Connector teşhisi: connector/görev durumu ve hata özetleri, config/plugin/converter, topic'ler, sink lag, kaynak yazma, worker dağılımı")
 			.connect()
 			.required("name", P.string("Connector adı"))
-			.param("intervalSeconds", DiagnoseParams.interval())
+			.param("intervalSeconds", DiagnoseParams.interval(DiagnoseParams.DEFAULT_INTERVAL_SECONDS))
 			.handler(this::diagnose));
 	}
 
-	record Plugins(Set<String> classes, boolean includesConverters) {
+	/**
+	 * Worker'lardaki plugin'ler: connector sınıfları, converter sınıfları ve yanıtın converter'ları gerçekten
+	 * içerip içermediği (Connect &lt; 3.2 connectorsOnly parametresini yok sayar, sadece connector döner).
+	 */
+	record Plugins(Set<String> connectors, Set<String> converters, boolean includesConverters) {
 	}
 
 	record Validation(int errorCount, List<Map<String, Object>> fields) {
@@ -91,13 +109,13 @@ public class DiagnoseConnectorTools {
 	}
 
 	record Activity(String group, String dlq, OffsetWindow window, Set<String> sourceTopics,
-			int sourceTopicsOmitted, Map<String, Long> lastWrite) {
+			int sourceTopicsOmitted, Map<String, Long> lastWrite, StuckCheck stuck) {
 	}
 
 	Object diagnose(ToolCall call) {
 		String cluster = call.cluster();
 		String name = call.str("name");
-		long intervalMs = DiagnoseParams.intervalMs(call);
+		long intervalMs = DiagnoseParams.intervalMs(call, DiagnoseParams.DEFAULT_INTERVAL_SECONDS);
 		ConnectorStatus status = status(cluster, name);
 		Diagnosis dx = new Diagnosis();
 		Map<String, Object> facts = new LinkedHashMap<>();
@@ -107,16 +125,16 @@ public class DiagnoseConnectorTools {
 			Check<Plugins> plugins = checks.start("plugin'ler", () -> plugins(cluster));
 			Check<List<String>> active = checks.start("aktif topic'ler", () -> activeTopics(cluster, name));
 			Check<Validation> validation = checks.start("config doğrulama", () -> {
-				ConnectorInfo i = info.await(5_000);
+				ConnectorInfo i = info.require(DEPENDENCY_WAIT_MS);
 				return i == null || i.connectorClass() == null ? null : validate(cluster, i);
 			});
 			Check<TopicCheck> topics = checks.start("topic'lerin varlığı", () -> {
-				ConnectorInfo i = info.await(5_000);
+				ConnectorInfo i = info.require(DEPENDENCY_WAIT_MS);
 				return i == null ? null : topicCheck(call, i);
 			});
 			Check<Activity> activity = checks.start("sink lag / kaynak yazma", () -> {
-				ConnectorInfo i = info.await(5_000);
-				List<String> a = active.await(5_000);
+				ConnectorInfo i = info.require(DEPENDENCY_WAIT_MS);
+				List<String> a = sink(status, i) ? null : active.require(DEPENDENCY_WAIT_MS);
 				return activity(call, name, status, i, a, intervalMs);
 			});
 
@@ -154,23 +172,76 @@ public class DiagnoseConnectorTools {
 	// ---- alt kontroller ----
 
 	private Plugins plugins(String cluster) {
-		Set<String> classes = new TreeSet<>();
-		boolean converters = true;
 		JsonNode all;
 		try {
 			all = api.client().get(cluster, "/connector-plugins?connectorsOnly=false");
 		}
 		catch (ToolException e) {
 			all = api.client().get(cluster, "/connector-plugins");
-			converters = false;
 		}
+		return plugins(all);
+	}
+
+	/**
+	 * /connector-plugins yanıtından plugin'ler. Converter kontrolü sadece yanıtta connector dışı tipler (converter,
+	 * transformation...) varsa yapılabilir: Connect &lt; 3.2 connectorsOnly=false'u yok sayıp sadece connector döner.
+	 */
+	static Plugins plugins(JsonNode all) {
+		Set<String> connectors = new TreeSet<>();
+		Set<String> converters = new TreeSet<>();
+		boolean nonConnectorTypes = false;
 		for (JsonNode n : all) {
 			String cls = ConnectJson.text(n, "class");
-			if (cls != null) {
-				classes.add(cls);
+			String type = ConnectJson.text(n, "type");
+			if (cls == null) {
+				continue;
+			}
+			String t = type == null ? "" : type.toLowerCase(Locale.ROOT);
+			if (type == null || CONNECTOR_TYPES.contains(t)) {
+				connectors.add(cls);
+			}
+			else {
+				nonConnectorTypes = true;
+				if (t.equals("converter")) {
+					converters.add(cls);
+				}
 			}
 		}
-		return new Plugins(classes, converters);
+		return new Plugins(connectors, converters, nonConnectorTypes);
+	}
+
+	/**
+	 * Değer yüklü sınıflardan biri mi? Connect'in takma adları da kabul edilir: tam ad, basit ad ya da sonundaki
+	 * {@code suffix} (Connector/Converter) olmadan basit ad; büyük/küçük harf duyarsız.
+	 */
+	static boolean pluginPresent(Collection<String> classes, String value, String suffix) {
+		if (value == null || value.isBlank()) {
+			return false;
+		}
+		if ("Connector".equals(suffix)) {
+			try {
+				ConnectApi.resolvePlugin(new ArrayList<>(classes), value);
+				return true;
+			}
+			catch (ToolException e) {
+				return false;
+			}
+		}
+		String v = value.trim().toLowerCase(Locale.ROOT);
+		String sfx = suffix.toLowerCase(Locale.ROOT);
+		for (String cls : classes) {
+			String simple = ConnectJson.shortClass(cls).toLowerCase(Locale.ROOT);
+			if (v.equals(cls.toLowerCase(Locale.ROOT)) || v.equals(simple)
+					|| simple.endsWith(sfx) && v.equals(simple.substring(0, simple.length() - sfx.length()))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean sink(ConnectorStatus status, ConnectorInfo info) {
+		String type = status.type() != null ? status.type() : info == null ? null : info.type();
+		return "sink".equalsIgnoreCase(type);
 	}
 
 	private List<String> activeTopics(String cluster, String name) {
@@ -250,8 +321,7 @@ public class DiagnoseConnectorTools {
 	private static Activity activity(ToolCall call, String name, ConnectorStatus status, ConnectorInfo info,
 			List<String> active, long intervalMs) {
 		Map<String, String> cfg = info == null ? Map.of() : info.config();
-		String type = status.type() != null ? status.type() : info == null ? null : info.type();
-		boolean sink = "sink".equalsIgnoreCase(type);
+		boolean sink = sink(status, info);
 		String group = sink ? cfg.getOrDefault("consumer.override.group.id", "connect-" + name) : null;
 		Set<String> topics = new TreeSet<>();
 		Set<String> sources = new TreeSet<>();
@@ -276,6 +346,8 @@ public class DiagnoseConnectorTools {
 				: Offsets.submit(call, partitions, OffsetSpec.maxTimestamp());
 		OffsetWindow w = OffsetWindow.measure(call, partitions, group == null ? List.of() : List.of(group), false,
 				intervalMs, WINDOW_RESERVE_MS);
+		StuckCheck stuck = StuckCheck.of(call, w, group == null ? List.of() : List.of(group),
+				Math.min(StuckCheck.READ_BUDGET_MS, call.remainingMillis() - 2_000));
 		Map<String, Long> lastWrite = new TreeMap<>();
 		if (maxTs != null) {
 			Map<TopicPartition, ListOffsetsResultInfo> max = Offsets.awaitEach(call, partitions, maxTs).values();
@@ -285,7 +357,7 @@ public class DiagnoseConnectorTools {
 				}
 			});
 		}
-		return new Activity(group, dlq, w, sources, omittedTopics, lastWrite);
+		return new Activity(group, dlq, w, sources, omittedTopics, lastWrite, stuck);
 	}
 
 	// ---- değerlendirme ----
@@ -360,7 +432,8 @@ public class DiagnoseConnectorTools {
 			masked.put(k, text != null && text.length() > CONFIG_VALUE_MAX ? text.substring(0, CONFIG_VALUE_MAX) + "…" : text);
 		});
 		facts.put("config", masked);
-		if (plugins != null && cls != null && !plugins.classes().contains(cls)) {
+		boolean running = ConnectorStatus.RUNNING.equals(s.state()) || s.tasksInState(ConnectorStatus.RUNNING) > 0;
+		if (plugins != null && cls != null && !running && !pluginPresent(plugins.connectors(), cls, "Connector")) {
 			dx.critical("PLUGIN_MISSING", "connector.class worker'larda yüklü değil: " + cls,
 					evidence("class", cls), "Plugin'i tüm worker'ların plugin.path'ine kurun (connect_plugins_list ile kontrol edin)");
 		}
@@ -371,9 +444,14 @@ public class DiagnoseConnectorTools {
 			if (conv == null || conv.isBlank()) {
 				defaulted.add(key);
 			}
-			else if (plugins != null && plugins.includesConverters() && !plugins.classes().contains(conv.trim())) {
+			else if (plugins != null && plugins.includesConverters()
+					&& !pluginPresent(plugins.converters(), conv, "Converter")) {
 				missingConverters.add(key + "=" + conv.trim());
 			}
+		}
+		if (plugins != null && !plugins.includesConverters() && defaulted.size() < 2) {
+			facts.put("converterCheck",
+					"yapılamadı: Connect REST converter listesi vermiyor (Connect < 3.2, connectorsOnly desteklenmiyor)");
 		}
 		if (!missingConverters.isEmpty()) {
 			dx.critical("CONVERTER_MISSING", "Converter sınıfı worker'larda yok: " + String.join(", ", missingConverters),
@@ -405,26 +483,29 @@ public class DiagnoseConnectorTools {
 		boolean sink = "sink".equalsIgnoreCase(s.type() != null ? s.type() : info == null ? null : info.type());
 		Map<String, Object> topics = new LinkedHashMap<>();
 		if (active != null) {
-			topics.put("active", first(active, 20));
-			if (active.size() > 20) {
-				topics.put("activeOmitted", active.size() - 20);
+			topics.put("active", first(active, MAX_TOPICS_SHOWN));
+			if (active.size() > MAX_TOPICS_SHOWN) {
+				topics.put("activeOmitted", active.size() - MAX_TOPICS_SHOWN);
 			}
 		}
 		if (tc != null) {
-			topics.putAll(Results.map("configured", tc.configured().isEmpty() ? null : first(tc.configured(), 20),
-					"regex", tc.regex(), "regexMatches", tc.regexMatches(), "missing",
-					tc.missing().isEmpty() ? null : List.copyOf(tc.missing()), "deadLetterQueue", tc.dlq()));
+			topics.putAll(Results.map("configured",
+					tc.configured().isEmpty() ? null : first(tc.configured(), MAX_TOPICS_SHOWN), "configuredOmitted",
+					omitted(tc.configured(), MAX_TOPICS_SHOWN), "regex", tc.regex(), "regexMatches", tc.regexMatches(),
+					"missing", tc.missing().isEmpty() ? null : first(tc.missing(), MAX_TOPICS_SHOWN), "missingOmitted",
+					omitted(tc.missing(), MAX_TOPICS_SHOWN), "deadLetterQueue", tc.dlq()));
 			if (!tc.missing().isEmpty()) {
 				if (sink) {
 					dx.warning("TOPIC_MISSING",
-							"Sink'in okuduğu topic(ler) yok: " + String.join(", ", first(tc.missing(), MAX_EVIDENCE)),
-							evidence("topics", first(tc.missing(), MAX_EVIDENCE)),
+							tc.missing().size() + " sink topic'i yok: " + String.join(", ", first(tc.missing(), MAX_EVIDENCE)),
+							evidence("topics", first(tc.missing(), MAX_EVIDENCE), "omitted", omitted(tc.missing())),
 							"Topic adını düzeltin ya da topic'i oluşturun (topics_create)");
 				}
 				else {
 					dx.info("TOPIC_MISSING",
-							"Config'teki topic(ler) henüz yok: " + String.join(", ", first(tc.missing(), MAX_EVIDENCE)),
-							evidence("topics", first(tc.missing(), MAX_EVIDENCE)),
+							tc.missing().size() + " config topic'i henüz yok: "
+									+ String.join(", ", first(tc.missing(), MAX_EVIDENCE)),
+							evidence("topics", first(tc.missing(), MAX_EVIDENCE), "omitted", omitted(tc.missing())),
 							"auto.create.topics.enable kapalıysa ve connector topic oluşturmuyorsa topics_create ile oluşturun");
 				}
 			}
@@ -453,7 +534,7 @@ public class DiagnoseConnectorTools {
 		}
 	}
 
-	private static void activityFindings(Diagnosis dx, Map<String, Object> facts, Activity a, ConnectorStatus s) {
+	static void activityFindings(Diagnosis dx, Map<String, Object> facts, Activity a, ConnectorStatus s) {
 		if (a == null) {
 			return;
 		}
@@ -470,32 +551,7 @@ public class DiagnoseConnectorTools {
 						"Görevler RUNNING ise topic'e veri gelince commit oluşur; consumer.override.group.id kullanılıyorsa adı kontrol edin");
 			}
 			else {
-				lag.putAll(p.summary());
-				List<OffsetWindow.PartitionProgress> stuck = p.stuck();
-				if (!stuck.isEmpty()) {
-					Map<String, Object> ev = evidence("partitions",
-							first(stuck.stream().map(OffsetWindow.PartitionProgress::toMap).toList(), MAX_EVIDENCE),
-							"group", a.group());
-					if (running) {
-						dx.critical("SINK_STUCK",
-								stuck.size() + " partition'da sink commit'i ilerlemiyor ama yeni mesaj geliyor", ev,
-								"Görev loglarını ve hedef sistemi (yazma hatası, yavaşlık) kontrol edin; connectors_restart "
-										+ "includeTasks=true onlyFailed=false ile görevleri yeniden başlatmayı deneyin");
-					}
-					else {
-						dx.warning("SINK_STUCK", stuck.size() + " partition'da sink ilerlemiyor (görevler RUNNING değil)", ev,
-								"Önce görev durumlarını düzeltin (TASKS_FAILED / PAUSED bulgularına bakın)");
-					}
-				}
-				else if ("growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN) {
-					dx.warning("SINK_LAG_GROWING",
-							"Sink lag'i büyüyor: tüketim " + p.consumeRate() + " msg/sn, üretim " + p.produceRate() + " msg/sn",
-							evidence("lag", p.lag(), "lagAtStart", p.lag0()),
-							"tasks.max'ı partition sayısına kadar artırın; hedef sistemin yazma kapasitesini ve batch ayarlarını kontrol edin");
-				}
-				else if (p.lag() >= HIGH_LAG) {
-					dx.info("SINK_LAG_HIGH", "Sink lag'i " + p.lag(), evidence("lag", p.lag()), "Eğilimi izleyin");
-				}
+				sinkFindings(dx, lag, a, p, running);
 			}
 			lag.putAll(w.describe());
 			facts.put("sinkLag", lag);
@@ -522,7 +578,7 @@ public class DiagnoseConnectorTools {
 					&& (newest < 0 || Format.ageSeconds(newest) > SOURCE_IDLE_SECONDS)) {
 				dx.info("SOURCE_IDLE", "Kaynak connector çalışıyor ama topic'lerine yazmıyor"
 						+ (newest < 0 ? "" : " (son yazma " + Format.ageSeconds(newest) / 60 + " dk önce)"),
-						evidence("topics", first(a.sourceTopics(), MAX_EVIDENCE)),
+						evidence("topics", first(a.sourceTopics(), MAX_EVIDENCE), "omitted", omitted(a.sourceTopics())),
 						"Kaynak sistemde yeni veri var mı, connector offset'i ilerliyor mu (connectors_offsets) kontrol edin");
 			}
 		}
@@ -542,6 +598,72 @@ public class DiagnoseConnectorTools {
 		}
 	}
 
+	/**
+	 * Sink grubunun lag/takılma bulguları. Connect sink görevleri offset'leri offset.flush.interval.ms (varsayılan
+	 * 60 sn) aralıkla commit eder: kısa pencerede commit görülmemesi tek başına takılma değildir; karar bekleyen en
+	 * eski kaydın yaşına göre verilir ({@link StuckCheck}).
+	 */
+	static void sinkFindings(Diagnosis dx, Map<String, Object> lag, Activity a, OffsetWindow.GroupProgress p,
+			boolean running) {
+		StuckCheck.Verdict v = a.stuck().verdict(a.group());
+		lag.putAll(p.summary());
+		if (p.complete()) {
+			lag.put("stuckPartitions", v.stuck().size());
+			if (!v.suspect().isEmpty()) {
+				lag.put("stuckSuspectPartitions", v.suspect().size());
+			}
+		}
+		Map<String, Object> window = v.window();
+		boolean stalled = !v.stuck().isEmpty() || !v.suspect().isEmpty();
+		if (!v.stuck().isEmpty()) {
+			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.STUCK, MAX_EVIDENCE), "omitted",
+					omitted(v.stuck()), "group", a.group());
+			ev.putAll(window);
+			String age = ", bekleyen en eski kayıt " + v.maxBehindSeconds(StuckCheck.Level.STUCK) / 60 + " dk önce yazılmış";
+			if (running) {
+				dx.critical("SINK_STUCK",
+						v.stuck().size() + " partition'da sink commit'i ilerlemiyor, yeni mesaj geliyor" + age, ev,
+						"Görev loglarını ve hedef sistemi (yazma hatası, yavaşlık) kontrol edin; connectors_restart "
+								+ "includeTasks=true onlyFailed=false ile görevleri yeniden başlatmayı deneyin");
+			}
+			else {
+				dx.warning("SINK_STUCK",
+						v.stuck().size() + " partition'da sink ilerlemiyor (görevler RUNNING değil)" + age, ev,
+						"Önce görev durumlarını düzeltin (TASKS_FAILED / PAUSED bulgularına bakın)");
+			}
+		}
+		if (!v.suspect().isEmpty()) {
+			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.SUSPECT, MAX_EVIDENCE),
+					"omitted", omitted(v.suspect()), "group", a.group());
+			ev.putAll(window);
+			dx.warning("SINK_STUCK_SUSPECT",
+					v.suspect().size() + " partition'da pencerede sink commit'i ilerlemedi ve bekleyen en eski kayıt yaklaşık "
+							+ v.maxBehindSeconds(StuckCheck.Level.SUSPECT) + " sn önce yazılmış (sink'ler ~60 sn'de bir "
+							+ "commit eder; " + StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn payı aşıldı)",
+					ev, "Birkaç dakika sonra diagnose_connector ile tekrar bakın; ilerlemiyorsa görev loglarını ve hedef "
+							+ "sistemi kontrol edin");
+		}
+		if (!v.periodic().isEmpty() && !stalled) {
+			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.PERIODIC, MAX_EVIDENCE),
+					"omitted", omitted(v.periodic()), "group", a.group());
+			ev.putAll(window);
+			dx.info("SINK_COMMIT_NOT_ADVANCED",
+					"Pencerede sink commit'i ilerlemedi ama bekleyen kayıtlar yeni (en eski "
+							+ v.maxBehindSeconds(StuckCheck.Level.PERIODIC) + " sn): sink görevleri offset.flush.interval.ms "
+							+ "(varsayılan 60 sn) aralıkla commit eder, takılma kanıtı yok",
+					ev, null);
+		}
+		if ("growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN && !stalled && p.lagBeyondCommitAllowance()) {
+			dx.warning("SINK_LAG_GROWING",
+					"Sink lag'i büyüyor: tüketim " + p.consumeRate() + " msg/sn, üretim " + p.produceRate() + " msg/sn",
+					evidence("lag", p.lag(), "lagAtStart", p.lag0(), "windowSeconds", window.get("windowSeconds")),
+					"tasks.max'ı partition sayısına kadar artırın; hedef sistemin yazma kapasitesini ve batch ayarlarını kontrol edin");
+		}
+		else if (p.lag() >= HIGH_LAG && !stalled) {
+			dx.info("SINK_LAG_HIGH", "Sink lag'i " + p.lag(), evidence("lag", p.lag()), "Eğilimi izleyin");
+		}
+	}
+
 	private static void workers(Diagnosis dx, Map<String, Object> facts, List<ConnectorOverview> all,
 			ConnectorStatus s) {
 		Map<String, Integer> mine = new TreeMap<>();
@@ -557,9 +679,12 @@ public class DiagnoseConnectorTools {
 				}
 			}
 			Map<String, Integer> shown = new LinkedHashMap<>();
-			first(load.entrySet(), 20).forEach(e -> shown.put(e.getKey(), e.getValue()));
+			first(load.entrySet(), MAX_WORKERS_SHOWN).forEach(e -> shown.put(e.getKey(), e.getValue()));
 			w.put("clusterTasksByWorker", shown);
 			w.put("workers", load.size());
+			if (load.size() > MAX_WORKERS_SHOWN) {
+				w.put("clusterTasksByWorkerOmitted", load.size() - MAX_WORKERS_SHOWN);
+			}
 			if (load.size() > 1) {
 				int max = load.values().stream().mapToInt(Integer::intValue).max().orElse(0);
 				int min = load.values().stream().mapToInt(Integer::intValue).min().orElse(0);

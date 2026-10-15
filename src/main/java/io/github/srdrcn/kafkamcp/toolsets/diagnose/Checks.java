@@ -41,6 +41,25 @@ public final class Checks implements AutoCloseable {
 		this.diagnosis = diagnosis;
 	}
 
+	/**
+	 * Bir kontrolün bağımlı olduğu kontrol zamanında bitmedi ({@link Check#require(long)}): bağımlı kontrol
+	 * {@code CHECK_TIMEOUT} bulgusu olur, sonuç kısmi işaretlenir.
+	 */
+	public static final class DependencyTimeout extends ToolException {
+
+		private final long waitedMillis;
+
+		public DependencyTimeout(String dependency, long waitedMillis) {
+			super("bağımlı olduğu '" + dependency + "' kontrolü " + waitedMillis + " ms içinde bitmedi");
+			this.waitedMillis = waitedMillis;
+		}
+
+		public long waitedMillis() {
+			return waitedMillis;
+		}
+
+	}
+
 	/** Kontrolü hemen başlatır; sonucu {@link Check#get()} ile alın. name kısa Türkçe ad (bulgularda görünür). */
 	public <T> Check<T> start(String name, Callable<T> task) {
 		return new Check<>(name, pool.submit(task));
@@ -89,8 +108,13 @@ public final class Checks implements AutoCloseable {
 			}
 			catch (ExecutionException e) {
 				Throwable cause = KafkaErrors.unwrap(e.getCause());
-				report(Checks.CHECK_FAILED, cause instanceof ToolException ? cause.getMessage() : KafkaErrors.explain(cause),
-						wait);
+				if (cause instanceof DependencyTimeout dt) {
+					report(Checks.CHECK_TIMEOUT, dt.getMessage(), dt.waitedMillis());
+				}
+				else {
+					report(Checks.CHECK_FAILED,
+							cause instanceof ToolException ? cause.getMessage() : KafkaErrors.explain(cause), wait);
+				}
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
@@ -117,6 +141,29 @@ public final class Checks implements AutoCloseable {
 			}
 		}
 
+		/**
+		 * Başka bir kontrolün içinden ZORUNLU bağımlılık olarak bekler (en fazla maxWaitMillis ve kalan süre).
+		 * Bağımlılık hata verdiyse null döner (kendi bulgusunu ana akış raporlar); zamanında bitmediyse
+		 * {@link DependencyTimeout} fırlatır, böylece bağımlı kontrol sessizce boş kalmaz: CHECK_TIMEOUT bulgusu
+		 * ve kısmi sonuç.
+		 */
+		public T require(long maxWaitMillis) {
+			long wait = Math.max(1, Math.min(maxWaitMillis, call.remainingMillis() - DEFAULT_RESERVE_MS));
+			try {
+				return future.get(wait, TimeUnit.MILLISECONDS);
+			}
+			catch (TimeoutException e) {
+				throw new DependencyTimeout(name, wait);
+			}
+			catch (ExecutionException | CancellationException e) {
+				return null;
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new ToolException("Araç iptal edildi");
+			}
+		}
+
 		/** get() sonrası: başarılı mı? */
 		public boolean ok() {
 			return future.isDone() && !future.isCancelled() && error == null && future.state() == Future.State.SUCCESS;
@@ -134,7 +181,8 @@ public final class Checks implements AutoCloseable {
 			}
 			if (CHECK_TIMEOUT.equals(code)) {
 				diagnosis.warning(CHECK_TIMEOUT, "Alt kontrol süre sınırında bitmedi: " + name,
-						Diagnosis.evidence("check", name, "waitedMs", waited),
+						Diagnosis.evidence("check", name, "waitedMs", waited, "reason",
+								message.startsWith("bağımlı") ? message : null),
 						"Sonuç eksik; aracı tekrar çalıştırın ya da bu konuya özel aracı kullanın");
 			}
 			else {

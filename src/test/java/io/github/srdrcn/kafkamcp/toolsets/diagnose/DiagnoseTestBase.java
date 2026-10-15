@@ -5,7 +5,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import org.apache.kafka.clients.admin.Admin;
@@ -18,6 +20,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.jupiter.api.AfterEach;
 
@@ -106,6 +109,19 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
+	/**
+	 * Zaman damgası ageMs önce olan kayıtlar yazar (çoktan beri bekleyen backlog: takılma kanıtı için kayıt yaşı).
+	 */
+	static void produceAged(String cluster, String topic, int partition, int count, long ageMs) throws Exception {
+		long ts = System.currentTimeMillis() - ageMs;
+		try (KafkaProducer<byte[], byte[]> p = producer(cluster)) {
+			for (int i = 0; i < count; i++) {
+				p.send(new ProducerRecord<>(topic, partition, ts + i, null, ("old" + i).getBytes()));
+			}
+			p.flush();
+		}
+	}
+
 	/** Admin ile commit (üyesiz grup: Empty kalır). */
 	static void commit(String cluster, String group, String topic, Map<Integer, Long> offsets) throws Exception {
 		Map<TopicPartition, OffsetAndMetadata> m = new LinkedHashMap<>();
@@ -164,6 +180,54 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		offsets.forEach((part, o) -> m.put(new TopicPartition(topic, part), new OffsetAndMetadata(o)));
 		c.commitSync(m, Duration.ofSeconds(60));
 		return c;
+	}
+
+	/**
+	 * Sağlıklı ama seyrek commit eden consumer (Streams/Connect sink gibi): gruba katılır, konumunu bir kez commit
+	 * eder, sonra durmadan tüketir ama ölçüm boyunca bir daha commit etmez. Hazır olunca döner.
+	 */
+	void consumeWithRareCommits(String cluster, String group, String topic) throws InterruptedException {
+		Map<String, Object> p = clientProperties(cluster, "admin");
+		p.put(ConsumerConfig.GROUP_ID_CONFIG, group);
+		p.put(ConsumerConfig.CLIENT_ID_CONFIG, group + "-client");
+		p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+		p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+		p.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
+		p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
+		KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(p);
+		CountDownLatch committed = new CountDownLatch(1);
+		AtomicBoolean stop = new AtomicBoolean();
+		Thread t = Thread.ofPlatform().daemon().start(() -> {
+			try {
+				c.subscribe(List.of(topic));
+				while (!stop.get()) {
+					c.poll(Duration.ofMillis(200));
+					if (committed.getCount() > 0 && !c.assignment().isEmpty()) {
+						// konum bilinene kadar bekleyip açıkça commit (ilk poll'da konum henüz yoksa commitSync() boş geçer)
+						Map<TopicPartition, OffsetAndMetadata> m = new LinkedHashMap<>();
+						for (TopicPartition tp : c.assignment()) {
+							m.put(tp, new OffsetAndMetadata(c.position(tp, Duration.ofSeconds(60))));
+						}
+						c.commitSync(m, Duration.ofSeconds(60));
+						committed.countDown();
+					}
+				}
+			}
+			catch (WakeupException e) {
+				// durduruldu
+			}
+			finally {
+				c.close(Duration.ofSeconds(5));
+			}
+		});
+		closeables.add(0, () -> {
+			stop.set(true);
+			c.wakeup();
+			t.join(15_000);
+		});
+		if (!committed.await(90, TimeUnit.SECONDS)) {
+			throw new IllegalStateException("Consumer gruba katılıp commit edemedi: " + group);
+		}
 	}
 
 	static void waitUntil(BooleanSupplier condition, String message) {

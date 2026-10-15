@@ -26,9 +26,11 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
  * Aynı araç çağrısında iki örnekli offset ölçümü: partition'ların end offset'leri ve grupların commit'li offset'leri
- * t0 ve t1'de okunur (her örnek tek listOffsets + tek listConsumerGroupOffsets). Yazma hızı, lag eğilimi ve takılı
- * (commit'i ilerlemeyen, end offset'i artan) partition tespiti için. Yanıt vermeyen grup/partition hatalarda
- * döner; bekleme kalan süreye göre kısaltılır, ikinci örneğe süre kalmazsa {@link #complete()} false olur.
+ * t0 ve t1'de okunur (her örnek tek listOffsets + tek listConsumerGroupOffsets). Yazma hızı, lag eğilimi ve takılma
+ * adayı (commit'i pencerede ilerlemeyen, end offset'i artan) partition tespiti için; periyodik commit eden
+ * istemciler kısa pencerede commit etmeyebileceğinden takılma kararı {@link StuckCheck} ile verilir. Yanıt
+ * vermeyen grup/partition hatalarda döner; bekleme kalan süreye göre kısaltılır, ikinci örneğe süre kalmazsa
+ * {@link #complete()} false olur.
  */
 public final class OffsetWindow {
 
@@ -146,6 +148,15 @@ public final class OffsetWindow {
 		return new OffsetWindow(e0, e1, c0, c1, groupErrors, endErrors, intervalMs, pause, elapsed);
 	}
 
+	/** Testler için: hazır iki örnekten (ikinci örnek alınmış) pencere. */
+	static OffsetWindow of(Map<TopicPartition, Long> end0, Map<TopicPartition, Long> end1,
+			Map<String, Map<TopicPartition, Long>> committed0, Map<String, Map<TopicPartition, Long>> committed1,
+			Map<String, String> groupErrors, double elapsedSeconds) {
+		long ms = Math.round(elapsedSeconds * 1000);
+		return new OffsetWindow(end0, end1, committed0, committed1, new TreeMap<>(groupErrors), new HashMap<>(), ms, ms,
+				elapsedSeconds);
+	}
+
 	private static void collect(ToolCall call, Collection<TopicPartition> tps, ListOffsetsResult result, long maxMs,
 			Map<TopicPartition, Long> offsets, Map<TopicPartition, String> errors) {
 		Map<TopicPartition, KafkaFuture<ListOffsetsResultInfo>> futures = new LinkedHashMap<>();
@@ -260,7 +271,10 @@ public final class OffsetWindow {
 			return committed0 != null && committed1 != null && end0 != null && end1 != null;
 		}
 
-		/** Commit ilerlemedi, end offset arttı ve lag var. */
+		/**
+		 * Pencerede commit ilerlemedi, end offset arttı ve lag var: takılma ADAYI (periyodik commit de olabilir;
+		 * karar için {@link StuckCheck}).
+		 */
 		public boolean stuck() {
 			return measured() && committed1.equals(committed0) && end1 > end0 && lag1() > 0;
 		}
@@ -306,6 +320,7 @@ public final class OffsetWindow {
 			return sum;
 		}
 
+		/** Commit'i pencerede ilerlemeyen partition'lar (takılma adayları; karar için {@link StuckCheck}). */
 		public List<PartitionProgress> stuck() {
 			return partitions.stream().filter(PartitionProgress::stuck).toList();
 		}
@@ -384,12 +399,21 @@ public final class OffsetWindow {
 			return out;
 		}
 
-		/** Özet: lag, trend, hızlar, eta, takılı partition sayısı. */
+		/**
+		 * Lag t0'da, ölçülen yazma hızıyla periyodik commit payından ({@link StuckCheck#COMMIT_ALLOWANCE_SECONDS})
+		 * fazla mı? Değilse büyüyen lag commit aralığıyla açıklanabilir.
+		 */
+		public boolean lagBeyondCommitAllowance() {
+			Double rate = produceRate();
+			return rate != null && rate > 0 && lag0() > rate * StuckCheck.COMMIT_ALLOWANCE_SECONDS;
+		}
+
+		/** Özet: lag, trend, hızlar, eta, commit'i pencerede ilerlemeyen partition sayısı. */
 		public Map<String, Object> summary() {
 			return Results.map("lag", lag(), "lagAtStart", complete ? lag0() : null, "trend", trend(), "consumeRate",
-					consumeRate(), "produceRate", produceRate(), "etaSeconds", etaSeconds(), "stuckPartitions",
-					complete ? stuck().size() : null, "lagUnknownPartitions", unknown() > 0 ? unknown() : null,
-					"resetDetected", resetDetected() ? true : null);
+					consumeRate(), "produceRate", produceRate(), "etaSeconds", etaSeconds(),
+					"commitNotAdvancedPartitions", complete ? stuck().size() : null, "lagUnknownPartitions",
+					unknown() > 0 ? unknown() : null, "resetDetected", resetDetected() ? true : null);
 		}
 
 	}

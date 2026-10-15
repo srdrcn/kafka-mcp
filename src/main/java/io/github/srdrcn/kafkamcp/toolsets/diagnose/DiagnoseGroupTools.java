@@ -7,8 +7,6 @@ import static io.github.srdrcn.kafkamcp.toolsets.diagnose.DiagnoseParams.partiti
 import static io.github.srdrcn.kafkamcp.toolsets.diagnose.Diagnosis.evidence;
 
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -58,8 +56,10 @@ public class DiagnoseGroupTools {
 
 	static final int MAX_TOPICS = 20;
 
-	/** ACL kontrolünde en fazla bu kadar topic değerlendirilir. */
+	/** ACL kontrolünde en fazla bu kadar topic değerlendirilir (kalanı sayılır ve raporlanır). */
 	static final int MAX_ACL_TOPICS = 20;
+
+	static final int MAX_GROUP_READERS = 20;
 
 	static final Set<GroupState> REBALANCING = Set.of(GroupState.PREPARING_REBALANCE,
 			GroupState.COMPLETING_REBALANCE, GroupState.ASSIGNING, GroupState.RECONCILING);
@@ -68,7 +68,8 @@ public class DiagnoseGroupTools {
 
 	private static final long COMMITTED_MAX_MS = 3_000;
 
-	private static final long WINDOW_RESERVE_MS = 2_500;
+	/** İkinci örnekten sonra kayıt yaşı okuması ve son describe için bırakılan süre. */
+	private static final long WINDOW_RESERVE_MS = 4_000;
 
 	private static final long FINAL_DESCRIBE_RESERVE_MS = 1_500;
 
@@ -77,11 +78,15 @@ public class DiagnoseGroupTools {
 			.read("diagnose_consumer_group",
 					"Consumer group teşhisi: durum/tip, üyeler ve atama, lag ve eğilimi, takılı partition'lar, eksik topic'ler, coordinator, ACL")
 			.required("group", P.string("Consumer group adı (groupId)"))
-			.param("intervalSeconds", DiagnoseParams.interval())
+			.param("intervalSeconds", DiagnoseParams.interval(DiagnoseParams.DEFAULT_INTERVAL_SECONDS))
 			.handler(this::diagnose));
 	}
 
-	record Window(OffsetWindow window, Settled<ConsumerGroupDescription> after) {
+	record Window(OffsetWindow window, Settled<ConsumerGroupDescription> after, StuckCheck stuck) {
+	}
+
+	/** ACL görünümü ve TOPIC ACL'leri gerçekten okunan topic'ler (sadece bunlar değerlendirilir). */
+	record GroupAcl(AclView view, List<String> topics, boolean topicScanReady) {
 	}
 
 	record TopicScan(Map<TopicPartition, Long> committed, Map<String, TopicDescription> topics, Set<String> missing,
@@ -90,7 +95,7 @@ public class DiagnoseGroupTools {
 
 	Object diagnose(ToolCall call) {
 		String group = call.str("group");
-		long intervalMs = DiagnoseParams.intervalMs(call);
+		long intervalMs = DiagnoseParams.intervalMs(call, DiagnoseParams.DEFAULT_INTERVAL_SECONDS);
 		Settled<ConsumerGroupDescription> s0 = ConsumerGroups
 			.describe(call, List.of(group), Math.max(0, call.remainingMillis() - DESCRIBE_MAX_MS))
 			.get(group);
@@ -109,20 +114,20 @@ public class DiagnoseGroupTools {
 			Check<Window> window = checks.start("lag ve eğilim", () -> {
 				OffsetWindow w = OffsetWindow.measure(call, assigned, List.of(group), false, intervalMs,
 						WINDOW_RESERVE_MS);
+				StuckCheck stuck = StuckCheck.of(call, w, List.of(group),
+						Math.min(StuckCheck.READ_BUDGET_MS, call.remainingMillis() - FINAL_DESCRIBE_RESERVE_MS - 1_000));
 				Settled<ConsumerGroupDescription> after = ConsumerGroups
 					.describe(call, List.of(group), FINAL_DESCRIBE_RESERVE_MS)
 					.get(group);
-				return new Window(w, after);
+				return new Window(w, after, stuck);
 			});
-			Check<AclView> acl = checks.start("ACL", () -> {
+			Check<GroupAcl> acl = checks.start("ACL", () -> {
 				TopicScan ts = topics.await(6_000);
 				List<AclView.Resource> resources = new ArrayList<>();
 				resources.add(new AclView.Resource(ResourceType.GROUP, group));
-				if (ts != null) {
-					first(ts.topics().keySet(), MAX_ACL_TOPICS)
-						.forEach(t -> resources.add(new AclView.Resource(ResourceType.TOPIC, t)));
-				}
-				return AclView.load(call, resources, null);
+				List<String> aclTopics = ts == null ? List.of() : first(ts.topics().keySet(), MAX_ACL_TOPICS);
+				aclTopics.forEach(t -> resources.add(new AclView.Resource(ResourceType.TOPIC, t)));
+				return new GroupAcl(AclView.load(call, resources, null), aclTopics, ts != null);
 			});
 
 			if (d0 == null) {
@@ -141,7 +146,7 @@ public class DiagnoseGroupTools {
 			}
 			describeFacts(dx, facts, d0, d1, info);
 			assignment(dx, facts, d0, ts);
-			lag(dx, facts, group, d0, d1, win == null ? null : win.window(), ts, assigned);
+			lag(dx, facts, group, d0, d1, win, ts, assigned);
 			topicsFindings(dx, facts, ts, win == null ? null : win.window(), d0);
 			aclFindings(dx, facts, acl.get(), group, ts);
 		}
@@ -239,7 +244,8 @@ public class DiagnoseGroupTools {
 				Set<String> left = new TreeSet<>(m0);
 				left.removeAll(m1);
 				dx.info("MEMBERSHIP_CHANGED", "Ölçüm sırasında üyeler değişti (katılan " + joined.size() + ", ayrılan "
-						+ left.size() + ")", evidence("joined", first(joined, MAX_EVIDENCE), "left", first(left, MAX_EVIDENCE)),
+						+ left.size() + ")", evidence("joined", first(joined, MAX_EVIDENCE), "joinedOmitted",
+								omitted(joined), "left", first(left, MAX_EVIDENCE), "leftOmitted", omitted(left)),
 						"Sürekli değişiyorsa consumer'lar yeniden başlıyor ya da gruptan düşüyor olabilir");
 			}
 		}
@@ -321,12 +327,23 @@ public class DiagnoseGroupTools {
 	}
 
 	private static void lag(Diagnosis dx, Map<String, Object> facts, String group, ConsumerGroupDescription d0,
-			ConsumerGroupDescription d1, OffsetWindow w, TopicScan ts, Set<TopicPartition> assigned) {
-		if (w == null) {
+			ConsumerGroupDescription d1, Window win, TopicScan ts, Set<TopicPartition> assigned) {
+		if (win == null) {
 			return;
 		}
+		OffsetWindow w = win.window();
 		OffsetWindow.GroupProgress p = w.progress(group);
+		StuckCheck.Verdict v = win.stuck().verdict(group);
+		List<StuckCheck.Assessed> stuck = v.stuck();
+		List<StuckCheck.Assessed> suspect = v.suspect();
+		List<StuckCheck.Assessed> periodic = v.periodic();
 		Map<String, Object> lag = new LinkedHashMap<>(p.summary());
+		if (w.complete()) {
+			lag.put("stuckPartitions", stuck.size());
+			if (!suspect.isEmpty()) {
+				lag.put("stuckSuspectPartitions", suspect.size());
+			}
+		}
 		lag.putAll(w.describe());
 		facts.put("lag", lag);
 		List<Map<String, Object>> byTopic = new ArrayList<>();
@@ -334,7 +351,7 @@ public class DiagnoseGroupTools {
 			byTopic.add(Results.map("topic", t.topic(), "lag", t.lag1(), "partitions", t.partitions(), "consumeRate",
 					w.rate(t.consumed()), "produceRate", w.rate(t.produced()), "trend",
 					w.complete() ? t.lag1() > t.lag0() ? "growing" : t.lag1() < t.lag0() ? "shrinking" : "stable" : null,
-					"stuckPartitions", t.stuck() > 0 ? t.stuck() : null));
+					"commitNotAdvancedPartitions", t.stuck() > 0 ? t.stuck() : null));
 		}
 		facts.put("lagByTopic", byTopic);
 		if (p.byTopic().size() > MAX_TOPICS) {
@@ -355,43 +372,73 @@ public class DiagnoseGroupTools {
 				: ts.topics().values().stream().filter(td -> p.byTopic().stream().anyMatch(t -> t.topic().equals(td.name())))
 					.mapToInt(td -> td.partitions().size())
 					.sum();
-		List<OffsetWindow.PartitionProgress> stuck = p.stuck();
+		Map<String, Object> window = v.window();
 		if (!stuck.isEmpty()) {
-			Map<String, Object> ev = evidence("partitions",
-					first(stuck.stream().map(OffsetWindow.PartitionProgress::toMap).toList(), MAX_EVIDENCE), "omitted",
+			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.STUCK, MAX_EVIDENCE), "omitted",
 					omitted(stuck), "members", members);
+			ev.putAll(window);
+			String age = " ve bekleyen en eski kayıt " + v.maxBehindSeconds(StuckCheck.Level.STUCK) / 60 + " dk önce yazılmış";
 			if (members > 0) {
 				dx.critical("STUCK_PARTITIONS",
-						stuck.size() + " partition'da commit ilerlemiyor ama yeni mesaj geliyor (üyeler var): tüketim takılmış",
+						stuck.size() + " partition'da commit ilerlemiyor, yeni mesaj geliyor" + age
+								+ " (üyeler var): tüketim takılmış",
 						ev, "Bu partition'ların sahibi üyelerin loglarını inceleyin (poison pill, uzun işleme, "
 								+ "max.poll.interval.ms aşımı, commit hatası); gerekirse ilgili consumer'ı yeniden başlatın");
 			}
 			else {
 				dx.warning("STUCK_PARTITIONS",
-						stuck.size() + " partition'da commit ilerlemiyor ve yeni mesaj geliyor: grupta aktif üye yok"
-								+ (empty ? " (EMPTY), lag " + p.lag() : ""),
+						stuck.size() + " partition'da commit ilerlemiyor, yeni mesaj geliyor" + age
+								+ ": grupta aktif üye yok" + (empty ? " (EMPTY), lag " + p.lag() : ""),
 						ev, "Consumer uygulamasını başlatın. Backlog atlanacaksa grup EMPTY iken consumer_groups_offsets_reset "
 								+ "(to=latest ya da timestamp); grup terk edildiyse consumer_groups_delete");
 			}
 		}
-		if (empty && p.lag() > 0 && stuck.isEmpty()) {
+		if (!suspect.isEmpty()) {
+			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.SUSPECT, MAX_EVIDENCE),
+					"omitted", omitted(suspect), "members", members);
+			ev.putAll(window);
+			dx.warning("STUCK_SUSPECT",
+					suspect.size() + " partition'da " + Math.round(v.windowSeconds()) + " sn'lik pencerede commit ilerlemedi "
+							+ "ve bekleyen en eski kayıt yaklaşık " + v.maxBehindSeconds(StuckCheck.Level.SUSPECT)
+							+ " sn önce yazılmış (periyodik commit payı " + StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn aşıldı)"
+							+ (members == 0 ? "; grupta aktif üye yok" : ""),
+					ev, "Birkaç dakika sonra diagnose_consumer_group ya da consumer_groups_lag_trend ile tekrar bakın; "
+							+ "ilerlemiyorsa sahibi üyelerin loglarını inceleyin (poison pill, uzun işleme, max.poll.interval.ms, "
+							+ "commit hatası)");
+		}
+		if (!periodic.isEmpty()) {
+			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.PERIODIC, MAX_EVIDENCE),
+					"omitted", omitted(periodic));
+			ev.putAll(window);
+			dx.info("COMMIT_NOT_ADVANCED",
+					periodic.size() + " partition'da " + Math.round(v.windowSeconds()) + " sn'lik pencerede commit ilerlemedi "
+							+ "ama bekleyen en eski kayıt yaklaşık " + v.maxBehindSeconds(StuckCheck.Level.PERIODIC)
+							+ " sn önce yazılmış: periyodik commit (auto commit 5 sn, Streams 30 sn, Connect 60 sn) olası, "
+							+ "takılma kanıtı yok",
+					ev, "Emin olmak için intervalSeconds=10 ile ya da birkaç dakika sonra tekrar çalıştırın");
+		}
+		boolean stalled = !stuck.isEmpty() || !suspect.isEmpty();
+		if (empty && p.lag() > 0 && !stalled) {
 			dx.warning("NO_ACTIVE_MEMBERS", "Grup EMPTY (aktif consumer yok) ve " + p.lag() + " mesaj lag var",
 					evidence("lag", p.lag()),
 					"Consumer'ları başlatın. Backlog'u atlamak gerekiyorsa grup EMPTY iken consumer_groups_offsets_reset "
 							+ "(to=latest ya da timestamp) kullanılabilir; grup terk edildiyse consumer_groups_delete");
 		}
-		if ("growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN && stuck.isEmpty()) {
+		boolean growing = "growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN && !stalled
+				&& p.lagBeyondCommitAllowance();
+		if (growing) {
 			String scale = partitions > 0 && members < partitions
 					? "Üye sayısını (" + members + ") partition sayısına (" + partitions + ") kadar artırın"
 					: "Üye sayısı partition sayısına ulaşmış: partition sayısını artırın (topics_partitions_increase) ya da "
 							+ "işleme hızını iyileştirin (batch, async işlem)";
 			dx.warning("LAG_GROWING",
-					"Lag büyüyor: tüketim " + p.consumeRate() + " msg/sn, üretim " + p.produceRate() + " msg/sn",
+					"Lag büyüyor: tüketim " + p.consumeRate() + " msg/sn, üretim " + p.produceRate() + " msg/sn; lag "
+							+ StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn'lik üretimden fazla",
 					evidence("lagAtStart", p.lag0(), "lag", p.lag(), "members", members, "partitions",
-							partitions > 0 ? partitions : null),
+							partitions > 0 ? partitions : null, "windowSeconds", window.get("windowSeconds")),
 					scale + (empty ? "" : ". Offset reset için önce consumer'ları durdurun (grup EMPTY olmalı)"));
 		}
-		else if (p.lag() >= HIGH_LAG && stuck.isEmpty() && !"growing".equals(p.trend())) {
+		else if (p.lag() >= HIGH_LAG && !stalled) {
 			dx.info("HIGH_LAG", "Toplam lag " + p.lag() + (p.etaSeconds() != null
 					? " (azalıyor, tahmini yetişme " + p.etaSeconds() + " sn)" : ""), evidence("lag", p.lag()),
 					"consumer_groups_lag_trend ile izleyin");
@@ -416,6 +463,9 @@ public class DiagnoseGroupTools {
 			return;
 		}
 		facts.put("topics", first(ts.topics().keySet(), MAX_TOPICS));
+		if (ts.topics().size() > MAX_TOPICS) {
+			facts.put("topicsOmitted", ts.topics().size() - MAX_TOPICS);
+		}
 		if (!ts.missing().isEmpty()) {
 			List<String> missing = List.copyOf(ts.missing());
 			dx.warning("MISSING_TOPICS",
@@ -456,16 +506,21 @@ public class DiagnoseGroupTools {
 		}
 	}
 
-	private static void aclFindings(Diagnosis dx, Map<String, Object> facts, AclView v, String group, TopicScan ts) {
-		if (v == null) {
+	private static void aclFindings(Diagnosis dx, Map<String, Object> facts, GroupAcl acl, String group,
+			TopicScan ts) {
+		if (acl == null) {
 			return;
 		}
+		AclView v = acl.view();
 		if (!v.authorizerEnabled()) {
 			facts.put("access", Results.map("authorizer", false));
 			return;
 		}
 		List<String> groupReaders = v.allowedPrincipals(AclOperation.READ, ResourceType.GROUP, group);
-		Collection<String> topics = ts == null ? List.of() : first(ts.topics().keySet(), MAX_ACL_TOPICS);
+		// sadece TOPIC ACL'leri gerçekten okunan topic'ler değerlendirilir (okunmayanlar "yetki yok" sayılmaz)
+		List<String> topics = acl.topics();
+		List<String> unchecked = ts == null ? List.of()
+				: ts.topics().keySet().stream().filter(t -> !topics.contains(t)).toList();
 		List<Map<String, Object>> missing = new ArrayList<>();
 		for (String p : groupReaders) {
 			if (v.superUsers().contains(p)) {
@@ -485,12 +540,27 @@ public class DiagnoseGroupTools {
 				}
 			}
 			if (!cannotRead.isEmpty()) {
-				missing.add(Results.map("principal", p, "topics", first(cannotRead, MAX_EVIDENCE)));
+				missing.add(Results.map("principal", p, "topics", first(cannotRead, MAX_EVIDENCE), "topicsOmitted",
+						omitted(cannotRead)));
 			}
 		}
-		Set<String> uniq = new HashSet<>(groupReaders);
-		facts.put("access", Results.map("authorizer", true, "groupReaders", first(uniq.stream().sorted().toList(), 20),
-				"note", "Kafka üyelerin principal'ını göstermez; değerlendirme bu grupta GROUP READ ACL'i olan principal'lar için"));
+		List<String> readers = new TreeSet<>(groupReaders).stream().toList();
+		facts.put("access", Results.map("authorizer", true, "groupReaders", first(readers, MAX_GROUP_READERS),
+				"groupReadersOmitted", omitted(readers, MAX_GROUP_READERS), "topicsEvaluated", topics.size(),
+				"topicsNotEvaluated", unchecked.isEmpty() ? null : unchecked.size(), "note",
+				"Kafka üyelerin principal'ını göstermez; değerlendirme bu grupta GROUP READ ACL'i olan principal'lar için"));
+		if (!unchecked.isEmpty()) {
+			boolean capped = acl.topicScanReady();
+			dx.info("ACL_TOPICS_NOT_EVALUATED",
+					unchecked.size() + " topic için TOPIC READ ACL'i değerlendirilmedi"
+							+ (capped ? " (en fazla " + MAX_ACL_TOPICS + " topic kontrol edilir)"
+									: " (topic taraması ACL kontrolüne yetişmedi)"),
+					evidence("topics", first(unchecked, MAX_EVIDENCE), "omitted", omitted(unchecked)),
+					"Bu topic'ler için diagnose_access intent=consume ya da acls_list ile kontrol edin");
+			if (!capped) {
+				dx.markPartial();
+			}
+		}
 		if (groupReaders.isEmpty()) {
 			dx.info("NO_GROUP_ACLS",
 					"Bu gruba GROUP READ veren ACL yok: grup sadece süper kullanıcılarca"
@@ -500,8 +570,8 @@ public class DiagnoseGroupTools {
 		}
 		if (!missing.isEmpty()) {
 			dx.warning("ACL_TOPIC_READ_MISSING",
-					"Grubu kullanabilen principal'lardan bazıları tükettiği topic'lerde TOPIC READ yetkisine sahip değil",
-					evidence("principals", first(missing, MAX_EVIDENCE)),
+					missing.size() + " principal grubu kullanabiliyor ama tükettiği topic'lerde TOPIC READ yetkisine sahip değil",
+					evidence("principals", first(missing, MAX_EVIDENCE), "omitted", omitted(missing)),
 					"Eksik izni acls_create ile verin (resourceType=TOPIC, operation=READ) ya da diagnose_access intent=consume ile doğrulayın");
 		}
 	}

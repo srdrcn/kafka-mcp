@@ -44,10 +44,10 @@
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki offset örneği arası bekleme, sn (varsayılan 3, 1-10; süre sınırına göre kısaltılabilir)",
+        "description" : "İki offset örneği arası bekleme, sn (varsayılan 5, 1-10; süre sınırına göre kısaltılabilir)",
         "minimum" : 1,
         "maximum" : 10,
-        "default" : 3
+        "default" : 5
       }
     },
     "required" : [ "cluster", "group" ]
@@ -73,10 +73,10 @@
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki offset örneği arası bekleme, sn (varsayılan 3, 1-10; süre sınırına göre kısaltılabilir)",
+        "description" : "İki offset örneği arası bekleme, sn (varsayılan 5, 1-10; süre sınırına göre kısaltılabilir)",
         "minimum" : 1,
         "maximum" : 10,
-        "default" : 3
+        "default" : 5
       }
     },
     "required" : [ "cluster", "name" ]

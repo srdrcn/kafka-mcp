@@ -13,8 +13,11 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 /** diagnose araçlarının ortak parametreleri ve küçük çıktı yardımcıları. */
 final class DiagnoseParams {
 
-	/** Teşhis araçlarında iki örnek arası varsayılan bekleme (sn): diğer alt kontrollere süre kalsın diye kısa. */
-	static final int DEFAULT_INTERVAL_SECONDS = 3;
+	/** İki örnek arası varsayılan bekleme (sn; diğer araçlardaki intervalSeconds kuralıyla aynı). */
+	static final int DEFAULT_INTERVAL_SECONDS = 5;
+
+	/** diagnose_topic'in kısa örneği (sn): topic başına çok sayıda alt kontrol var. */
+	static final int TOPIC_INTERVAL_SECONDS = 3;
 
 	/** Kanıt listelerinde gösterilen en fazla öğe (fazlası sayılır). */
 	static final int MAX_EVIDENCE = 10;
@@ -22,15 +25,15 @@ final class DiagnoseParams {
 	private DiagnoseParams() {
 	}
 
-	static Map<String, Object> interval() {
-		Map<String, Object> m = P.integer("İki offset örneği arası bekleme, sn (varsayılan " + DEFAULT_INTERVAL_SECONDS
+	static Map<String, Object> interval(int defaultSeconds) {
+		Map<String, Object> m = P.integer("İki offset örneği arası bekleme, sn (varsayılan " + defaultSeconds
 				+ ", 1-10; süre sınırına göre kısaltılabilir)", 1, 10);
-		m.put("default", DEFAULT_INTERVAL_SECONDS);
+		m.put("default", defaultSeconds);
 		return m;
 	}
 
-	static long intervalMs(ToolCall call) {
-		return call.integer("intervalSeconds", DEFAULT_INTERVAL_SECONDS, 1, 10) * 1000L;
+	static long intervalMs(ToolCall call, int defaultSeconds) {
+		return call.integer("intervalSeconds", defaultSeconds, 1, 10) * 1000L;
 	}
 
 	/** İlk n öğe. */
@@ -51,7 +54,12 @@ final class DiagnoseParams {
 
 	/** Liste MAX_EVIDENCE'tan uzunsa atlanan sayısı, değilse null. */
 	static Integer omitted(Collection<?> items) {
-		return items.size() > MAX_EVIDENCE ? items.size() - MAX_EVIDENCE : null;
+		return omitted(items, MAX_EVIDENCE);
+	}
+
+	/** Liste max'tan uzunsa atlanan sayısı, değilse null. */
+	static Integer omitted(Collection<?> items, int max) {
+		return items.size() > max ? items.size() - max : null;
 	}
 
 }

@@ -224,6 +224,33 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 		assertThat(s.at("/facts/sinkLag").isMissingNode()).isTrue();
 	}
 
+	/**
+	 * connector.class ve converter Connect takma adlarıyla (FileStreamSink, StringConverter) verilse de plugin/converter
+	 * eksik denmez; connector RUNNING değilken (PAUSED) de takma ad çözülür.
+	 */
+	@Test
+	void aliasedConnectorClassAndConverterAreRecognized() throws Exception {
+		String token = unique("diagconn");
+		String topic = token + "-alias";
+		String name = "diag-alias-" + token;
+		createTopic(topic);
+		Map<String, String> config = sink(topic, "/tmp/" + token + "-a.txt");
+		config.put("connector.class", "FileStreamSink");
+		config.put("value.converter", "StringConverter");
+		create(name, config);
+		await(name + " RUNNING", () -> status(name), s -> "RUNNING".equals(taskState(s)));
+
+		JsonNode r = ok("diagnose_connector", args("name", name, "intervalSeconds", 1));
+		assertThat(r.at("/facts/class").asText()).isEqualTo("FileStreamSink");
+		assertThat(DiagnoseTestBase.codes(r)).as(r.toString()).doesNotContain("PLUGIN_MISSING", "CONVERTER_MISSING");
+
+		connectRest("PUT", "/connectors/" + name + "/pause", null);
+		await(name + " PAUSED", () -> status(name), s -> "PAUSED".equals(s.path("connector").path("state").asText()));
+		JsonNode paused = ok("diagnose_connector", args("name", name, "intervalSeconds", 1));
+		assertThat(DiagnoseTestBase.codes(paused)).as(paused.toString()).contains("CONNECTOR_PAUSED")
+			.doesNotContain("PLUGIN_MISSING", "CONVERTER_MISSING");
+	}
+
 	@Test
 	void unknownConnectorIsAnError() {
 		assertThat(error("diagnose_connector", args("name", unique("diag-nope")))).contains("Connector bulunamadı");
