@@ -1,0 +1,449 @@
+[ {
+  "name" : "report_cluster_summary",
+  "description" : "Cluster summary: mode/version, brokers, topics/partitions, size, URP/offline, group states and lag, largest topics, connectors/subjects",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_top_topics",
+  "description" : "Top N topics by size, partition count, consumer group count or write rate",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "by" : {
+        "type" : "string",
+        "description" : "Ranking metric",
+        "enum" : [ "size", "partitions", "consumers", "write_rate" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 20)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 20
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "Sampling interval in seconds for the write rate (default 5, 1-10)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster", "by" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_empty_topics",
+  "description" : "Topics with no messages (earliest == latest on every partition); never-written topics are flagged",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "includeInternal" : {
+        "type" : "boolean",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
+        "default" : false
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_idle_topics",
+  "description" : "Topics whose last write (maxTimestamp) is older than N days, oldest first; empty topics are listed separately",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "olderThanDays" : {
+        "type" : "integer",
+        "description" : "Days since the last write after which a topic counts as idle (default 30)",
+        "minimum" : 1,
+        "maximum" : 3650,
+        "default" : 30
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_topics_without_consumers",
+  "description" : "Non-internal topics without committed offsets from any consumer group, with size and last write age",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_replication_audit",
+  "description" : "Replication audit: RF=1, min.insync.replicas ≥ RF, URP/offline, unclean election, RF below default, single rack",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "includeInternal" : {
+        "type" : "boolean",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default true)",
+        "default" : true
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 50)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 50
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_retention_audit",
+  "description" : "Retention audit: infinite/very short retention, retention.bytes, compaction settings, segment outliers (value + source)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "includeInternal" : {
+        "type" : "boolean",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
+        "default" : false
+      },
+      "largeSizeMb" : {
+        "type" : "integer",
+        "description" : "Size in MB above which a topic with infinite retention is high severity (default 10240)",
+        "minimum" : 0,
+        "maximum" : 100000000,
+        "default" : 10240
+      },
+      "shortRetentionMinutes" : {
+        "type" : "integer",
+        "description" : "Minutes below which retention/delete.retention/segment.ms is flagged (default 60)",
+        "minimum" : 1,
+        "maximum" : 10080,
+        "default" : 60
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 50)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 50
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_partition_outliers",
+  "description" : "Partition outliers: partition counts far above the median, size skew within topics, leader imbalance across brokers",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "partitionFactor" : {
+        "type" : "integer",
+        "description" : "Multiple of the median partition count above which a topic is an outlier (default 4)",
+        "minimum" : 2,
+        "maximum" : 1000,
+        "default" : 4
+      },
+      "minPartitions" : {
+        "type" : "integer",
+        "description" : "Minimum partition count for an outlier (default 50)",
+        "minimum" : 1,
+        "maximum" : 100000,
+        "default" : 50
+      },
+      "skewFactor" : {
+        "type" : "integer",
+        "description" : "Multiple of the topic's average partition size above which a partition is skewed (default 3)",
+        "minimum" : 2,
+        "maximum" : 1000,
+        "default" : 3
+      },
+      "minSizeMb" : {
+        "type" : "integer",
+        "description" : "Minimum partition size in MB for skew (default 1)",
+        "minimum" : 0,
+        "maximum" : 10000000,
+        "default" : 1
+      },
+      "leaderImbalancePct" : {
+        "type" : "integer",
+        "description" : "Leader count deviation from the average (%) above which a broker is imbalanced (default 25)",
+        "minimum" : 1,
+        "maximum" : 1000,
+        "default" : 25
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 20)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 20
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_naming_check",
+  "description" : "Topics that do not match a naming rule (full-match regex), with counts and the most common prefixes",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "pattern" : {
+        "type" : "string",
+        "description" : "Regex the whole topic name must match (e.g. [a-z]+\\.[a-z0-9-]+\\.v[0-9]+)"
+      },
+      "includeInternal" : {
+        "type" : "boolean",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
+        "default" : false
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster", "pattern" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_duplicate_like_topics",
+  "description" : "Suspected duplicate topic names: groups that collide after normalization and pairs with Levenshtein distance ≤ 2",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "includeInternal" : {
+        "type" : "boolean",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
+        "default" : false
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 50)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 50
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_team_inventory",
+  "description" : "Team inventory by topic prefix: topics, size, empty/idle flags, consumer groups and lag, connectors, ACL principals",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "prefix" : {
+        "type" : "string",
+        "description" : "Topic name prefix (e.g. payments.)"
+      },
+      "olderThanDays" : {
+        "type" : "integer",
+        "description" : "Days since the last write after which a topic counts as idle (default 30)",
+        "minimum" : 1,
+        "maximum" : 3650,
+        "default" : 30
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items per list (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster", "prefix" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "report_cleanup_candidates",
+  "description" : "Cleanup candidates (deletes nothing): empty/idle/unconsumed topics, Empty groups, orphan LITERAL ACLs, with reasons and risk",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "olderThanDays" : {
+        "type" : "integer",
+        "description" : "Days since the last write after which a topic counts as idle (default 30)",
+        "minimum" : 1,
+        "maximum" : 3650,
+        "default" : 30
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+} ]
