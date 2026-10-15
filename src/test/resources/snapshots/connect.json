@@ -1,0 +1,493 @@
+[ {
+  "name" : "connect_clusters_list",
+  "description" : "Connect URL'si olan cluster'larda Connect erişimi, sürümü ve connector sayısı",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      }
+    },
+    "required" : [ ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connect_plugins_list",
+  "description" : "Yüklü Connect plugin'leri (sınıf, tip, sürüm)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      },
+      "connectorsOnly" : {
+        "type" : "boolean",
+        "description" : "Sadece connector plugin'leri (varsayılan true; false: converter/transform vb. dahil)"
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connect_plugins_validate",
+  "description" : "Connector config'ini plugin'e göre doğrular; sadece hatalı alanları döner",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "plugin" : {
+        "type" : "string",
+        "description" : "Connector sınıfı (tam ya da kısa ad, ör. FileStreamSinkConnector)"
+      },
+      "config" : {
+        "type" : "object",
+        "description" : "Doğrulanacak connector config'i (anahtar → string değer)",
+        "additionalProperties" : {
+          "type" : "string"
+        }
+      }
+    },
+    "required" : [ "cluster", "plugin", "config" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_list",
+  "description" : "Connector'ları durum, tip, sınıf, worker ve görev sayılarıyla listeler",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      },
+      "state" : {
+        "type" : "string",
+        "description" : "Connector durumu filtresi",
+        "enum" : [ "RUNNING", "PAUSED", "STOPPED", "FAILED", "UNASSIGNED", "RESTARTING" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_get",
+  "description" : "Connector detayı: tip, sınıf, maskeli config, görevler ve durum özeti",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "includeTaskConfigs" : {
+        "type" : "boolean",
+        "description" : "Görev config'lerini de getir (maskeli; varsayılan false)"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_status",
+  "description" : "Connector ve görevlerinin durumu, worker'ı ve hata özeti (trace'in ilk 3 satırı)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_failed",
+  "description" : "FAILED connector'lar ya da FAILED görevi olanlar, hata özetiyle",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_topics",
+  "description" : "Connector'ın aktif olarak kullandığı topic'ler",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_offsets",
+  "description" : "Connector offset'leri (source: partition/offset, sink: topic/partition/offset)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Sink'te topic, source'ta partition (JSON) filtresi (regex, kısmi eşleşme)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_task_distribution",
+  "description" : "Worker başına connector/görev dağılımı, dengesizlik ve RUNNING olmayan görevler",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_config_diff",
+  "description" : "Connector config'ini verilen config'le ya da başka bir connector'la karşılaştırır",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "config" : {
+        "type" : "object",
+        "description" : "Karşılaştırılacak hedef config (otherName ile birlikte verilmez)",
+        "additionalProperties" : {
+          "type" : "string"
+        }
+      },
+      "otherName" : {
+        "type" : "string",
+        "description" : "Karşılaştırılacak diğer connector adı (config yerine)"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_pause",
+  "description" : "YAZMA: Connector'ı ve görevlerini duraklatır (PAUSED)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_resume",
+  "description" : "YAZMA: Duraklatılmış/durdurulmuş connector'ı devam ettirir (RUNNING)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_stop",
+  "description" : "YAZMA: Connector'ı durdurur (STOPPED: görevler kapanır, config korunur)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_restart",
+  "description" : "YAZMA: Connector'ı yeniden başlatır (isteğe bağlı görevleriyle ya da sadece FAILED olanları)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "includeTasks" : {
+        "type" : "boolean",
+        "description" : "Görevleri de yeniden başlat (varsayılan false)"
+      },
+      "onlyFailed" : {
+        "type" : "boolean",
+        "description" : "Sadece FAILED connector/görevleri yeniden başlat (varsayılan false)"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_task_restart",
+  "description" : "YAZMA: Connector'ın tek bir görevini yeniden başlatır",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "taskId" : {
+        "type" : "integer",
+        "description" : "Görev id'si (0'dan başlar)"
+      }
+    },
+    "required" : [ "cluster", "name", "taskId" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_create_or_update",
+  "description" : "YAZMA: Connector oluşturur ya da config'ini tamamen değiştirir",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "config" : {
+        "type" : "object",
+        "description" : "Connector config'i (anahtar → string değer; connector.class dahil)",
+        "additionalProperties" : {
+          "type" : "string"
+        }
+      }
+    },
+    "required" : [ "cluster", "name", "config" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "connectors_delete",
+  "description" : "YAZMA: Connector'ı siler (geri alınamaz)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : true
+  }
+}, {
+  "name" : "connectors_offsets_reset",
+  "description" : "YAZMA: STOPPED durumdaki connector'ın offset'lerini sıfırlar (geri alınamaz)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : true
+  }
+} ]

@@ -70,6 +70,15 @@ public class ConnectClient {
 	 * {@link #enc(String)} ile kodlayın. Boş gövde → {@code NullNode}.
 	 */
 	public JsonNode exchange(String cluster, String method, String path, Object body) {
+		return send(cluster, method, path, body).body();
+	}
+
+	/** HTTP durum kodu ve gövde (boş gövde → {@code NullNode}). */
+	public record Response(int status, JsonNode body) {
+	}
+
+	/** {@link #exchange} gibi, ama HTTP durum kodunu da döner (ör. 201 oluşturuldu / 200 güncellendi). */
+	public Response send(String cluster, String method, String path, Object body) {
 		String base = baseUrl(cluster);
 		RestClient client = rest.computeIfAbsent(cluster, c -> build(base));
 		try {
@@ -79,8 +88,10 @@ public class ConnectClient {
 			if (body != null) {
 				spec.contentType(MediaType.APPLICATION_JSON).body(body);
 			}
-			String text = spec.retrieve().body(String.class);
-			return text == null || text.isBlank() ? MAPPER.nullNode() : MAPPER.readTree(text);
+			org.springframework.http.ResponseEntity<String> entity = spec.retrieve().toEntity(String.class);
+			String text = entity.getBody();
+			return new Response(entity.getStatusCode().value(),
+					text == null || text.isBlank() ? MAPPER.nullNode() : MAPPER.readTree(text));
 		}
 		catch (RestClientResponseException e) {
 			throw new ToolException("Connect REST hatası " + e.getStatusCode().value() + " (" + method + " " + path + "): "
@@ -107,9 +118,13 @@ public class ConnectClient {
 		return body == null || body.isBlank() ? status.toString() : body;
 	}
 
-	/** URL path parçası kodlaması (connector adlarında boşluk/özel karakter olabilir). */
+	/**
+	 * URL path parçası kodlaması (connector adlarında boşluk/özel karakter olabilir). Unreserved dışındaki her
+	 * karakter kodlanır: ';' gibi sub-delim'ler açık kalırsa Connect (Jetty) ';' sonrasını matrix parametresi
+	 * sayıp atar ve araç başka bir connector'a gider.
+	 */
 	public static String enc(String segment) {
-		return org.springframework.web.util.UriUtils.encodePathSegment(segment, java.nio.charset.StandardCharsets.UTF_8);
+		return org.springframework.web.util.UriUtils.encode(segment, java.nio.charset.StandardCharsets.UTF_8);
 	}
 
 	static RestClient build(String base) {
