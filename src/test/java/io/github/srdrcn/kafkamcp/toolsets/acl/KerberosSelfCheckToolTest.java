@@ -23,9 +23,9 @@ import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 /**
- * kerberos_self_check'in kerberos bloğu tanımlı yolu: KDC erişilemez (login Türkçe hata), cluster ise
- * properties ile PLAIN kullandığı için Kafka bağlantısı yine başarılı. Spring bağlamı kullanılmaz;
- * JVM genelindeki java.security.krb5.conf test sonunda geri alınır.
+ * kerberos_self_check with a kerberos block configured: the KDC is unreachable (login returns an explained
+ * error), while the Kafka connection still succeeds because the cluster uses PLAIN via properties. No Spring
+ * context is used; the JVM-wide java.security.krb5.conf is restored at the end of the test.
  */
 class KerberosSelfCheckToolTest {
 
@@ -61,7 +61,7 @@ class KerberosSelfCheckToolTest {
 			assertThat(r.get("serviceName")).isEqualTo("kafka");
 			Map<String, Object> login = (Map<String, Object>) r.get("login");
 			assertThat(login.get("status")).isIn("error", "timeout");
-			assertThat((String) login.get("error")).contains("KDC'ye ulaşılamadı");
+			assertThat((String) login.get("error")).contains("Cannot reach the KDC");
 			assertThat(((Map<String, Object>) r.get("keytab")).get("principalInKeytab")).isEqualTo(true);
 			assertThat(((Map<String, Object>) r.get("krb5Conf")).get("defaultRealm")).isEqualTo("EXAMPLE.TEST");
 			assertThat(r.get("ok")).isEqualTo(false);
@@ -83,8 +83,8 @@ class KerberosSelfCheckToolTest {
 	}
 
 	/**
-	 * Cluster kerberos bloğuyla GSSAPI kullanıyor ve login başarısız: Admin.create aynı login'de
-	 * bloklanabileceği için Kafka kontrolü atlanır, teşhis sonuçları yine döner.
+	 * The cluster uses GSSAPI with the kerberos block and the login fails: since Admin.create could block on the
+	 * same login, the Kafka check is skipped; the diagnostic results are still returned.
 	 */
 	@Test
 	@SuppressWarnings("unchecked")
@@ -108,7 +108,7 @@ class KerberosSelfCheckToolTest {
 
 			@Override
 			public Admin admin(String name) {
-				throw new AssertionError("Kerberos login başarısızken Kafka client'ı oluşturulmamalı");
+				throw new AssertionError("The Kafka client must not be created when the Kerberos login fails");
 			}
 
 		};
@@ -122,7 +122,7 @@ class KerberosSelfCheckToolTest {
 			assertThat(((Map<String, Object>) r.get("krb5Conf")).get("defaultRealm")).isEqualTo("EXAMPLE.TEST");
 			Map<String, Object> kafka = (Map<String, Object>) r.get("kafka");
 			assertThat(kafka.get("status")).isEqualTo("skipped");
-			assertThat((String) kafka.get("reason")).contains("Kerberos login başarısız", "denenmedi");
+			assertThat((String) kafka.get("reason")).contains("Kerberos login failed", "not attempted");
 		}
 		finally {
 			clients.destroy();
@@ -135,7 +135,7 @@ class KerberosSelfCheckToolTest {
 		}
 	}
 
-	/** Client oluşturma bloklansa da (ör. KDC paketleri düşürülüyor) Kafka kontrolü süre sınırında biter. */
+	/** Even if client creation blocks (e.g. KDC packets are dropped), the Kafka check finishes within the time limit. */
 	@Test
 	@SuppressWarnings("unchecked")
 	void connectivityIsBoundedWhenClientCreationBlocks() {
@@ -155,7 +155,7 @@ class KerberosSelfCheckToolTest {
 				catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
-				throw new ToolException("bloklandı");
+				throw new ToolException("blocked");
 			}
 
 		};
@@ -167,10 +167,10 @@ class KerberosSelfCheckToolTest {
 			long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 			assertThat(elapsedMs).isLessThan(KafkaClients.TIMEOUT_MS);
 			assertThat(r.get("kerberosConfigured")).isEqualTo(false);
-			assertThat((String) r.get("note")).contains("Kerberos yapılandırılmamış");
+			assertThat((String) r.get("note")).contains("Kerberos is not configured");
 			Map<String, Object> kafka = (Map<String, Object>) r.get("kafka");
 			assertThat(kafka.get("status")).isEqualTo("timeout");
-			assertThat((String) kafka.get("error")).contains("oluşturulamadı");
+			assertThat((String) kafka.get("error")).contains("was not created");
 		}
 		finally {
 			release.countDown();

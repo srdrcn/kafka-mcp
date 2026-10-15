@@ -14,8 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * KerberosCheck birim testleri: erişilemeyen KDC (127.0.0.1:1), olmayan keytab ve olmayan krb5.conf.
- * java.security.krb5.conf JVM genelinde olduğu için her testte ayarlanıp geri alınır.
+ * KerberosCheck unit tests: unreachable KDC (127.0.0.1:1), missing keytab and missing krb5.conf.
+ * java.security.krb5.conf is JVM-wide, so each test sets and restores it.
  */
 class KerberosCheckTest {
 
@@ -59,7 +59,7 @@ class KerberosCheckTest {
 	}
 
 	@Test
-	void missingKeytabIsExplainedInTurkish() throws IOException {
+	void missingKeytabIsExplained() throws IOException {
 		System.setProperty(KerberosCheck.KRB5_CONF_PROPERTY, krb5Conf().toString());
 		String keytab = dir.resolve("missing.keytab").toString();
 		Map<String, Object> r = KerberosCheck.check(new KerberosCheck.Settings("kerberos", null, keytab, PRINCIPAL,
@@ -71,15 +71,15 @@ class KerberosCheckTest {
 		@SuppressWarnings("unchecked")
 		Map<String, Object> login = (Map<String, Object>) r.get("login");
 		assertThat(login.get("status")).isEqualTo("error");
-		assertThat((String) login.get("error")).contains("keytab bulunamadı");
-		assertThat(problems(r)).anyMatch(p -> p.contains("keytab dosyası yok"));
+		assertThat((String) login.get("error")).contains("Keytab not found");
+		assertThat(problems(r)).anyMatch(p -> p.contains("keytab file does not exist"));
 		@SuppressWarnings("unchecked")
 		Map<String, Object> principal = (Map<String, Object>) r.get("principal");
 		assertThat(principal.get("realmMatchesDefault")).isEqualTo(true);
 	}
 
 	@Test
-	void unreachableKdcIsExplainedInTurkish() throws IOException {
+	void unreachableKdcIsExplained() throws IOException {
 		System.setProperty(KerberosCheck.KRB5_CONF_PROPERTY, krb5Conf().toString());
 		Path keytab = dir.resolve("svc.keytab");
 		KerberosTestFiles.writeKeytab(keytab, "kafka-mcp", REALM);
@@ -95,7 +95,7 @@ class KerberosCheckTest {
 		@SuppressWarnings("unchecked")
 		Map<String, Object> login = (Map<String, Object>) r.get("login");
 		assertThat(login.get("status")).isIn("error", "timeout");
-		assertThat((String) login.get("error")).contains("KDC'ye ulaşılamadı");
+		assertThat((String) login.get("error")).contains("Cannot reach the KDC");
 	}
 
 	@Test
@@ -108,14 +108,14 @@ class KerberosCheckTest {
 		Map<String, Object> conf = (Map<String, Object>) r.get("krb5Conf");
 		assertThat(conf.get("exists")).isEqualTo(false);
 		assertThat(conf.get("path")).isEqualTo(missing);
-		assertThat(problems(r)).anyMatch(p -> p.contains("krb5.conf bulunamadı"));
+		assertThat(problems(r)).anyMatch(p -> p.contains("krb5.conf not found"));
 		@SuppressWarnings("unchecked")
 		Map<String, Object> login = (Map<String, Object>) r.get("login");
 		assertThat(login.get("status")).isEqualTo("skipped");
 		assertThat(r.get("notes").toString()).contains("/etc/other-krb5.conf");
 	}
 
-	/** JDK: dns_lookup_kdc yoksa dns_fallback, o da yoksa true; kdc'siz realm DNS SRV ile bulunur. */
+	/** JDK: dns_lookup_kdc, otherwise dns_fallback, otherwise true; a realm without kdc is found via DNS SRV. */
 	@Test
 	void realmWithoutKdcUsesDnsUnlessDisabled() throws IOException {
 		Path dnsOnly = dir.resolve("dns-krb5.conf");
@@ -127,7 +127,7 @@ class KerberosCheckTest {
 		assertThat(KerberosCheck.parseKrb5Conf(dnsOnly.toString()).dnsLookupKdc()).isTrue();
 		Map<String, Object> r = KerberosCheck.check(new KerberosCheck.Settings("kerberos", null, null,
 				"svc@CORP.TEST", "kafka"), 1_000);
-		assertThat(problems(r)).noneMatch(p -> p.contains("kdc tanımı yok"));
+		assertThat(problems(r)).noneMatch(p -> p.contains("no kdc entry"));
 		assertThat(r.get("notes").toString()).contains("DNS SRV");
 
 		assertThat(dnsLookup("dns_lookup_kdc = false")).isFalse();
@@ -144,7 +144,7 @@ class KerberosCheckTest {
 		System.setProperty(KerberosCheck.KRB5_CONF_PROPERTY, disabled.toString());
 		Map<String, Object> off = KerberosCheck.check(new KerberosCheck.Settings("kerberos", null, null,
 				"svc@CORP.TEST", "kafka"), 1_000);
-		assertThat(problems(off)).anyMatch(p -> p.contains("kdc tanımı yok") && p.contains("false"));
+		assertThat(problems(off)).anyMatch(p -> p.contains("no kdc entry") && p.contains("false"));
 	}
 
 	private boolean dnsLookup(String libdefaults) throws IOException {

@@ -25,7 +25,7 @@ class SecurityToolsTest extends KafkaIntegrationTest {
 	@Test
 	void scramUsersAreListedWithoutSecrets() throws Exception {
 		String user = unique("scram");
-		// aynı kullanıcı tek istekte iki kez değiştirilemez: mekanizma başına ayrı istek
+		// the same user cannot be altered twice in one request: one request per mechanism
 		testAdmin()
 			.alterUserScramCredentials(List.of(new UserScramCredentialUpsertion(user,
 					new ScramCredentialInfo(ScramMechanism.SCRAM_SHA_256, 4096), "very-secret-pw")))
@@ -76,7 +76,7 @@ class SecurityToolsTest extends KafkaIntegrationTest {
 		assertThat(r.at("/broker/listeners").toString()).contains("SASL", "INTERNAL").doesNotContain("9092");
 		assertThat(r.at("/broker/sasl.enabled.mechanisms").asText()).isEqualTo("PLAIN");
 		assertThat(r.at("/broker/listener.security.protocol.map").asText()).contains("SASL:SASL_PLAINTEXT");
-		assertThat(r.at("/broker/super.users").asText()).contains("gizli");
+		assertThat(r.at("/broker/super.users").asText()).contains("hidden");
 		assertThat(r.at("/acls/total").isInt()).isTrue();
 		assertThat(r.at("/scram/users").isInt()).isTrue();
 		assertThat(r.at("/quotas/entities").isInt()).isTrue();
@@ -91,13 +91,13 @@ class SecurityToolsTest extends KafkaIntegrationTest {
 	void kerberosSelfCheckReportsNotConfigured() {
 		JsonNode r = ok("kerberos_self_check", args());
 		assertThat(r.get("kerberosConfigured").asBoolean()).isFalse();
-		assertThat(r.get("note").asText()).contains("Kerberos yapılandırılmamış", "SASL_PLAINTEXT", "PLAIN");
+		assertThat(r.get("note").asText()).contains("Kerberos is not configured", "SASL_PLAINTEXT", "PLAIN");
 		assertThat(r.at("/client/saslJaasConfig").asText()).contains("password=\"****\"").contains("username=\"admin\"");
 		assertThat(r.toString()).doesNotContain("admin-secret");
 		assertThat(r.has("login")).isFalse();
 		assertThat(r.at("/kafka/status").asText()).isEqualTo("ok");
 		assertThat(r.at("/kafka/clusterId").asText()).isNotBlank();
-		// readOnly cluster'da da çalışır, cluster zorunlu
+		// also works on the readOnly cluster; cluster is required
 		assertThat(ok("kerberos_self_check", args("cluster", TestConfigs.READ_ONLY_CLUSTER)).get("cluster").asText())
 			.isEqualTo(TestConfigs.READ_ONLY_CLUSTER);
 		assertThat(error("kerberos_self_check", Map.of())).contains("cluster");

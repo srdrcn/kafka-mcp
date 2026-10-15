@@ -35,15 +35,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
 /**
- * acl güvenlik/kota araçları ZooKeeper (Kafka 3.9) cluster'ında: quotas_list, quotas_update,
- * scram_users_list, delegation_tokens_list, kerberos_self_check, security_summary. security_summary moda
- * özgü bilgileri (KRaft/ZooKeeper, authorizer, controller/ZooKeeper anahtarları) her iki modda doğru verir;
- * eski broker'ın desteklemediği API'ler aracı düşürmez.
+ * acl security/quota tools on a ZooKeeper (Kafka 3.9) cluster: quotas_list, quotas_update, scram_users_list,
+ * delegation_tokens_list, kerberos_self_check, security_summary. security_summary reports the mode-specific
+ * information (KRaft/ZooKeeper, authorizer, controller/ZooKeeper keys) correctly in both modes; APIs an old
+ * broker does not support do not make the tool fail.
  */
 class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 
@@ -103,7 +104,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(list.at("/quotas/1/entity/clientId").asText()).isEqualTo("<default>");
 		assertThat(ok("quotas_list", zkArgs("filter", "ip=" + ip.replace(".", "\\.") + "$")).get("total").asInt())
 			.isEqualTo(1);
-		// aynı entity KRaft cluster'ında yok
+		// the same entity does not exist on the KRaft cluster
 		assertThat(ok("quotas_list", args("filter", "user=" + user)).get("total").asInt()).isZero();
 
 		JsonNode removed = ok("quotas_update",
@@ -117,8 +118,8 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * ZooKeeper'da SCRAM kimlik bilgileri ve kotalar aynı /config/users znode'unda: SCRAM kullanıcısı kota
-	 * listesinde boş entity olarak görünmemeli, kota silinince SCRAM bilgisi kalmalı.
+	 * On ZooKeeper SCRAM credentials and quotas share the /config/users znode: a SCRAM user must not show up as
+	 * an empty entity in the quota list, and the SCRAM credentials must remain after the quota is removed.
 	 */
 	@Test
 	void scramUsersOnZooKeeperAndQuotaSeparation() throws Exception {
@@ -181,7 +182,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 			assertThat(t.get("expiryTimestamp").asText()).endsWith("Z");
 			assertThat(r.toString()).doesNotContain(token.hmacAsBase64String());
 		});
-		// token ZooKeeper cluster'ına ait: KRaft cluster'ında görünmez
+		// the token belongs to the ZooKeeper cluster: not visible on the KRaft cluster
 		assertThat(ok("delegation_tokens_list", args("filter", id)).get("total").asInt()).isZero();
 		assertThat(ok("security_summary", zkArgs()).at("/delegationTokens/count").asInt()).isPositive();
 		zkAdmin().expireDelegationToken(token.hmac()).expiryTimestamp().get(15, TimeUnit.SECONDS);
@@ -200,7 +201,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(ok("kerberos_self_check", args()).at("/kafka/clusterId").asText()).isNotEqualTo(clusterId);
 	}
 
-	/** security_summary her iki modda moda özgü bilgiyi doğru verir. */
+	/** security_summary reports the mode-specific information correctly in both modes. */
 	@Test
 	void securitySummaryReportsModeSpecificInformation() {
 		JsonNode zk = ok("security_summary", zkArgs());
@@ -209,17 +210,17 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zb.get("authorizer.class.name").asText()).isEqualTo("kafka.security.authorizer.AclAuthorizer");
 		assertThat(zb.get("zookeeper.set.acl").asText()).isEqualTo("false");
 		assertThat(zb.get("zookeeper.ssl.client.enable").asText()).isEqualTo("false");
-		// ZooKeeper 3.9 bunları varsayılanla döndürür ama KRaft'a özgüdür: gösterilmemeli
+		// ZooKeeper 3.9 returns these with defaults but they are KRaft-specific: must not be shown
 		assertThat(zb.has("process.roles")).isFalse();
 		assertThat(zb.has("controller.listener.names")).isFalse();
 		assertThat(zb.has("sasl.mechanism.controller.protocol")).isFalse();
 		assertThat(zb.get("listeners").toString()).contains("SASL", "INTERNAL").doesNotContain("CONTROLLER");
-		// INTERNAL listener'ı PLAINTEXT: varsayılan sasl.mechanism.inter.broker.protocol=GSSAPI gösterilmez
+		// INTERNAL listener is PLAINTEXT: the default sasl.mechanism.inter.broker.protocol=GSSAPI is not shown
 		assertThat(zb.get("interBrokerSecurityProtocol").asText()).isEqualTo("PLAINTEXT");
 		assertThat(zb.has("sasl.mechanism.inter.broker.protocol")).isFalse();
 		assertThat(zb.has("controllerListenerSecurityProtocol")).isFalse();
-		assertThat(zb.get("super.users").asText()).contains("gizli");
-		assertThat(zb.get("allow.everyone.if.no.acl.found").asText()).contains("gizli");
+		assertThat(zb.get("super.users").asText()).contains("hidden");
+		assertThat(zb.get("allow.everyone.if.no.acl.found").asText()).contains("hidden");
 		assertThat(zk.at("/acls/total").isInt()).isTrue();
 		assertThat(zk.at("/scram/users").isInt()).isTrue();
 		assertThat(zk.at("/quotas/entities").isInt()).isTrue();
@@ -227,7 +228,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zk.get("notes").toString()).contains("zookeeper.set.acl=false")
 			.contains("super.users")
 			.doesNotContain("4.x")
-			.doesNotContain("yerleşik değil")
+			.doesNotContain("is not built in")
 			.doesNotContain("controller listener");
 
 		JsonNode kraft = ok("security_summary", args());
@@ -237,7 +238,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 			.isEqualTo("org.apache.kafka.metadata.authorizer.StandardAuthorizer");
 		assertThat(kb.get("process.roles").asText()).isEqualTo("broker,controller");
 		assertThat(kb.get("controller.listener.names").asText()).isEqualTo("CONTROLLER");
-		// CONTROLLER:PLAINTEXT — broker'ın döndürdüğü varsayılan GSSAPI Kerberos kullanılıyormuş gibi gösterilmez
+		// CONTROLLER:PLAINTEXT — the default GSSAPI returned by the broker is not shown as if Kerberos were used
 		assertThat(kb.get("controllerListenerSecurityProtocol").asText()).isEqualTo("PLAINTEXT");
 		assertThat(kb.has("sasl.mechanism.controller.protocol")).isFalse();
 		assertThat(kb.get("interBrokerSecurityProtocol").asText()).isEqualTo("PLAINTEXT");
@@ -247,15 +248,15 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(kb.get("listeners").toString()).contains("CONTROLLER");
 		assertThat(kraft.get("notes").toString()).doesNotContain("zookeeper")
 			.contains("super.users")
-			.contains("controller listener'ı (CONTROLLER) PLAINTEXT");
-		// readOnly cluster'ı da aynı KRaft
+			.contains("the controller listener (CONTROLLER) is PLAINTEXT");
+		// the readOnly cluster is the same KRaft cluster
 		assertThat(ok("security_summary", args("cluster", TestConfigs.READ_ONLY_CLUSTER)).get("mode").asText())
 			.isEqualTo("KRaft");
 	}
 
 	/**
-	 * Eski broker (ör. 2.x ZooKeeper): describeUserScramCredentials (2.7+), describeClientQuotas (2.6+) ve
-	 * describeDelegationToken UnsupportedVersionException ile biter. Araçlar düşmez, Türkçe not döner.
+	 * Old broker (e.g. 2.x ZooKeeper): describeUserScramCredentials (2.7+), describeClientQuotas (2.6+) and
+	 * describeDelegationToken fail with UnsupportedVersionException. The tools do not fail; they return a note.
 	 */
 	@Test
 	void unsupportedApisOnOldBrokersBecomeNotes() throws Exception {
@@ -271,22 +272,22 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 
 		JsonNode scram = JSON.valueToTree(securityTools.scramUsers(call(oldClients, deadline)));
 		assertThat(scram.get("supported").asBoolean()).isFalse();
-		assertThat(scram.get("note").asText()).contains("Broker bu işlemi desteklemiyor (sürüm)")
-			.contains("ZooKeeper'da Kafka 2.7+")
-			.contains("KRaft'ta 3.5+");
+		assertThat(scram.get("note").asText()).contains(KafkaErrors.UNSUPPORTED)
+			.contains("Kafka 2.7+ on ZooKeeper")
+			.contains("3.5+ on KRaft");
 
 		JsonNode quotas = JSON.valueToTree(quotaTools.list(call(oldClients, deadline)));
 		assertThat(quotas.get("supported").asBoolean()).isFalse();
-		assertThat(quotas.get("note").asText()).contains("Broker bu işlemi desteklemiyor (sürüm)").contains("2.6");
+		assertThat(quotas.get("note").asText()).contains(KafkaErrors.UNSUPPORTED).contains("2.6");
 
 		JsonNode tokens = JSON.valueToTree(securityTools.delegationTokens(call(oldClients, deadline)));
 		assertThat(tokens.get("enabled").asBoolean()).isFalse();
-		assertThat(tokens.get("note").asText()).contains("desteklemiyor (sürüm)");
+		assertThat(tokens.get("note").asText()).contains("does not support the delegation token API (version)");
 
 		JsonNode summary = JSON.valueToTree(securityTools.securitySummary(call(oldClients, deadline)));
 		assertThat(summary.get("mode").asText()).isEqualTo("ZooKeeper");
 		assertThat(summary.at("/scram/supported").asBoolean(true)).isFalse();
-		assertThat(summary.at("/scram/note").asText()).contains("desteklemiyor (sürüm)");
+		assertThat(summary.at("/scram/note").asText()).contains(KafkaErrors.UNSUPPORTED);
 		assertThat(summary.at("/quotas/supported").asBoolean(true)).isFalse();
 		assertThat(summary.at("/delegationTokens/enabled").asBoolean(true)).isFalse();
 		assertThat(summary.at("/acls/total").isInt()).isTrue();
@@ -297,7 +298,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		return new ToolCall("test", zkArgs(), clients, deadline);
 	}
 
-	/** Verilen Admin metotlarını eski broker gibi UnsupportedVersionException ile bitiren proxy. */
+	/** Proxy that fails the given Admin methods with UnsupportedVersionException, like an old broker. */
 	private static Admin unsupportedAdmin(Admin real, Set<String> unsupported) {
 		return (Admin) Proxy.newProxyInstance(Admin.class.getClassLoader(), new Class<?>[] { Admin.class },
 				(proxy, method, methodArgs) -> {
@@ -324,7 +325,7 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 			c.setAccessible(true);
 			return c.newInstance(f);
 		}
-		throw new IllegalArgumentException("desteklenmeyen sonuç tipi: " + type);
+		throw new IllegalArgumentException("unsupported result type: " + type);
 	}
 
 }
