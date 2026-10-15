@@ -49,7 +49,26 @@ public class SubjectTools {
 					.schemaRegistry()
 					.required("subject", P.string("Subject name"))
 					.param("deleted", P.bool("Also return soft-deleted versions (default false)"))
+					.param("filter", P.string("Version filter (regex on the version number, partial match)"))
+					.param("limit", versionLimit())
 					.handler(this::versionsList));
+	}
+
+	private static Map<String, Object> versionLimit() {
+		Map<String, Object> m = P.integer("Maximum number of versions to return; the newest are kept (default "
+				+ ToolSpec.DEFAULT_LIST_LIMIT + ")", 1, ToolSpec.MAX_LIST_LIMIT);
+		m.put("default", ToolSpec.DEFAULT_LIST_LIMIT);
+		return m;
+	}
+
+	/** The versions matching the filter (input in ascending order). */
+	private static List<Integer> matching(ToolCall call, List<Integer> versions) {
+		return versions.stream().filter(v -> call.matches(String.valueOf(v))).toList();
+	}
+
+	/** The newest {@code limit} entries of an ascending list. */
+	private static List<Integer> newest(List<Integer> versions, int limit) {
+		return versions.subList(Math.max(0, versions.size() - limit), versions.size());
 	}
 
 	Object subjectsList(ToolCall call) {
@@ -141,18 +160,23 @@ public class SubjectTools {
 		String subject = call.str("subject");
 		String cluster = call.cluster();
 		boolean deleted = call.bool("deleted", false);
+		int limit = call.limit();
 		if (!deleted) {
 			List<Integer> versions = api.versions(cluster, subject, false);
+			List<Integer> matching = matching(call, versions);
 			return Results.map("subject", subject, "count", versions.size(), "latest",
-					versions.isEmpty() ? null : versions.get(versions.size() - 1), "versions", versions);
+					versions.isEmpty() ? null : versions.get(versions.size() - 1), "versions", newest(matching, limit),
+					"truncated", matching.size() > limit ? true : null);
 		}
 		List<Integer> all = api.versions(cluster, subject, true);
 		Set<Integer> active = new HashSet<>(api.versionsOrEmpty(cluster, subject, false));
-		List<Integer> soft = all.stream().filter(v -> !active.contains(v)).toList();
 		List<Integer> activeSorted = all.stream().filter(active::contains).toList();
+		List<Integer> matching = matching(call, all);
+		List<Integer> shown = newest(matching, limit);
 		return Results.map("subject", subject, "count", all.size(), "latest",
-				activeSorted.isEmpty() ? null : activeSorted.get(activeSorted.size() - 1), "versions", all,
-				"softDeletedVersions", soft, "note",
+				activeSorted.isEmpty() ? null : activeSorted.get(activeSorted.size() - 1), "versions", shown,
+				"truncated", matching.size() > limit ? true : null, "softDeletedVersions",
+				shown.stream().filter(v -> !active.contains(v)).toList(), "note",
 				activeSorted.isEmpty() ? "All versions are soft-deleted (the subject is soft-deleted)" : null);
 	}
 

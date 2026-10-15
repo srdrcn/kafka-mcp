@@ -1,6 +1,7 @@
 package io.github.srdrcn.kafkamcp.toolsets.messages;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -19,6 +20,7 @@ import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
+import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.toolsets.messages.MessageReader.From;
@@ -32,6 +34,9 @@ public class ConsumeTools {
 	private static final int HEADER_SAMPLES = 3;
 
 	private static final int HEADER_SAMPLE_CHARS = 200;
+
+	/** Upper bound of the rendered records of one messages_consume response (JSON characters). */
+	static final int MAX_RESPONSE_CHARS = 2_000_000;
 
 	private final SchemaRegistryClient registry;
 
@@ -51,8 +56,10 @@ public class ConsumeTools {
 			.param("offset",
 					MessageParams.nonNegative("Start offset for from=offset (applied to every selected partition)"))
 			.param("timestamp", MessageParams.timestamp("Start time for from=timestamp"))
-			.param("keyRegex", P.string("Key regex filter (partial match on the decoded text)"))
-			.param("valueRegex", P.string("Value regex filter (partial match on the decoded text)"))
+			.param("keyRegex", P.string("Key regex filter (partial match on the first " + RecordFilter.MAX_FILTER_CHARS
+					+ " characters of the decoded text)"))
+			.param("valueRegex", P.string("Value regex filter (partial match on the first " + RecordFilter.MAX_FILTER_CHARS
+					+ " characters of the decoded text)"))
 			.param("headerKey", P.string("Only records that carry this header"))
 			.param("headerValueRegex", P.string("Regex for the headerKey value (requires headerKey)"))
 			.param("format", MessageParams.valueFormat())
@@ -104,9 +111,25 @@ public class ConsumeTools {
 		RecordFilter filter = RecordFilter.fromParams(call, decoder, keyFormat, valueFormat);
 		MessageReader.Result r = MessageReader.read(call, new MessageReader.Request(topic, partition, from, offset,
 				timestamp, call.maxRecords(), MessageParams.maxScan(call), filter));
+		List<ConsumerRecord<byte[], byte[]>> read = r.records();
+		// latest keeps the newest records (the end of the list) when the response gets too large
+		boolean newestFirst = from == From.LATEST;
 		List<Map<String, Object>> records = new ArrayList<>();
-		for (ConsumerRecord<byte[], byte[]> rec : r.records()) {
-			records.add(RecordJson.render(rec, decoder, keyFormat, valueFormat, maxChars));
+		long chars = 0;
+		ConsumerRecord<byte[], byte[]> firstDropped = null;
+		for (int i = 0; i < read.size(); i++) {
+			ConsumerRecord<byte[], byte[]> rec = read.get(newestFirst ? read.size() - 1 - i : i);
+			Map<String, Object> m = RecordJson.render(rec, decoder, keyFormat, valueFormat, maxChars);
+			int size = ToolRegistry.render(m).length();
+			if (chars + size > MAX_RESPONSE_CHARS && !records.isEmpty()) {
+				firstDropped = rec;
+				break;
+			}
+			chars += size;
+			records.add(m);
+		}
+		if (newestFirst) {
+			Collections.reverse(records);
 		}
 		// if no record has a timestamp (v0 message format), latest is also listed in partition/offset order
 		boolean allUntimed = !r.records().isEmpty() && r.records().stream().allMatch(MessageReader::untimed);
@@ -120,16 +143,27 @@ public class ConsumeTools {
 			out.put("scanned", r.scanned());
 			out.put("matched", r.matched());
 		}
-		out.put("reachedEnd", r.reachedEnd());
+		out.put("reachedEnd", r.reachedEnd() && firstDropped == null);
 		if (r.scanLimitReached()) {
 			out.put("scanLimitReached", true);
 		}
 		if (partition != null && from != From.LATEST) {
 			// if the partition could not be read (skippedPartitions) there is no next offset: returning latest would skip it
-			Long next = r.nextOffsets().get(new TopicPartition(topic, partition));
+			Long next = firstDropped != null ? Long.valueOf(firstDropped.offset())
+					: r.nextOffsets().get(new TopicPartition(topic, partition));
 			out.put("nextOffset", next == null ? NullNode.getInstance() : next);
 		}
+		if (firstDropped != null) {
+			out.put("truncated", true);
+		}
 		status(out, r, decoder);
+		if (firstDropped != null) {
+			@SuppressWarnings("unchecked")
+			List<String> notes = (List<String>) out.computeIfAbsent("notes", k -> new ArrayList<String>());
+			notes.add("Response size limit (" + MAX_RESPONSE_CHARS + " characters) reached: returned " + records.size()
+					+ " of " + read.size() + " records read" + (newestFirst ? " (the newest)" : "")
+					+ "; lower maxRecords or maxValueChars");
+		}
 		out.put("records", records);
 		return out;
 	}

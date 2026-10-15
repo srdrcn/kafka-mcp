@@ -76,7 +76,7 @@ public class NamingTools {
 		List<String> bad = new ArrayList<>();
 		Map<String, Integer> byPrefix = new HashMap<>();
 		for (String n : names) {
-			if (!pattern.matcher(n).matches()) {
+			if (!call.fullMatch(pattern, n)) {
 				bad.add(n);
 				byPrefix.merge(FIRST_TOKEN.split(n, 2)[0], 1, Integer::sum);
 			}

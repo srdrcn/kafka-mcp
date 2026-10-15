@@ -45,6 +45,46 @@ class ConnectSecretsTest {
 	}
 
 	@Test
+	void masksMoreSecretKeys() {
+		for (String k : List.of("snowflake.private.key.passphrase", "connection.passwd", "azure.eventhubs.connection.string",
+				"connectionString", "http.headers.authorization", "headers", "request.header", "azure.sas", "db.pwd",
+				"http.auth", "auth.type", "private.link.secret.file")) {
+			assertThat(ConnectSecrets.isSecret(k)).as(k).isTrue();
+		}
+		for (String k : List.of("header.converter", "sasl.mechanism", "header.separator.char", "connection.url",
+				"connection.uri", "topics.regex")) {
+			assertThat(ConnectSecrets.isSecret(k)).as(k).isFalse();
+		}
+	}
+
+	@Test
+	void scrubsCredentialsInsideValues() {
+		Map<String, String> config = new LinkedHashMap<>();
+		config.put("connection.uri", "mongodb://app:p@ss-w0rd@mongo1.example.com:27017,mongo2.example.com/db?tls=true");
+		config.put("connection.url", "jdbc:sqlserver://db.example.com:1433;databaseName=x;user=sa;password=Hunter2;encrypt=true");
+		config.put("jdbc.url", "jdbc:postgresql://db.example.com/app?user=app&password=s3cret&ssl=true");
+		config.put("oracle.url", "jdbc:oracle:thin:scott/tiger@db.example.com:1521:orcl");
+		config.put("target", "Endpoint=sb://ns.example.com/;SharedAccessKeyName=root;SharedAccessKey=abcDEF123=");
+		config.put("blob", "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=Zm9vYmFy==;EndpointSuffix=example.com");
+		config.put("http.headers.additional", "X-Trace:1|Authorization:Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig");
+		config.put("plain", "http://connect.example.com:8083/path@x");
+		Map<String, Object> m = ConnectSecrets.mask(config);
+		assertThat(m.get("connection.uri")).isEqualTo("mongodb://***@mongo1.example.com:27017,mongo2.example.com/db?tls=true");
+		assertThat((String) m.get("connection.url")).contains("user=sa", "password=******", "encrypt=true")
+			.doesNotContain("Hunter2");
+		assertThat((String) m.get("jdbc.url")).contains("password=******&ssl=true").doesNotContain("s3cret");
+		assertThat(m.get("oracle.url")).isEqualTo("jdbc:oracle:thin:***@db.example.com:1521:orcl");
+		assertThat((String) m.get("target")).contains("SharedAccessKey=******").doesNotContain("abcDEF123");
+		assertThat((String) m.get("blob")).contains("AccountKey=******").doesNotContain("Zm9vYmFy");
+		assertThat((String) m.get("http.headers.additional")).isEqualTo("X-Trace:1|Authorization:Bearer ******");
+		assertThat(m.get("plain")).isEqualTo("http://connect.example.com:8083/path@x");
+		assertThat(ConnectSecrets.mask("tasks.max", 3)).isEqualTo(3);
+		assertThat(ConnectSecrets.scrub(null)).isNull();
+		assertThat(ConnectJson.traceSummary("java.sql.SQLException: login failed for jdbc:mysql://root:toor@db.example.com/x"))
+			.isEqualTo("java.sql.SQLException: login failed for jdbc:mysql://***@db.example.com/x");
+	}
+
+	@Test
 	void configDiffMasksValuesAndIgnoresName() {
 		Map<String, String> current = Map.of("name", "a", "topics", "t1", "database.password", "old", "file", "/x",
 				"tasks.max", "1");

@@ -409,6 +409,13 @@
       "filter" : {
         "type" : "string",
         "description" : "Config name filter (regex, partial match)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
       }
     },
     "required" : [ "cluster", "topic" ]

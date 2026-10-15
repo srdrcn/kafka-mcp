@@ -160,7 +160,7 @@ public class ToolRegistry implements DisposableBean {
 		}
 	}
 
-	static String render(Object result) {
+	public static String render(Object result) {
 		if (result == null) {
 			return "{}";
 		}

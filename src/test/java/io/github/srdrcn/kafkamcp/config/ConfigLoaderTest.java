@@ -13,7 +13,7 @@ class ConfigLoaderTest {
 
 	private static final String MAIN = """
 			port: 8080
-			apiKey: <api-key>
+			apiKey: 0123456701234567
 			readOnly: true
 			disableDestructive: true
 			toolsets: [core, messages]
@@ -30,6 +30,9 @@ class ConfigLoaderTest {
 			    readOnly: false
 			    properties:
 			      client.dns.lookup: use_all_dns_ips
+			      ssl.truststore.password: 012345
+			      retries: 0x1F
+			      linger.ms: 1_000
 			""";
 
 	@Test
@@ -47,6 +50,56 @@ class ConfigLoaderTest {
 		assertThat(c.isReadOnly(c.cluster("c2"))).isFalse();
 		assertThat(c.cluster("c1").hasConnect()).isTrue();
 		assertThat(c.cluster("c2").getProperties()).containsEntry("client.dns.lookup", "use_all_dns_ips");
+	}
+
+	@Test
+	void numbersKeepTheirTextForStringValues(@TempDir Path dir) throws Exception {
+		// YAML 1.1 would read these as octal 5349 / hex 31 / 1000; the strings must stay as written
+		KafkaMcpConfig c = ConfigLoader.load(Files.writeString(dir.resolve("kafka-mcp.yaml"), MAIN), null);
+		assertThat(c.getApiKey()).isEqualTo("0123456701234567");
+		assertThat(c.cluster("c2").getProperties()).containsEntry("ssl.truststore.password", "012345")
+			.containsEntry("retries", "0x1F")
+			.containsEntry("linger.ms", "1_000");
+		assertThat(c.getPort()).isEqualTo(8080);
+		assertThat(ConfigLoader.parse("port: 9090\nclusters: [{name: 123, bootstrapServers: 'x:9092'}]").getPort())
+			.isEqualTo(9090);
+		assertThatThrownBy(() -> ConfigLoader.parse("port: 0x1F90\nclusters: [{name: x, bootstrapServers: 'x:9092'}]"))
+			.isInstanceOf(ConfigException.class)
+			.hasMessageContaining("port");
+	}
+
+	@Test
+	void validatesApiKey() {
+		String clusters = "\nclusters: [{name: x, bootstrapServers: 'x:9092'}]";
+		assertThat(ConfigLoader.parse("apiKey: ''" + clusters).isApiKeyEnabled()).isFalse();
+		assertThat(ConfigLoader.parse("apiKey:" + clusters).isApiKeyEnabled()).isFalse();
+		assertThat(ConfigLoader.parse("apiKey: 3f9a1c2b7d4e8f60a1b2" + clusters).getApiKey())
+			.isEqualTo("3f9a1c2b7d4e8f60a1b2");
+		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: <api-key>" + clusters)).hasMessageContaining("placeholder");
+		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: '${KAFKA_MCP_KEY}'" + clusters))
+			.hasMessageContaining("placeholder");
+		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: '   '" + clusters)).hasMessageContaining("blank");
+		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: ' 3f9a1c2b7d4e8f60a1b2'" + clusters))
+			.hasMessageContaining("whitespace");
+		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: |\n  3f9a1c2b7d4e8f60a1b2" + clusters))
+			.hasMessageContaining("whitespace");
+		// short keys are accepted (only a startup warning is logged)
+		assertThat(ConfigLoader.parse("apiKey: short-key" + clusters).getApiKey()).isEqualTo("short-key");
+	}
+
+	@Test
+	void rejectsCredentialsInRestUrls() {
+		assertThatThrownBy(() -> ConfigLoader.parse("""
+				clusters:
+				  - {name: x, bootstrapServers: 'x:9092', connectUrl: 'http://user:secret@connect.example.com:8083'}
+				  - {name: y, bootstrapServers: 'y:9092', schemaRegistryUrl: 'https://u@sr.example.com'}
+				""")).hasMessageContaining("cluster x: connectUrl must not contain credentials")
+			.hasMessageContaining("cluster y: schemaRegistryUrl must not contain credentials")
+			.hasMessageNotContaining("secret");
+		assertThat(ConfigLoader.parse("""
+				clusters:
+				  - {name: x, bootstrapServers: 'x:9092', connectUrl: 'http://connect_1.example.com:8083/'}
+				""").cluster("x").hasConnect()).isTrue();
 	}
 
 	@Test

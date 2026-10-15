@@ -2,6 +2,8 @@
 IMAGE ?= kafka-mcp:latest
 CONTAINER_TOOL ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
 CONFIG ?= kafka-mcp.yaml
+# e.g. BUILD_ARGS="--build-arg RUNTIME_IMAGE=registry.access.redhat.com/ubi9/openjdk-21-runtime@sha256:<digest>"
+BUILD_ARGS ?=
 
 .PHONY: build test image run run-stdio snapshot clean
 
@@ -12,7 +14,7 @@ test: ## All tests (Testcontainers needs Docker/Podman)
 	./mvnw -B verify
 
 image: ## Container image (multi-stage, UBI9 OpenJDK 21)
-	$(CONTAINER_TOOL) build -t $(IMAGE) .
+	$(CONTAINER_TOOL) build $(BUILD_ARGS) -t $(IMAGE) .
 
 run: build ## Run locally over HTTP (port from the config) or stdio
 	java -jar target/kafka-mcp.jar --config $(CONFIG)

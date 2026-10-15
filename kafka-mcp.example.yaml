@@ -1,6 +1,6 @@
 # Template for kafka-mcp.yaml in the kafka-mcp-config ConfigMap. Fill in the <...> fields; never commit real values.
 port: 8080
-apiKey: <api-key>                # compared with the X-Authorization header; no auth if empty
+apiKey: <api-key>                # X-Authorization value; use a long random key (openssl rand -hex 32); "" = no auth
 readOnly: true
 disableDestructive: true
 toolsets: [core, messages, consumers, acl, connect, report, diagnose]

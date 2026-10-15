@@ -104,7 +104,8 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 				assertThat(r.get("explanation").asText()).contains("User:alice cannot produce", "WRITE");
 				assertThat(r.at("/facts/idempotentWrite").asText()).contains("does not need");
 				assertThat(r.at("/facts/topicExists").asBoolean()).isTrue();
-				assertThat(r.toString()).doesNotContain("Jikkou", "apiVersion");
+				// suggestions are plain acls_create bindings, not YAML resources
+				assertThat(r.toString()).doesNotContain("apiVersion", "kind:");
 
 				createSuggested(cluster, missing(r), created);
 				JsonNode allowed = ok("diagnose_access",

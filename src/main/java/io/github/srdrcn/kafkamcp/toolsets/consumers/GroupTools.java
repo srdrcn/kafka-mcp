@@ -254,10 +254,10 @@ public class GroupTools {
 			}
 			List<MemberDescription> matching = new ArrayList<>();
 			for (MemberDescription m : ConsumerGroups.sortedMembers(d)) {
-				if (host != null && (m.host() == null || !host.matcher(m.host()).find())) {
+				if (host != null && (m.host() == null || !call.find(host, m.host()))) {
 					continue;
 				}
-				if (clientId != null && (m.clientId() == null || !clientId.matcher(m.clientId()).find())) {
+				if (clientId != null && (m.clientId() == null || !call.find(clientId, m.clientId()))) {
 					continue;
 				}
 				matching.add(m);

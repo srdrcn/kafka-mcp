@@ -124,6 +124,12 @@ public class ConnectClient {
 	 * after ';' as a matrix parameter and drop it, and the tool would hit another connector.
 	 */
 	public static String enc(String segment) {
+		// "." and ".." stay as they are when encoded (unreserved) and the server normalizes them away, so the request
+		// would hit another resource (e.g. /config/. becomes /config, the global level)
+		if (segment == null || segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+			throw new ToolException("Invalid name: '" + segment + "' (empty, '.' and '..' are not allowed in a "
+					+ "Connect path)");
+		}
 		return org.springframework.web.util.UriUtils.encode(segment, java.nio.charset.StandardCharsets.UTF_8);
 	}
 

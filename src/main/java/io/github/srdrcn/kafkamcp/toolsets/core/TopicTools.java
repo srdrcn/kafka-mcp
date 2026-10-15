@@ -50,6 +50,7 @@ public class TopicTools {
 					.required("topic", P.string("Topic name"))
 					.param("includeDefaults", P.bool("Also return default values (default true)"))
 					.param("filter", P.string("Config name filter (regex, partial match)"))
+					.param("limit", Params.limit(ToolSpec.DEFAULT_LIST_LIMIT))
 					.handler(this::topicsConfigGet),
 				ToolSpec.read("topics_find_by_config",
 						"Find topics by config value (e.g. retention.ms gt 604800000, cleanup.policy eq compact)")
@@ -175,7 +176,9 @@ public class TopicTools {
 				rows.add(Configs.row(e, true));
 			}
 		}
-		return Results.map("topic", topic, "count", rows.size(), "configs", rows);
+		int limit = call.limit();
+		return Results.map("topic", topic, "count", rows.size(), "truncated", rows.size() > limit ? true : null,
+				"configs", rows.subList(0, Math.min(limit, rows.size())));
 	}
 
 	Object topicsFindByConfig(ToolCall call) {
@@ -235,7 +238,7 @@ public class TopicTools {
 					case "eq" -> Objects.equals(v, value);
 					case "ne" -> !Objects.equals(v, value);
 					case "contains" -> v != null && v.contains(value);
-					default -> v != null && regex.matcher(v).find();
+					default -> v != null && call.find(regex, v);
 				};
 			}
 			if (match) {

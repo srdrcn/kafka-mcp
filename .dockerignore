@@ -4,4 +4,8 @@ target/
 .vscode/
 deploy/
 *.keytab
+*.local.yaml
+kafka-mcp.yaml
+krb5.conf
+conf.d/
 *.md

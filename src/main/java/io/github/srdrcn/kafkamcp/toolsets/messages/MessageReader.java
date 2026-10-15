@@ -12,6 +12,7 @@ import java.util.function.Predicate;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
@@ -31,6 +32,8 @@ import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Window;
  * <li>earliest/offset/timestamp: forward from the start; without a filter maxRecords is split fairly across
  * partitions, with a filter up to maxScan records are scanned and the first maxRecords matches are returned.</li>
  * </ul>
+ * The raw records held for one call are limited to {@link #MAX_HELD_BYTES}: latest keeps the newest records within
+ * the budget, the forward reads stop once it is exceeded; either way the result is partial with a note.
  */
 public final class MessageReader {
 
@@ -39,6 +42,12 @@ public final class MessageReader {
 	public static final int MAX_SCAN_LIMIT = 100_000;
 
 	private static final int MAX_LISTED_PARTITIONS = 20;
+
+	/** Raw key/value/header bytes of the records held for one call (bounds the heap use of a read). */
+	public static final long MAX_HELD_BYTES = 32L * 1024 * 1024;
+
+	static final String HELD_BYTES_NOTE = "the records read exceeded the memory budget of " + (MAX_HELD_BYTES >> 20)
+			+ " MiB per call";
 
 	/** Maximum rounds of extending backwards the latest windows of partitions that yielded too few records. */
 	private static final int MAX_EXTEND_ROUNDS = 6;
@@ -206,6 +215,8 @@ public final class MessageReader {
 		PriorityQueue<ConsumerRecord<byte[], byte[]>> heap = new PriorityQueue<>(newestLast(tps, b));
 		Map<TopicPartition, Long> got = new HashMap<>();
 		long[] matched = { 0 };
+		long[] held = { 0 };
+		boolean[] trimmed = { false };
 		RecordScanner.Visitor visitor = r -> {
 			got.merge(new TopicPartition(r.topic(), r.partition()), 1L, Long::sum);
 			if (filtered && !req.filter().test(r)) {
@@ -213,8 +224,14 @@ public final class MessageReader {
 			}
 			matched[0]++;
 			heap.add(r);
+			held[0] += bytes(r);
 			if (heap.size() > req.maxRecords()) {
-				heap.poll();
+				held[0] -= bytes(heap.poll());
+			}
+			// over the memory budget: drop the oldest records (at least one record is kept)
+			while (held[0] > MAX_HELD_BYTES && heap.size() > 1) {
+				held[0] -= bytes(heap.poll());
+				trimmed[0] = true;
 			}
 			return Next.CONTINUE;
 		};
@@ -282,8 +299,21 @@ public final class MessageReader {
 		if (deadline) {
 			notes.add("Approaching the time limit; returned the records read so far");
 		}
-		return new Result(records, tps, sel.offline(), scanned, matched[0], completed, deadline, filtered && reduced,
-				approximate, scan.positions(), notes);
+		if (trimmed[0]) {
+			notes.add("Returned fewer than maxRecords records: " + HELD_BYTES_NOTE
+					+ ", so only the newest records within it were kept; lower maxRecords or use a filter");
+		}
+		return new Result(records, tps, sel.offline(), scanned, matched[0], completed, deadline || trimmed[0],
+				filtered && reduced, approximate, scan.positions(), notes);
+	}
+
+	/** Raw size of a record held in memory: key, value and header bytes. */
+	static long bytes(ConsumerRecord<byte[], byte[]> r) {
+		long n = (r.key() == null ? 0 : r.key().length) + (r.value() == null ? 0 : r.value().length);
+		for (Header h : r.headers()) {
+			n += h.key().length() + (h.value() == null ? 0 : h.value().length);
+		}
+		return n;
 	}
 
 	/** No timestamp: v0 message format (or a record written with NO_TIMESTAMP); timestamp -1. */
@@ -361,6 +391,7 @@ public final class MessageReader {
 		List<Window> windows = new ArrayList<>();
 		RecordScanner.Visitor visitor;
 		boolean scanLimited = false;
+		long[] held = { 0 };
 		if (!filtered) {
 			Map<TopicPartition, Long> quota = RecordScanner.fairShare(avail, req.maxRecords());
 			Map<TopicPartition, Long> taken = new HashMap<>();
@@ -370,6 +401,10 @@ public final class MessageReader {
 			}
 			visitor = r -> {
 				records.add(r);
+				held[0] += bytes(r);
+				if (held[0] > MAX_HELD_BYTES) {
+					return Next.STOP;
+				}
 				TopicPartition tp = new TopicPartition(r.topic(), r.partition());
 				long n = taken.merge(tp, 1L, Long::sum);
 				return n >= quota.get(tp) ? Next.PARTITION_DONE : Next.CONTINUE;
@@ -387,7 +422,8 @@ public final class MessageReader {
 					return Next.CONTINUE;
 				}
 				records.add(r);
-				return records.size() >= req.maxRecords() ? Next.STOP : Next.CONTINUE;
+				held[0] += bytes(r);
+				return records.size() >= req.maxRecords() || held[0] > MAX_HELD_BYTES ? Next.STOP : Next.CONTINUE;
 			};
 		}
 		RecordScanner.Result scan;
@@ -406,9 +442,14 @@ public final class MessageReader {
 		if (scan.deadlineReached()) {
 			notes.add("Approaching the time limit; returned the records read so far");
 		}
+		boolean sizeLimited = held[0] > MAX_HELD_BYTES;
+		if (sizeLimited) {
+			notes.add("Stopped after " + records.size() + " records: " + HELD_BYTES_NOTE
+					+ "; lower maxRecords or read a narrower range (partition, offset)");
+		}
 		return new Result(records, tps, sel.offline(), scan.scanned(), records.size(), reachedEnd,
-				scan.deadlineReached() || !skipped.isEmpty(), scanLimitReached, false, scan.positions(), notes,
-				List.copyOf(skipped));
+				scan.deadlineReached() || !skipped.isEmpty() || sizeLimited, scanLimitReached, false, scan.positions(),
+				notes, List.copyOf(skipped));
 	}
 
 	private static String list(List<Integer> partitions) {

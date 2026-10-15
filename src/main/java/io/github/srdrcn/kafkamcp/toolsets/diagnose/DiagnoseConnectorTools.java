@@ -263,7 +263,7 @@ public class DiagnoseConnectorTools {
 		for (JsonNode c : r.path("configs")) {
 			JsonNode value = c.path("value");
 			List<String> errors = new ArrayList<>();
-			value.path("errors").forEach(e -> errors.add(e.asText()));
+			value.path("errors").forEach(e -> errors.add(ConnectSecrets.scrub(e.asText())));
 			if (errors.isEmpty()) {
 				continue;
 			}

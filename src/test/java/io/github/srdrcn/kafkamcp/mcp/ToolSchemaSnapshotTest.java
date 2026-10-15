@@ -118,6 +118,18 @@ class ToolSchemaSnapshotTest {
 	}
 
 	@Test
+	void listToolsTakeFilterAndLimit() throws Exception {
+		for (RegisteredTool t : registry.tools()) {
+			if (!t.spec().name().endsWith("_list")) {
+				continue;
+			}
+			JsonNode props = onTheWire(t).at("/inputSchema/properties");
+			assertThat(props.path("filter").path("type").asText()).as("%s filter", t.spec().name()).isEqualTo("string");
+			assertThat(props.path("limit").path("type").asText()).as("%s limit", t.spec().name()).isEqualTo("integer");
+		}
+	}
+
+	@Test
 	void writeToolsStartWithWritePrefix() {
 		for (RegisteredTool t : registry.tools()) {
 			boolean write = t.spec().description().startsWith("WRITE:");

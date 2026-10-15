@@ -17,12 +17,13 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
 import org.apache.kafka.common.TopicPartition;
 
+import io.github.srdrcn.kafkamcp.mcp.Regexes;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
  * Reads per-partition offset windows ({@code [start, end)}) with an assign()-only consumer. Does not wait for new
- * data; stops when the deadline gets close and returns {@code deadlineReached} (the caller marks the result
- * partial).
+ * data; stops when the deadline gets close (checked before every record, so a slow filter cannot overrun it) and
+ * returns {@code deadlineReached} (the caller marks the result partial).
  */
 public final class RecordScanner {
 
@@ -128,9 +129,23 @@ public final class RecordScanner {
 					if (r.offset() >= w.end()) {
 						break;
 					}
+					// a poll can return hundreds of records and a filter may be slow: check the deadline per record
+					if (call.nearDeadline(reserveMs)) {
+						return new Result(scanned, false, true, false, positions);
+					}
+					Next next;
+					try {
+						next = visitor.visit(r);
+					}
+					catch (Regexes.RegexTimeoutException e) {
+						if (Thread.currentThread().isInterrupted()) {
+							throw e;
+						}
+						// the filter regex hit the scan deadline on this record: it counts as not read
+						return new Result(scanned, false, true, false, positions);
+					}
 					scanned++;
 					positions.put(tp, r.offset() + 1);
-					Next next = visitor.visit(r);
 					if (next == Next.STOP) {
 						return new Result(scanned, false, false, true, positions);
 					}

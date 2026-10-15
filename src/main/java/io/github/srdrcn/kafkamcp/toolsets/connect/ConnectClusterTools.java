@@ -41,6 +41,7 @@ public class ConnectClusterTools {
 			.read("connect_clusters_list", "Connect reachability, version and connector count for clusters with a Connect URL")
 			.connect()
 			.clusterOptional()
+			.listParams()
 			.handler(this::clustersList),
 				ToolSpec.read("connect_plugins_list", "Installed Connect plugins (class, type, version)")
 					.connect()
@@ -59,13 +60,15 @@ public class ConnectClusterTools {
 
 	Object clustersList(ToolCall call) {
 		String only = call.clusterOrNull();
-		List<ClusterConfig> selected = call.clients()
+		List<ClusterConfig> matching = call.clients()
 			.config()
 			.getClusters()
 			.stream()
 			.filter(ClusterConfig::hasConnect)
 			.filter(c -> only == null || c.getName().equals(only))
+			.filter(c -> call.matches(c.getName()))
 			.toList();
+		List<ClusterConfig> selected = matching.subList(0, Math.min(call.limit(), matching.size()));
 		List<Map<String, Object>> rows = new ArrayList<>();
 		ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 		try {
@@ -99,7 +102,8 @@ public class ConnectClusterTools {
 		finally {
 			pool.shutdownNow();
 		}
-		return Results.map("total", rows.size(), "clusters", rows);
+		return Results.map("total", matching.size(), "returned", rows.size(), "truncated", matching.size() > rows.size(),
+				"clusters", rows);
 	}
 
 	private Map<String, Object> probe(String cluster) {
@@ -166,7 +170,7 @@ public class ConnectClusterTools {
 			}
 			String key = ConnectJson.text(v, "name");
 			List<String> messages = new ArrayList<>();
-			errs.forEach(e -> messages.add(e.asText()));
+			errs.forEach(e -> messages.add(ConnectSecrets.scrub(e.asText())));
 			// on parse errors Connect returns a null value; show the submitted value
 			String value = ConnectJson.text(v, "value");
 			errors.add(Results.map("name", key, "value",

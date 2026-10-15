@@ -3,8 +3,14 @@ package io.github.srdrcn.kafkamcp.kafka;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
+import org.apache.kafka.clients.admin.Admin;
 import org.junit.jupiter.api.Test;
 
 import io.github.srdrcn.kafkamcp.config.ConfigLoader;
@@ -85,6 +91,108 @@ class KafkaClientsTest {
 		assertThat(KafkaErrors.kerberos("Unable to obtain password from user")).contains("Keytab not found");
 		assertThat(KafkaErrors.kerberos("Server not found in Kerberos database (7)")).contains("rdns = false");
 		assertThat(KafkaErrors.kerberos("something else")).isNull();
+	}
+
+	@Test
+	void consumerSafetySettingsWinOverClusterProperties() {
+		KafkaMcpConfig config = ConfigLoader.parse("""
+				clusters:
+				  - name: a
+				    bootstrapServers: a:9092
+				    properties:
+				      group.id: someone-elses-group
+				      group.instance.id: static-member
+				      enable.auto.commit: "true"
+				      allow.auto.create.topics: "true"
+				      auto.offset.reset: earliest
+				      isolation.level: read_committed
+				      key.deserializer: org.apache.kafka.common.serialization.StringDeserializer
+				      max.poll.records: "100"
+				      fetch.max.bytes: "1048576"
+				      client.id: team-x
+				""");
+		KafkaClients clients = new KafkaClients(config);
+		Map<String, Object> p = clients.consumerProperties(config.cluster("a"), null);
+		assertThat(p).doesNotContainKeys("group.id", "group.instance.id")
+			.containsEntry("enable.auto.commit", false)
+			.containsEntry("allow.auto.create.topics", false)
+			.containsEntry("auto.offset.reset", "none")
+			.containsEntry("isolation.level", "read_uncommitted")
+			.containsEntry("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer")
+			// plain defaults are overridable
+			.containsEntry("max.poll.records", "100")
+			.containsEntry("fetch.max.bytes", "1048576");
+		assertThat((String) p.get("client.id")).startsWith("team-x-reader-");
+		assertThat(clients.consumerProperties(config.cluster("a"), null).get("client.id"))
+			.isNotEqualTo(p.get("client.id"));
+		Map<String, Object> overridden = clients.consumerProperties(config.cluster("a"),
+				Map.of("allow.auto.create.topics", true, "max.poll.records", 7));
+		assertThat(overridden).containsEntry("allow.auto.create.topics", false).containsEntry("max.poll.records", 7);
+		clients.destroy();
+	}
+
+	@Test
+	void consumerDefaultsWithoutClusterProperties() {
+		KafkaMcpConfig config = ConfigLoader.parse("clusters: [{name: a, bootstrapServers: 'a:9092'}]");
+		Map<String, Object> p = new KafkaClients(config).consumerProperties(config.cluster("a"), null);
+		assertThat(p).containsEntry("max.poll.records", 500)
+			.containsEntry("fetch.max.bytes", KafkaClients.CONSUMER_FETCH_MAX_BYTES)
+			.containsEntry("allow.auto.create.topics", false);
+		assertThat((String) p.get("client.id")).startsWith("kafka-mcp-a-reader-");
+	}
+
+	@Test
+	void adminDefaultsAreOverridableByClusterProperties() {
+		KafkaMcpConfig config = ConfigLoader.parse("""
+				clusters:
+				  - name: a
+				    bootstrapServers: a:9092
+				  - name: b
+				    bootstrapServers: b:9092
+				    properties:
+				      retries: "7"
+				      client.id: team-x
+				""");
+		KafkaClients clients = new KafkaClients(config);
+		assertThat(clients.adminProperties(config.cluster("a"))).containsEntry("retries", 3)
+			.containsEntry("client.id", "kafka-mcp-a-admin");
+		assertThat(clients.adminProperties(config.cluster("b"))).containsEntry("retries", "7")
+			.containsEntry("client.id", "team-x");
+		clients.destroy();
+	}
+
+	@Test
+	void clientsAreCreatedOnPlatformThreads() throws Exception {
+		KafkaMcpConfig config = ConfigLoader.parse("clusters: [{name: a, bootstrapServers: 'a:9092'}]");
+		KafkaClients clients = new KafkaClients(config);
+		try (ExecutorService virtual = Executors.newVirtualThreadPerTaskExecutor()) {
+			Boolean createdOnVirtual = virtual
+				.submit(() -> clients.create(config.cluster("a"), "test", () -> Thread.currentThread().isVirtual(),
+						x -> {
+						}))
+				.get();
+			assertThat(createdOnVirtual).isFalse();
+		}
+		clients.destroy();
+	}
+
+	@Test
+	void concurrentFirstCallsShareOneAdminClient() throws Exception {
+		KafkaMcpConfig config = ConfigLoader.parse("clusters: [{name: fine, bootstrapServers: 'localhost:1'}]");
+		KafkaClients clients = new KafkaClients(config);
+		List<Future<Admin>> calls = new ArrayList<>();
+		try (ExecutorService virtual = Executors.newVirtualThreadPerTaskExecutor()) {
+			for (int i = 0; i < 16; i++) {
+				calls.add(virtual.submit(() -> clients.admin("fine")));
+			}
+			Admin first = calls.get(0).get();
+			for (Future<Admin> f : calls) {
+				assertThat(f.get()).isSameAs(first);
+			}
+		}
+		clients.reset("fine");
+		assertThat(clients.admin("fine")).isNotNull();
+		clients.destroy();
 	}
 
 }

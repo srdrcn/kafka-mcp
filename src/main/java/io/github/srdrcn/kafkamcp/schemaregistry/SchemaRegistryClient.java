@@ -221,6 +221,12 @@ public class SchemaRegistryClient {
 	 * another subject.
 	 */
 	public static String enc(String segment) {
+		// "." and ".." stay as they are when encoded (unreserved) and the server normalizes them away, so the request
+		// would hit another resource (e.g. /config/. becomes /config, the global level)
+		if (segment == null || segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+			throw new ToolException("Invalid name: '" + segment + "' (empty, '.' and '..' are not allowed in a "
+					+ "Schema Registry path)");
+		}
 		return org.springframework.web.util.UriUtils.encode(segment, java.nio.charset.StandardCharsets.UTF_8);
 	}
 

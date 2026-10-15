@@ -69,14 +69,38 @@ public class KafkaMcpApplication {
 			props.put("server.port", config.getPort());
 		}
 		final KafkaMcpConfig loaded = config;
-		ConfigurableApplicationContext ctx = new SpringApplicationBuilder(KafkaMcpApplication.class)
-			.web(http ? WebApplicationType.SERVLET : WebApplicationType.NONE)
-			.properties(props)
-			.initializers(c -> c.getBeanFactory().registerSingleton("kafkaMcpConfig", loaded))
-			.run(cli.passthrough.toArray(String[]::new));
+		ConfigurableApplicationContext ctx;
+		try {
+			ctx = new SpringApplicationBuilder(KafkaMcpApplication.class)
+				.web(http ? WebApplicationType.SERVLET : WebApplicationType.NONE)
+				.properties(props)
+				.initializers(c -> c.getBeanFactory().registerSingleton("kafkaMcpConfig", loaded))
+				.run(cli.passthrough.toArray(String[]::new));
+		}
+		catch (RuntimeException e) {
+			// config errors found while the server starts (e.g. an unknown toolset name) exit like the others
+			ConfigException configError = configCause(e);
+			if (configError == null) {
+				throw e;
+			}
+			System.err.println("kafka-mcp: " + configError.getMessage());
+			System.exit(2);
+			return;
+		}
 		if (!http) {
 			System.exit(SpringApplication.exit(ctx));
 		}
+	}
+
+	/** The {@link ConfigException} in the cause chain, or null. */
+	static ConfigException configCause(Throwable e) {
+		Throwable t = e;
+		for (int depth = 0; t != null && depth < 32; depth++, t = t.getCause()) {
+			if (t instanceof ConfigException ce) {
+				return ce;
+			}
+		}
+		return null;
 	}
 
 	static final class Cli {
@@ -122,6 +146,9 @@ public class KafkaMcpApplication {
 								}
 								catch (NumberFormatException e) {
 									throw new IllegalArgumentException("--port must be a number: " + value);
+								}
+								if (cli.port < 1 || cli.port > 65535) {
+									throw new IllegalArgumentException("--port must be between 1 and 65535: " + value);
 								}
 							}
 							default -> {
