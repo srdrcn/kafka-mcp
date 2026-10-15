@@ -37,7 +37,7 @@ public class ReassignmentTools {
 		item.put("replicas", Params.integerArray("Target replica broker ids (first = preferred leader); empty cancels"));
 		return List.of(
 				ToolSpec.read("partition_reassignments_list",
-						"List ongoing partition reassignments: replicas, adding and removing")
+						"List ongoing partition reassignments: current, adding and removing replicas")
 					.listParams()
 					.handler(this::list),
 				ToolSpec.write("partition_reassignments_alter",
@@ -125,7 +125,8 @@ public class ReassignmentTools {
 		for (TopicPartition tp : requested.keySet()) {
 			int count = described.values().get(tp.topic()).partitions().size();
 			if (tp.partition() < 0 || tp.partition() >= count) {
-				throw new ToolException("Invalid partition: " + tp + " (the topic has " + count + " partitions)");
+				throw new ToolException("Invalid partition " + tp.partition() + " for topic " + tp.topic() + " (valid: 0.."
+						+ (count - 1) + ")");
 			}
 		}
 		List<Integer> brokers = ClusterMeta.describe(call, false).brokerIds();

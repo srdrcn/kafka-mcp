@@ -33,7 +33,7 @@
   }
 }, {
   "name" : "clusters_get",
-  "description" : "Cluster summary: id, mode (KRaft/ZooKeeper, migration), controller/quorum, min Kafka version, authorizer, counts, URP/offline partitions",
+  "description" : "Cluster summary: id, mode, controller/quorum, min Kafka version, features or ZooKeeper connection, authorizer, broker/topic/partition counts, URP/offline partitions",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -262,7 +262,7 @@
   }
 }, {
   "name" : "partition_reassignments_list",
-  "description" : "List ongoing partition reassignments: replicas, adding and removing",
+  "description" : "List ongoing partition reassignments: current, adding and removing replicas",
   "inputSchema" : {
     "type" : "object",
     "properties" : {

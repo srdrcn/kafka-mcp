@@ -60,7 +60,7 @@ public class ClusterTools {
 					.param("check", P.bool("Also test the connection (default true)"))
 					.handler(this::clustersList),
 				ToolSpec.read("clusters_get",
-						"Cluster summary: id, mode (KRaft/ZooKeeper, migration), controller/quorum, min Kafka version, authorizer, counts, URP/offline partitions")
+						"Cluster summary: id, mode, controller/quorum, min Kafka version, features or ZooKeeper connection, authorizer, broker/topic/partition counts, URP/offline partitions")
 					.handler(this::clustersGet));
 	}
 

@@ -325,7 +325,7 @@ public class TopicClientTools {
 		}
 		if (hanging > 0) {
 			out.put("hint", "hangingSuspect: the transaction on the partition has been open longer than "
-					+ "transaction.max.timeout.ms and the coordinator does not know it; it may be hanging "
+					+ "transaction.max.timeout.ms and has no matching entry on the coordinator; it may be hanging "
 					+ "(verify with kafka-transactions.sh find-hanging)");
 		}
 		if (!described.errors().isEmpty() || !producers.errors().isEmpty() || !open.errors().isEmpty()) {
