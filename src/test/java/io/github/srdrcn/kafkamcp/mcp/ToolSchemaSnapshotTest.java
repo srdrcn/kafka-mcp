@@ -131,7 +131,7 @@ class ToolSchemaSnapshotTest {
 		for (RegisteredTool t : registry.tools()) {
 			boolean byName = DESTRUCTIVE_NAME.matcher(t.spec().name()).find();
 			assertThat(t.spec().kind() == ToolKind.DESTRUCTIVE)
-				.as("%s: DESTRUCTIVE ⇔ name is *_delete/*_reset", t.spec().name())
+				.as("%s: DESTRUCTIVE iff name is *_delete/*_reset", t.spec().name())
 				.isEqualTo(byName);
 		}
 	}
