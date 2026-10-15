@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.errors.TimeoutException;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 
 import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
@@ -38,12 +39,30 @@ public record Settled<T>(T value, Throwable error) {
 		return error instanceof TimeoutException;
 	}
 
+	/** Eski broker'da olmayan API/sürüm (ör. Kafka 2.x ZooKeeper broker'ında OffsetDelete) için açıklama. */
+	public static final String UNSUPPORTED = "Broker bu işlemi desteklemiyor (sürüm)";
+
 	/** Hatanın kısa Türkçe açıklaması; başarılıysa null. */
 	public String errorMessage() {
 		if (error == null) {
 			return null;
 		}
-		return timedOut() ? NO_RESPONSE : KafkaErrors.explain(error);
+		return timedOut() ? NO_RESPONSE : explain(error);
+	}
+
+	/**
+	 * {@link KafkaErrors#explain}; ancak kafka-clients 4.x'te UnsupportedVersionException,
+	 * InvalidConfigurationException'ın alt sınıfı olduğundan ortak açıklama onu "Geçersiz istek/config" sanar.
+	 * Eski (ör. ZooKeeper 2.x) broker'ın desteklemediği istekler burada doğru Türkçe notu alır.
+	 */
+	public static String explain(Throwable error) {
+		Throwable root = KafkaErrors.unwrap(error);
+		if (root instanceof UnsupportedVersionException) {
+			String m = root.getMessage();
+			return UNSUPPORTED + " (" + root.getClass().getSimpleName() + (m == null || m.isBlank() ? "" : ": " + m)
+					+ ")";
+		}
+		return KafkaErrors.explain(error);
 	}
 
 	/** Future'ı {@link ToolCall#await} ile bekler; future'ın kendi hatası fırlatılmaz, sonuçta taşınır. */
