@@ -20,10 +20,10 @@ import com.github.dockerjava.api.model.PortBinding;
 import com.github.dockerjava.api.model.Ports;
 
 /**
- * Test JVM'i boyunca paylaşılan ZooKeeper modlu Kafka (Confluent Platform 7.9 = Kafka 3.9, ZooKeeper +
- * tek broker). Dış listener SASL_PLAINTEXT + PLAIN (admin/alice/bob, {@link KafkaTestCluster} ile aynı
- * kullanıcılar), {@code kafka.security.authorizer.AclAuthorizer} açık, admin süper kullanıcı. KRaft
- * cluster'ıyla birlikte "karışık ortam" testleri için.
+ * ZooKeeper-mode Kafka (Confluent Platform 7.9 = Kafka 3.9, ZooKeeper + a single broker) shared for the whole
+ * test JVM. External listener SASL_PLAINTEXT + PLAIN (admin/alice/bob, the same users as
+ * {@link KafkaTestCluster}), {@code kafka.security.authorizer.AclAuthorizer} enabled, admin is a super user.
+ * For "mixed environment" tests together with the KRaft cluster.
  */
 public final class ZkKafkaTestCluster {
 
@@ -102,12 +102,12 @@ public final class ZkKafkaTestCluster {
 		return p;
 	}
 
-	/** Test hazırlığı için admin kullanıcısıyla yeni AdminClient (çağıran kapatır). */
+	/** New AdminClient with the admin user, for test setup (the caller closes it). */
 	public static Admin admin() {
 		return Admin.create(clientProperties("admin"));
 	}
 
-	/** Test verisi üretmek için admin kullanıcısıyla producer (çağıran kapatır). */
+	/** Producer with the admin user, for producing test data (the caller closes it). */
 	public static KafkaProducer<byte[], byte[]> producer(Map<String, Object> overrides) {
 		Map<String, Object> p = clientProperties("admin");
 		p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());

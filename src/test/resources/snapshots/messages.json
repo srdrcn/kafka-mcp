@@ -6,7 +6,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -76,7 +76,7 @@
       },
       "maxRecords" : {
         "type" : "integer",
-        "description" : "Okunacak en fazla kayıt (varsayılan 50, en fazla 500)",
+        "description" : "Maximum number of records to read (default 50, max 500)",
         "minimum" : 1,
         "maximum" : 500,
         "default" : 50
@@ -96,7 +96,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -140,7 +140,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -159,7 +159,7 @@
       },
       "maxRecords" : {
         "type" : "integer",
-        "description" : "Okunacak en fazla kayıt (varsayılan 50, en fazla 500)",
+        "description" : "Maximum number of records to read (default 50, max 500)",
         "minimum" : 1,
         "maximum" : 500,
         "default" : 50
@@ -179,7 +179,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -210,7 +210,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -255,7 +255,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -287,7 +287,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -307,7 +307,7 @@
       },
       "maxRecords" : {
         "type" : "integer",
-        "description" : "Okunacak en fazla kayıt (varsayılan 50, en fazla 500)",
+        "description" : "Maximum number of records to read (default 50, max 500)",
         "minimum" : 1,
         "maximum" : 500,
         "default" : 50
@@ -327,7 +327,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },

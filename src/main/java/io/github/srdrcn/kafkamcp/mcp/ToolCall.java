@@ -23,11 +23,11 @@ import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 
 /**
- * Tek bir araç çağrısının bağlamı: argümanlar, seçilen cluster, Kafka client'ları ve 15 sn'lik deadline.
+ * Context of a single tool call: arguments, selected cluster, Kafka clients and the 15 s deadline.
  */
 public final class ToolCall {
 
-	/** Kafka beklemelerinde deadline'dan önce bırakılan pay; böylece hata mesajı araç zaman aşımından önce döner. */
+	/** Margin kept before the deadline in Kafka waits, so the error message is returned before the tool timeout. */
 	private static final long MARGIN_MS = 300;
 
 	private final String toolName;
@@ -69,16 +69,16 @@ public final class ToolCall {
 		return Math.max(0, Duration.between(Instant.now(), deadline).toMillis());
 	}
 
-	/** Seçilen cluster adı (zorunlu). */
+	/** Selected cluster name (required). */
 	public String cluster() {
 		String c = str("cluster", null);
 		if (c == null) {
-			throw new ToolException("cluster parametresi zorunlu");
+			throw new ToolException("Missing parameter: cluster");
 		}
 		return c;
 	}
 
-	/** Seçilen cluster adı ya da null (cluster'ı opsiyonel araçlar için). */
+	/** Selected cluster name or null (for tools with an optional cluster). */
 	public String clusterOrNull() {
 		return str("cluster", null);
 	}
@@ -87,12 +87,12 @@ public final class ToolCall {
 		return clients.cluster(cluster());
 	}
 
-	/** Seçilen cluster'ın paylaşılan AdminClient'ı (kapatmayın). */
+	/** Shared AdminClient of the selected cluster (do not close it). */
 	public Admin admin() {
 		return clients.admin(cluster());
 	}
 
-	/** Seçilen cluster için yeni assign-only consumer (try-with-resources ile kapatın). */
+	/** New assign-only consumer for the selected cluster (close it with try-with-resources). */
 	public KafkaConsumer<byte[], byte[]> newConsumer() {
 		return clients.newConsumer(cluster(), null);
 	}
@@ -102,11 +102,11 @@ public final class ToolCall {
 		return v != null && !(v instanceof String s && s.isBlank());
 	}
 
-	/** Zorunlu string parametre. */
+	/** Required string parameter. */
 	public String str(String name) {
 		String v = str(name, null);
 		if (v == null) {
-			throw new ToolException("Parametre eksik: " + name);
+			throw new ToolException("Missing parameter: " + name);
 		}
 		return v;
 	}
@@ -125,16 +125,16 @@ public final class ToolCall {
 		return v == null ? defaultValue : Math.toIntExact(Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, v)));
 	}
 
-	/** Değer [min, max] aralığına sıkıştırılır. */
+	/** The value is clamped to [min, max]. */
 	public int integer(String name, int defaultValue, int min, int max) {
 		return Math.max(min, Math.min(max, integer(name, defaultValue)));
 	}
 
-	/** Zorunlu tamsayı parametre. */
+	/** Required integer parameter. */
 	public long requiredLong(String name) {
 		Long v = optLong(name);
 		if (v == null) {
-			throw new ToolException("Parametre eksik: " + name);
+			throw new ToolException("Missing parameter: " + name);
 		}
 		return v;
 	}
@@ -161,7 +161,7 @@ public final class ToolCall {
 			return Long.parseLong(String.valueOf(v).trim());
 		}
 		catch (NumberFormatException e) {
-			throw new ToolException("Parametre tamsayı olmalı: " + name + "=" + v);
+			throw new ToolException("Parameter must be an integer: " + name + "=" + v);
 		}
 	}
 
@@ -177,7 +177,7 @@ public final class ToolCall {
 			return Double.parseDouble(String.valueOf(v).trim());
 		}
 		catch (NumberFormatException e) {
-			throw new ToolException("Parametre sayı olmalı: " + name + "=" + v);
+			throw new ToolException("Parameter must be a number: " + name + "=" + v);
 		}
 	}
 
@@ -197,7 +197,7 @@ public final class ToolCall {
 		};
 	}
 
-	/** String listesi; dizi ya da virgülle ayrılmış string kabul eder. Yoksa boş liste. */
+	/** List of strings; accepts an array or a comma-separated string. Empty list if absent. */
 	public List<String> strings(String name) {
 		Object v = args.get(name);
 		List<String> out = new ArrayList<>();
@@ -218,7 +218,7 @@ public final class ToolCall {
 		return out;
 	}
 
-	/** JSON nesnesi parametresi; yoksa boş map. */
+	/** JSON object parameter; empty map if absent. */
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> map(String name) {
 		Object v = args.get(name);
@@ -228,17 +228,17 @@ public final class ToolCall {
 		if (v instanceof Map<?, ?> m) {
 			return new LinkedHashMap<>((Map<String, Object>) m);
 		}
-		throw new ToolException("Parametre nesne (JSON object) olmalı: " + name);
+		throw new ToolException("Parameter must be an object (JSON object): " + name);
 	}
 
-	/** Değerleri string'e çevrilmiş map parametresi (config'ler için). */
+	/** Map parameter with the values converted to strings (for configs). */
 	public Map<String, String> stringMap(String name) {
 		Map<String, String> out = new LinkedHashMap<>();
 		map(name).forEach((k, v) -> out.put(k, v == null ? null : String.valueOf(v)));
 		return out;
 	}
 
-	/** filter parametresinden derlenmiş regex ya da null. */
+	/** Regex compiled from the filter parameter, or null. */
 	public Pattern filter() {
 		if (!filterParsed) {
 			filter = regex("filter");
@@ -247,7 +247,7 @@ public final class ToolCall {
 		return filter;
 	}
 
-	/** Verilen regex parametresini derler; yoksa null. */
+	/** Compiles the given regex parameter; null if absent. */
 	public Pattern regex(String name) {
 		String f = str(name, null);
 		if (f == null) {
@@ -257,11 +257,11 @@ public final class ToolCall {
 			return Pattern.compile(f);
 		}
 		catch (PatternSyntaxException e) {
-			throw new ToolException("Geçersiz regex (" + name + "): " + e.getDescription());
+			throw new ToolException("Invalid regex (" + name + "): " + e.getDescription());
 		}
 	}
 
-	/** filter yoksa true; varsa kısmi eşleşme (find). */
+	/** True if there is no filter; otherwise a partial match (find). */
 	public boolean matches(String value) {
 		Pattern p = filter();
 		return p == null || (value != null && p.matcher(value).find());
@@ -275,25 +275,25 @@ public final class ToolCall {
 		return integer("limit", defaultLimit, 1, ToolSpec.MAX_LIST_LIMIT);
 	}
 
-	/** maxRecords: varsayılan 50, en fazla 500. */
+	/** maxRecords: default 50, max 500. */
 	public int maxRecords() {
 		return integer("maxRecords", ToolSpec.DEFAULT_MAX_RECORDS, 1, ToolSpec.MAX_RECORDS_LIMIT);
 	}
 
-	/** Kafka future'ını kalan süre kadar bekler; hatayı Türkçe {@link ToolException}'a çevirir. */
+	/** Waits on a Kafka future for the remaining time; turns a failure into a readable {@link ToolException}. */
 	public <T> T await(KafkaFuture<T> future) {
 		try {
 			return future.get(waitMillis(), TimeUnit.MILLISECONDS);
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		catch (ExecutionException e) {
 			throw new ToolException(KafkaErrors.explain(e.getCause()), e.getCause());
 		}
 		catch (TimeoutException e) {
-			throw new ToolException("Kafka yanıtı " + KafkaClients.TIMEOUT_MS / 1000 + " sn içinde gelmedi (zaman aşımı)");
+			throw new ToolException("No response from Kafka within " + KafkaClients.TIMEOUT_MS / 1000 + " s (timeout)");
 		}
 	}
 
@@ -303,38 +303,38 @@ public final class ToolCall {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		catch (ExecutionException e) {
 			throw new ToolException(KafkaErrors.explain(e.getCause()), e.getCause());
 		}
 		catch (TimeoutException e) {
 			future.cancel(true);
-			throw new ToolException("Yanıt " + KafkaClients.TIMEOUT_MS / 1000 + " sn içinde gelmedi (zaman aşımı)");
+			throw new ToolException("No response within " + KafkaClients.TIMEOUT_MS / 1000 + " s (timeout)");
 		}
 	}
 
-	/** Kafka beklemeleri için kalan süre (pay düşülmüş), en az 1 ms. */
+	/** Remaining time for Kafka waits (minus the margin), at least 1 ms. */
 	public long waitMillis() {
 		return Math.max(1, remainingMillis() - MARGIN_MS);
 	}
 
-	/** Kalan süre bitti mi (pay dahil)? Döngülerde erken çıkmak için. */
+	/** Is the remaining time used up (margin included)? For leaving loops early. */
 	public boolean nearDeadline(long reserveMillis) {
 		return remainingMillis() <= MARGIN_MS + reserveMillis;
 	}
 
-	/** Belirtilen süre bekler (iki örnek arası). Deadline'ı aşacaksa ToolException. */
+	/** Sleeps for the given time (between two samples). Throws ToolException if that would pass the deadline. */
 	public void sleep(long millis) {
 		if (remainingMillis() - millis < MARGIN_MS + 1_000) {
-			throw new ToolException("Bekleme süresi araç zaman sınırını (15 sn) aşıyor; daha kısa aralık verin");
+			throw new ToolException("Wait time exceeds the tool time limit (15 s); use a shorter interval");
 		}
 		try {
 			Thread.sleep(millis);
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 

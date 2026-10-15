@@ -23,24 +23,24 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Producer ve transaction durumu: tek describeProducers, listTransactions + tek describeTransactions. */
+/** Producer and transaction state: a single describeProducers, listTransactions + a single describeTransactions. */
 public final class Producers {
 
-	/** Coordinator'da hâlâ açık sayılan transaction durumları. */
+	/** Transaction states that the coordinator still counts as open. */
 	public static final Set<TransactionState> OPEN_STATES = Set.of(TransactionState.ONGOING,
 			TransactionState.PREPARE_COMMIT, TransactionState.PREPARE_ABORT, TransactionState.PREPARE_EPOCH_FENCE);
 
-	/** transaction.max.timeout.ms'in Kafka varsayılanı (15 dk); broker config'i okunamazsa kullanılır. */
+	/** Kafka default of transaction.max.timeout.ms (15 min); used if the broker config cannot be read. */
 	public static final long DEFAULT_MAX_TRANSACTION_TIMEOUT_MS = 900_000;
 
-	/** Açık transaction listesi ve yanıt vermeyen coordinator broker'larının hataları. */
+	/** List of open transactions and the errors of coordinator brokers that did not respond. */
 	public record OpenTransactions(List<TransactionListing> listings, Map<Integer, String> errors) {
 	}
 
 	private Producers() {
 	}
 
-	/** Partition başına aktif producer'lar (tek describeProducers); partition bazında hatalar ayrı. */
+	/** Active producers per partition (a single describeProducers); per-partition errors separately. */
 	public static Futures.Each<TopicPartition, List<ProducerState>> describe(ToolCall call,
 			Collection<TopicPartition> tps) {
 		if (tps.isEmpty()) {
@@ -54,7 +54,7 @@ public final class Producers {
 		return Futures.awaitEach(call, futures);
 	}
 
-	/** Producer durumunun kompakt gösterimi (zaman ISO-8601). */
+	/** Compact representation of a producer state (time as ISO-8601). */
 	public static Map<String, Object> row(TopicPartition tp, ProducerState s) {
 		return Results.map("partition", tp.partition(), "producerId", s.producerId(), "producerEpoch",
 				s.producerEpoch(), "lastSequence", s.lastSequence(), "lastTimestamp", Format.iso(s.lastTimestamp()),
@@ -64,8 +64,8 @@ public final class Producers {
 	}
 
 	/**
-	 * Açık transaction listesi (tüm coordinator'lardan, sadece açık durumlar). Broker bazında beklenir; bir
-	 * coordinator yanıt vermezse diğerlerininki döner, hata ayrıca raporlanır.
+	 * List of open transactions (from all coordinators, open states only). Awaited per broker; if a coordinator
+	 * does not respond, the others' results are returned and the error is reported separately.
 	 */
 	public static OpenTransactions listOpen(ToolCall call) {
 		Map<Integer, KafkaFuture<Collection<TransactionListing>>> byBroker = call
@@ -77,16 +77,17 @@ public final class Producers {
 	}
 
 	/**
-	 * Askıda (hanging) transaction şüphesi, kafka-transactions.sh find-hanging mantığıyla: partition'da açık
-	 * transaction var, producer'ın son yazması {@code maxTimeoutMs}'den (transaction.max.timeout.ms) eski ve
-	 * coordinator'da producer'ın açık transaction'ı yok. Yeni başlamış transaction'lar yaşları nedeniyle elenir.
+	 * Suspected hanging transaction, following the kafka-transactions.sh find-hanging logic: the partition has an
+	 * open transaction, the producer's last write is older than {@code maxTimeoutMs} (transaction.max.timeout.ms)
+	 * and the coordinator has no open transaction for the producer. Recently started transactions are ruled out by
+	 * their age.
 	 */
 	public static boolean hangingSuspect(ProducerState s, Set<Long> openProducerIds, long maxTimeoutMs, long nowMs) {
 		return s.currentTransactionStartOffset().isPresent() && s.lastTimestamp() < nowMs - maxTimeoutMs
 				&& !openProducerIds.contains(s.producerId());
 	}
 
-	/** Broker'ın transaction.max.timeout.ms değeri; okunamazsa {@link #DEFAULT_MAX_TRANSACTION_TIMEOUT_MS}. */
+	/** transaction.max.timeout.ms of the broker; {@link #DEFAULT_MAX_TRANSACTION_TIMEOUT_MS} if unreadable. */
 	public static long maxTransactionTimeoutMs(ToolCall call) {
 		try {
 			ClusterMeta.Info info = ClusterMeta.describe(call, false);
@@ -97,12 +98,12 @@ public final class Producers {
 			}
 		}
 		catch (ToolException | NumberFormatException e) {
-			// varsayılana düş
+			// fall back to the default
 		}
 		return DEFAULT_MAX_TRANSACTION_TIMEOUT_MS;
 	}
 
-	/** Verilen transactional id'ler için tek describeTransactions; id bazında hatalar ayrı. */
+	/** A single describeTransactions for the given transactional ids; per-id errors separately. */
 	public static Futures.Each<String, TransactionDescription> describeTransactions(ToolCall call,
 			Collection<String> transactionalIds) {
 		if (transactionalIds.isEmpty()) {

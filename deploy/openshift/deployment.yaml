@@ -37,7 +37,7 @@ spec:
             periodSeconds: 5
             failureThreshold: 30
           livenessProbe:
-            # Kafka'ya bağlı değil: sadece JVM/uygulama ayakta mı.
+            # Does not depend on Kafka: only checks that the JVM/application is up.
             httpGet:
               path: /actuator/health/liveness
               port: http

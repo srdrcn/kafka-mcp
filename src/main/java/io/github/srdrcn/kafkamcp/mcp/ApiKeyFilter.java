@@ -14,8 +14,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
- * Tek statik API key: config'teki {@code apiKey} boş değilse istekteki {@code X-Authorization}
- * header'ı birebir eşleşmeli, yoksa 401. {@code apiKey} boşsa filtre hiçbir şey yapmaz.
+ * Single static API key: if {@code apiKey} in the config is not empty, the request's
+ * {@code X-Authorization} header must match it exactly, otherwise 401. If {@code apiKey} is empty, the
+ * filter does nothing.
  */
 public class ApiKeyFilter extends OncePerRequestFilter {
 
@@ -53,7 +54,7 @@ public class ApiKeyFilter extends OncePerRequestFilter {
 		response.setContentType("application/json");
 		response.setCharacterEncoding("UTF-8");
 		response.getWriter()
-			.write("{\"error\":\"unauthorized\",\"message\":\"X-Authorization header'ı eksik ya da API key uyuşmuyor\"}");
+			.write("{\"error\":\"unauthorized\",\"message\":\"X-Authorization header is missing or the API key does not match\"}");
 	}
 
 }

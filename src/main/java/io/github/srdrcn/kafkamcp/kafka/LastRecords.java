@@ -15,22 +15,22 @@ import org.apache.kafka.common.TopicPartition;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
-/** Partition'ların son kayıtlarını assign-only consumer ile okur (group.id yok, commit yok). */
+/** Reads the last records of partitions with an assign-only consumer (no group.id, no commit). */
 public final class LastRecords {
 
-	/** latest'tan kaç kayıt geri gidilir (son offset'ler transaction marker olabilir). */
+	/** How many records to step back from latest (the last offsets may be transaction markers). */
 	private static final int BACKTRACK = 10;
 
 	private LastRecords() {
 	}
 
-	/** Son okunan kaydın offset'i ve zaman damgası. */
+	/** Offset and timestamp of the last record read. */
 	public record Last(long offset, long timestamp) {
 	}
 
 	/**
-	 * Boş olmayan her partition'ın son kaydını okur; en fazla {@code budgetMs} (ve araç deadline'ı) kadar sürer.
-	 * Okunamayan partition'lar (boş, sadece kontrol kaydı, süre yetmedi) sonuçta yoktur.
+	 * Reads the last record of every non-empty partition; takes at most {@code budgetMs} (and the tool deadline).
+	 * Partitions that could not be read (empty, only control records, out of time) are absent from the result.
 	 */
 	public static Map<TopicPartition, Last> read(ToolCall call, Map<TopicPartition, Offsets.Range> ranges,
 			long budgetMs) {
@@ -72,7 +72,7 @@ public final class LastRecords {
 			}
 		}
 		catch (KafkaException e) {
-			// kısmi sonuç: okunabilenler döner (ör. retention offset'i geçti, zaman aşımı)
+			// partial result: whatever could be read is returned (e.g. retention passed the offset, timeout)
 		}
 		return out;
 	}

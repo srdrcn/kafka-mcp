@@ -3,7 +3,7 @@ package io.github.srdrcn.kafkamcp.kafka;
 import java.time.Instant;
 import java.util.Locale;
 
-/** Çıktı biçimlendirme yardımcıları (boyut, zaman, yuvarlama). */
+/** Output formatting helpers (size, time, rounding). */
 public final class Format {
 
 	private static final String[] UNITS = { "B", "KiB", "MiB", "GiB", "TiB", "PiB" };
@@ -11,7 +11,7 @@ public final class Format {
 	private Format() {
 	}
 
-	/** Okunabilir boyut: 512 B, 1.2 GiB. */
+	/** Human-readable size: 512 B, 1.2 GiB. */
 	public static String bytes(long bytes) {
 		if (bytes < 1024) {
 			return bytes + " B";
@@ -25,17 +25,17 @@ public final class Format {
 		return String.format(Locale.ROOT, "%.1f %s", v, UNITS[u]);
 	}
 
-	/** Epoch ms → ISO-8601 (UTC); negatifse null. */
+	/** Epoch ms → ISO-8601 (UTC); null if negative. */
 	public static String iso(long epochMs) {
 		return epochMs < 0 ? null : Instant.ofEpochMilli(epochMs).toString();
 	}
 
-	/** Epoch ms'den bu yana geçen saniye (en az 0); negatifse null. */
+	/** Seconds elapsed since the epoch ms (at least 0); null if negative. */
 	public static Long ageSeconds(long epochMs) {
 		return epochMs < 0 ? null : Math.max(0, (System.currentTimeMillis() - epochMs) / 1000);
 	}
 
-	/** Ondalık yuvarlama. */
+	/** Decimal rounding. */
 	public static double round(double value, int decimals) {
 		double f = Math.pow(10, decimals);
 		return Math.round(value * f) / f;

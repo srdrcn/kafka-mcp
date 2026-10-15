@@ -6,16 +6,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -40,7 +40,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "group" : {
@@ -62,7 +62,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "host" : {
@@ -88,16 +88,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -117,7 +117,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "group" : {
@@ -139,7 +139,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "group" : {
@@ -165,7 +165,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "threshold" : {
@@ -176,11 +176,11 @@
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -204,7 +204,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "group" : {
@@ -233,16 +233,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -263,13 +263,13 @@
   }
 }, {
   "name" : "consumer_groups_offsets_reset",
-  "description" : "YAZMA: Grubun bir topic'teki offset'lerini earliest/latest/offset/timestamp/shift'e taşır; grup Empty olmalı (aktif üye yok)",
+  "description" : "WRITE: Grubun bir topic'teki offset'lerini earliest/latest/offset/timestamp/shift'e taşır; grup Empty olmalı (aktif üye yok)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "group" : {
@@ -314,13 +314,13 @@
   }
 }, {
   "name" : "consumer_groups_offsets_delete",
-  "description" : "YAZMA: Grubun bir topic'teki commit edilmiş offset'lerini siler (tüm ya da seçili partition'lar)",
+  "description" : "WRITE: Grubun bir topic'teki commit edilmiş offset'lerini siler (tüm ya da seçili partition'lar)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "group" : {
@@ -347,13 +347,13 @@
   }
 }, {
   "name" : "consumer_groups_delete",
-  "description" : "YAZMA: Consumer group'u siler; grup boş olmalı (aktif üye yok)",
+  "description" : "WRITE: Consumer group'u siler; grup boş olmalı (aktif üye yok)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "group" : {

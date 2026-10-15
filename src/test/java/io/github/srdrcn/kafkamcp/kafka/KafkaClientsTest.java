@@ -54,7 +54,7 @@ class KafkaClientsTest {
 	void unknownClusterIsToolError() {
 		KafkaMcpConfig config = ConfigLoader.parse("clusters: [{name: a, bootstrapServers: 'a:9092'}]");
 		assertThatThrownBy(() -> new KafkaClients(config).admin("nope")).isInstanceOf(ToolException.class)
-			.hasMessageContaining("Bilinmeyen cluster: nope");
+			.hasMessageContaining("Unknown cluster: nope");
 	}
 
 	@Test
@@ -80,9 +80,9 @@ class KafkaClientsTest {
 
 	@Test
 	void kerberosMessagesAreTranslated() {
-		assertThat(KafkaErrors.kerberos("Receive timed out")).contains("KDC'ye ulaşılamadı");
+		assertThat(KafkaErrors.kerberos("Receive timed out")).contains("Cannot reach the KDC");
 		assertThat(KafkaErrors.kerberos("Clock skew too great (37)")).contains("clock skew");
-		assertThat(KafkaErrors.kerberos("Unable to obtain password from user")).contains("keytab bulunamadı");
+		assertThat(KafkaErrors.kerberos("Unable to obtain password from user")).contains("Keytab not found");
 		assertThat(KafkaErrors.kerberos("Server not found in Kerberos database (7)")).contains("rdns = false");
 		assertThat(KafkaErrors.kerberos("something else")).isNull();
 	}

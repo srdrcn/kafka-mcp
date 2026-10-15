@@ -23,15 +23,15 @@ import io.github.srdrcn.kafkamcp.config.KerberosConfig;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Cluster başına tek bir {@link Admin} tutar (ilk kullanımda oluşturulur, sonra tekrar kullanılır).
- * Her cluster'ın client'ı ayrı oluşturulduğu için bir cluster'ın Kerberos login'i ya da bağlantısı
- * patlarsa diğer cluster'lar etkilenmez. {@link KafkaConsumer}'lar her çağrıda yeniden oluşturulur
- * (group.id yok, commit yok; çağıran {@code assign()} ile okur ve kapatır).
+ * Keeps a single {@link Admin} per cluster (created on first use, then reused). Each cluster's client is
+ * created separately, so if one cluster's Kerberos login or connection breaks, the other clusters are not
+ * affected. {@link KafkaConsumer}s are created anew for every call (no group.id, no commit; the caller reads
+ * with {@code assign()} and closes it).
  */
 @Component
 public class KafkaClients implements DisposableBean {
 
-	/** Araç başına zaman sınırı; Kafka client timeout'ları da buna göre ayarlanır. */
+	/** Time limit per tool; the Kafka client timeouts are set accordingly. */
 	public static final int TIMEOUT_MS = 15_000;
 
 	private static final Logger log = LoggerFactory.getLogger(KafkaClients.class);
@@ -40,7 +40,7 @@ public class KafkaClients implements DisposableBean {
 
 	private final Map<String, AdminHolder> admins = new ConcurrentHashMap<>();
 
-	/** Eşzamanlı consumer'lar aynı client.id'yi paylaşmasın (JMX AppInfo çakışması). */
+	/** Concurrent consumers must not share the same client.id (JMX AppInfo conflict). */
 	private static final java.util.concurrent.atomic.AtomicLong READERS = new java.util.concurrent.atomic.AtomicLong();
 
 	public KafkaClients(KafkaMcpConfig config) {
@@ -59,18 +59,18 @@ public class KafkaClients implements DisposableBean {
 	public ClusterConfig cluster(String name) {
 		ClusterConfig c = config.cluster(name);
 		if (c == null) {
-			throw new ToolException("Bilinmeyen cluster: " + name + " (clusters_list ile bakın)");
+			throw new ToolException("Unknown cluster: " + name + " (see clusters_list)");
 		}
 		return c;
 	}
 
-	/** Cluster'ın paylaşılan AdminClient'ı. Kapatmayın. */
+	/** Shared AdminClient of the cluster. Do not close it. */
 	public Admin admin(String cluster) {
 		ClusterConfig c = cluster(cluster);
 		return admins.computeIfAbsent(c.getName(), n -> new AdminHolder()).get(c);
 	}
 
-	/** Önbellekteki AdminClient'ı kapatıp atar; sonraki çağrı yeniden oluşturur. */
+	/** Closes and drops the cached AdminClient; the next call creates a new one. */
 	public void reset(String cluster) {
 		AdminHolder holder = admins.remove(cluster);
 		if (holder != null) {
@@ -79,8 +79,8 @@ public class KafkaClients implements DisposableBean {
 	}
 
 	/**
-	 * Mesaj okumak için yeni bir consumer: group.id yok, auto commit kapalı, key/value byte[]. Çağıran
-	 * {@code assign()} ile kullanır ve kapatır (try-with-resources).
+	 * A new consumer for reading messages: no group.id, auto commit off, byte[] key/value. The caller uses it
+	 * with {@code assign()} and closes it (try-with-resources).
 	 */
 	public KafkaConsumer<byte[], byte[]> newConsumer(String cluster, Map<String, Object> overrides) {
 		ClusterConfig c = cluster(cluster);
@@ -101,13 +101,13 @@ public class KafkaClients implements DisposableBean {
 			return new KafkaConsumer<>(props);
 		}
 		catch (RuntimeException e) {
-			throw new ToolException("Consumer oluşturulamadı (" + c.getName() + "): " + KafkaErrors.explain(e), e);
+			throw new ToolException("Could not create consumer (" + c.getName() + "): " + KafkaErrors.explain(e), e);
 		}
 	}
 
 	/**
-	 * Cluster için Kafka client property'leri: bootstrap, kerberos bloğundan üretilen SASL/GSSAPI
-	 * ayarları, timeout'lar ve en son cluster altındaki {@code properties:} override'ları.
+	 * Kafka client properties for a cluster: bootstrap, the SASL/GSSAPI settings derived from the kerberos
+	 * block, timeouts and, last, the {@code properties:} overrides under the cluster.
 	 */
 	public Map<String, Object> clientProperties(ClusterConfig c) {
 		Map<String, Object> props = new LinkedHashMap<>();
@@ -162,12 +162,12 @@ public class KafkaClients implements DisposableBean {
 					props.put(AdminClientConfig.RETRIES_CONFIG, 3);
 					try {
 						admin = Admin.create(props);
-						log.info("AdminClient oluşturuldu: cluster={}", c.getName());
+						log.info("AdminClient created: cluster={}", c.getName());
 					}
 					catch (RuntimeException e) {
-						log.warn("AdminClient oluşturulamadı: cluster={} hata={}", c.getName(), KafkaErrors.explain(e));
+						log.warn("Could not create AdminClient: cluster={} error={}", c.getName(), KafkaErrors.explain(e));
 						throw new ToolException(
-								"Kafka client oluşturulamadı (" + c.getName() + "): " + KafkaErrors.explain(e), e);
+								"Could not create Kafka client (" + c.getName() + "): " + KafkaErrors.explain(e), e);
 					}
 				}
 				return admin;
@@ -180,7 +180,7 @@ public class KafkaClients implements DisposableBean {
 					admin.close(java.time.Duration.ofSeconds(2));
 				}
 				catch (RuntimeException e) {
-					log.debug("AdminClient kapatılırken hata", e);
+					log.debug("Error while closing AdminClient", e);
 				}
 				admin = null;
 			}

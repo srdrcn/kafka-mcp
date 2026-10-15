@@ -8,13 +8,13 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Bir aracın tanımı. {@code cluster} parametresi burada tanımlanmaz; {@link ToolRegistry} onu config'teki
- * uygun cluster adlarından enum olarak ekler.
+ * A tool definition. The {@code cluster} parameter is not declared here; {@link ToolRegistry} adds it as an
+ * enum of the eligible cluster names from the config.
  *
  * <pre>
- * ToolSpec.read("topics_get", "Topic detayı ...")
- *     .required("topic", P.string("Topic adı"))
- *     .param("includeConfigs", P.bool("Config'leri de getir"))
+ * ToolSpec.read("topics_get", "Topic details ...")
+ *     .required("topic", P.string("Topic name"))
+ *     .param("includeConfigs", P.bool("Also return configs"))
  *     .handler(call -&gt; ...);
  * </pre>
  */
@@ -59,12 +59,12 @@ public final class ToolSpec {
 		return new Builder(name, description, ToolKind.READ);
 	}
 
-	/** Yazma aracı; açıklama "YAZMA:" ile başlamıyorsa otomatik eklenir. */
+	/** Write tool; the description gets a "WRITE:" prefix unless it already starts with one. */
 	public static Builder write(String name, String description) {
 		return new Builder(name, description, ToolKind.WRITE);
 	}
 
-	/** Geri alınamaz yazma aracı (*_delete, *_reset); açıklama "YAZMA:" ile başlar. */
+	/** Irreversible write tool (*_delete, *_reset); the description starts with "WRITE:". */
 	public static Builder destructive(String name, String description) {
 		return new Builder(name, description, ToolKind.DESTRUCTIVE);
 	}
@@ -120,65 +120,65 @@ public final class ToolSpec {
 		private Builder(String name, String description, ToolKind kind) {
 			this.name = Objects.requireNonNull(name);
 			String d = Objects.requireNonNull(description).trim();
-			if (kind.writes() && !d.startsWith("YAZMA:")) {
-				d = "YAZMA: " + d;
+			if (kind.writes() && !d.startsWith("WRITE:")) {
+				d = "WRITE: " + d;
 			}
 			this.description = d;
 			this.kind = kind;
 		}
 
-		/** Sadece connectUrl tanımlı cluster'larda listelenir. */
+		/** Listed only on clusters that have a connectUrl. */
 		public Builder connect() {
 			this.requirement = ClusterRequirement.CONNECT;
 			return this;
 		}
 
-		/** Sadece schemaRegistryUrl tanımlı cluster'larda listelenir. */
+		/** Listed only on clusters that have a schemaRegistryUrl. */
 		public Builder schemaRegistry() {
 			this.requirement = ClusterRequirement.SCHEMA_REGISTRY;
 			return this;
 		}
 
-		/** cluster parametresi zorunlu olmasın (ör. clusters_list). */
+		/** Makes the cluster parameter optional (e.g. clusters_list). */
 		public Builder clusterOptional() {
 			this.clusterOptional = true;
 			return this;
 		}
 
-		/** Opsiyonel parametre. */
+		/** Optional parameter. */
 		public Builder param(String name, Map<String, Object> schema) {
 			if ("cluster".equals(name)) {
-				throw new IllegalArgumentException("cluster parametresi otomatik eklenir");
+				throw new IllegalArgumentException("The cluster parameter is added automatically");
 			}
 			properties.put(name, schema);
 			return this;
 		}
 
-		/** Zorunlu parametre. */
+		/** Required parameter. */
 		public Builder required(String name, Map<String, Object> schema) {
 			param(name, schema);
 			required.add(name);
 			return this;
 		}
 
-		/** Standart liste parametreleri: filter (regex) ve limit. */
+		/** Standard list parameters: filter (regex) and limit. */
 		public Builder listParams() {
 			return listParams(DEFAULT_LIST_LIMIT);
 		}
 
 		public Builder listParams(int defaultLimit) {
-			param("filter", P.string("Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"));
-			Map<String, Object> limit = P.integer("En fazla kaç kayıt dönsün (varsayılan " + defaultLimit + ")", 1,
+			param("filter", P.string("Name filter (regex, partial match; use (?i) for case-insensitive)"));
+			Map<String, Object> limit = P.integer("Maximum number of items to return (default " + defaultLimit + ")", 1,
 					MAX_LIST_LIMIT);
 			limit.put("default", defaultLimit);
 			param("limit", limit);
 			return this;
 		}
 
-		/** Mesaj okuyan araçlar için maxRecords (varsayılan 50, üst sınır 500). */
+		/** maxRecords for tools that read messages (default 50, max 500). */
 		public Builder maxRecordsParam() {
-			Map<String, Object> m = P.integer("Okunacak en fazla kayıt (varsayılan " + DEFAULT_MAX_RECORDS
-					+ ", en fazla " + MAX_RECORDS_LIMIT + ")", 1, MAX_RECORDS_LIMIT);
+			Map<String, Object> m = P.integer("Maximum number of records to read (default " + DEFAULT_MAX_RECORDS
+					+ ", max " + MAX_RECORDS_LIMIT + ")", 1, MAX_RECORDS_LIMIT);
 			m.put("default", DEFAULT_MAX_RECORDS);
 			param("maxRecords", m);
 			return this;

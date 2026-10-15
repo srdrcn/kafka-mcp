@@ -6,16 +6,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -39,7 +39,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "topic" : {
@@ -61,7 +61,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -87,7 +87,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -120,7 +120,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -144,13 +144,13 @@
   }
 }, {
   "name" : "schemas_register",
-  "description" : "YAZMA: Subject'e şema kaydeder, id ve versiyonu döner; uyumsuz (409) ya da geçersiz (422) şemada SR mesajını verir",
+  "description" : "WRITE: Subject'e şema kaydeder, id ve versiyonu döner; uyumsuz (409) ya da geçersiz (422) şemada SR mesajını verir",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -197,13 +197,13 @@
   }
 }, {
   "name" : "schemas_delete_version",
-  "description" : "YAZMA: Şema versiyonunu siler (soft); permanent=true kalıcı siler (gerekirse önce soft delete yapar)",
+  "description" : "WRITE: Şema versiyonunu siler (soft); permanent=true kalıcı siler (gerekirse önce soft delete yapar)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -233,7 +233,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -255,7 +255,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
@@ -306,13 +306,13 @@
   }
 }, {
   "name" : "schemas_compatibility_set",
-  "description" : "YAZMA: Subject'in (verilmezse global) compatibility seviyesini değiştirir; önceki ve yeni değeri döner",
+  "description" : "WRITE: Subject'in (verilmezse global) compatibility seviyesini değiştirir; önceki ve yeni değeri döner",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {

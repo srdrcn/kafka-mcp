@@ -10,7 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 
-/** KRaft ve ZooKeeper cluster'ları aynı sunucuda: ikisi de erişilebilir ve aynı araçla sorgulanır. */
+/** KRaft and ZooKeeper clusters on the same server: both are reachable and queried with the same tool. */
 class MixedClustersTest extends MixedClusterIntegrationTest {
 
 	@Test

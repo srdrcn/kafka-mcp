@@ -1,8 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# ConfigMap "kafka-mcp-config" (kafka-mcp.yaml + krb5.conf) ve Secret "kafka-mcp-keytab" bu dizinden
-# üretilmez; ortama özgü olduklarından `oc create configmap/secret` ile oluşturulur (README).
-# Şablonlar: kafka-mcp.yaml.example, krb5.conf.example
+# The ConfigMap "kafka-mcp-config" (kafka-mcp.yaml + krb5.conf) and the Secret "kafka-mcp-keytab" are not
+# generated from this directory; they are environment-specific and created with `oc create configmap/secret` (README).
+# Templates: kafka-mcp.yaml.example, krb5.conf.example
 resources:
   - deployment.yaml
   - service.yaml

@@ -24,24 +24,24 @@ import org.junit.jupiter.api.Test;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** kafka paketindeki saf yardımcıların birim testleri. */
+/** Unit tests of the pure helpers in the kafka package. */
 class KafkaHelpersTest {
 
 	@Test
 	void protectedTopics() {
-		assertThat(Topics.protectedReason("__consumer_offsets", true)).contains("iç topic");
-		assertThat(Topics.protectedReason("__custom", false)).contains("iç topic");
-		assertThat(Topics.protectedReason("_schemas", false)).contains("sistem");
-		assertThat(Topics.protectedReason("_confluent-command", false)).contains("sistem");
-		assertThat(Topics.protectedReason("connect-configs", false)).contains("sistem");
-		assertThat(Topics.protectedReason("_connect-offsets", false)).contains("sistem");
-		assertThat(Topics.protectedReason("connect-cluster-status", false)).contains("sistem");
-		assertThat(Topics.protectedReason("mm2-offset-syncs.b.internal", false)).contains("sistem");
-		assertThat(Topics.protectedReason("my_connect_statuses", false)).contains("sistem");
+		assertThat(Topics.protectedReason("__consumer_offsets", true)).contains("internal topic");
+		assertThat(Topics.protectedReason("__custom", false)).contains("internal topic");
+		assertThat(Topics.protectedReason("_schemas", false)).contains("system");
+		assertThat(Topics.protectedReason("_confluent-command", false)).contains("system");
+		assertThat(Topics.protectedReason("connect-configs", false)).contains("system");
+		assertThat(Topics.protectedReason("_connect-offsets", false)).contains("system");
+		assertThat(Topics.protectedReason("connect-cluster-status", false)).contains("system");
+		assertThat(Topics.protectedReason("mm2-offset-syncs.b.internal", false)).contains("system");
+		assertThat(Topics.protectedReason("my_connect_statuses", false)).contains("system");
 		assertThat(Topics.protectedReason("orders", false)).isNull();
 		assertThat(Topics.protectedReason("orders-status", false)).isNull();
 		assertThat(Topics.protectedReason("app-changelog", false)).isNull();
-		// "connect" geçen sıradan kullanıcı topic'leri korunmaz
+		// ordinary user topics that merely contain "connect" are not protected
 		assertThat(Topics.protectedReason("iot-connected-devices-status", false)).isNull();
 		assertThat(Topics.protectedReason("salesforce-connector-offsets", false)).isNull();
 		assertThat(Topics.protectedReason("connections-configs", false)).isNull();
@@ -53,7 +53,7 @@ class KafkaHelpersTest {
 		Node b2 = new Node(2, "h2", 9092);
 		Node b3 = new Node(3, "h3", 9092);
 		Node b4 = new Node(4, "h4", 9092);
-		// reassignment: 4 ekleniyor, henüz ISR'da değil
+		// reassignment: 4 is being added, not in the ISR yet
 		TopicPartitionInfo moving = new TopicPartitionInfo(0, b1, List.of(b1, b2, b3, b4), List.of(b1, b2, b3));
 		TopicPartitionInfo urp = new TopicPartitionInfo(1, b1, List.of(b1, b2, b3), List.of(b1, b2));
 		TopicPartitionInfo offline = new TopicPartitionInfo(2, null, List.of(b2, b3), List.of(b2));
@@ -78,7 +78,7 @@ class KafkaHelpersTest {
 		ProducerState fresh = state(7, now - 1_000, true);
 		ProducerState old = state(7, now - max - 60_000, true);
 		ProducerState idle = state(7, now - max - 60_000, false);
-		// coordinator listesinde yok ama yeni başlamış: askıda sayılmaz (listTransactions ile yarış)
+		// not in the coordinator list but just started: not hanging (race with listTransactions)
 		assertThat(Producers.hangingSuspect(fresh, Set.of(), max, now)).isFalse();
 		assertThat(Producers.hangingSuspect(old, Set.of(), max, now)).isTrue();
 		assertThat(Producers.hangingSuspect(old, Set.of(7L), max, now)).isFalse();
@@ -95,9 +95,9 @@ class KafkaHelpersTest {
 		long start = System.nanoTime();
 		Futures.Each<String, Integer> each = Futures.awaitEach(call, futures, 300);
 		assertThat(each.values()).containsExactly(Map.entry("fast", 1));
-		assertThat(each.errors()).containsEntry("slow", "zaman aşımı");
+		assertThat(each.errors()).containsEntry("slow", "timeout");
 		assertThatThrownBy(() -> Futures.awaitAtMost(call, never, 200)).isInstanceOf(ToolException.class)
-			.hasMessageContaining("zaman aşımı");
+			.hasMessageContaining("timeout");
 		assertThat((System.nanoTime() - start) / 1_000_000).isLessThan(3_000);
 	}
 

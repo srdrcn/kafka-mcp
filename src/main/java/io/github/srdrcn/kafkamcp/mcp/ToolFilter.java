@@ -15,15 +15,15 @@ import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 import io.modelcontextprotocol.spec.McpSchema;
 
 /**
- * Config'e göre hangi araçların listeleneceğini belirler:
+ * Decides which tools are listed, based on the config:
  * <ul>
- * <li>sadece config'teki {@code toolsets} listesindeki toolset'ler,</li>
- * <li>yazma araçları sadece efektif {@code readOnly=false} cluster'larda,</li>
- * <li>destructive araçlar ayrıca {@code disableDestructive=false} iken,</li>
- * <li>connect/schemaregistry araçları sadece ilgili URL'si olan cluster'larda.</li>
+ * <li>only the toolsets in the config's {@code toolsets} list,</li>
+ * <li>write tools only on clusters with an effective {@code readOnly=false},</li>
+ * <li>destructive tools additionally only while {@code disableDestructive=false},</li>
+ * <li>connect/schemaregistry tools only on clusters that have the matching URL.</li>
  * </ul>
- * Uygun cluster'ı kalmayan araç hiç listelenmez; kalanların {@code cluster} enum'u uygun cluster'larla
- * sınırlanır.
+ * A tool with no eligible cluster left is not listed at all; for the others the {@code cluster} enum is
+ * limited to the eligible clusters.
  */
 public final class ToolFilter {
 
@@ -34,19 +34,19 @@ public final class ToolFilter {
 		Map<String, Toolset> byName = new LinkedHashMap<>();
 		for (Toolset t : toolsets) {
 			if (byName.put(t.name(), t) != null) {
-				throw new IllegalStateException("Toolset adı tekrar ediyor: " + t.name());
+				throw new IllegalStateException("Duplicate toolset name: " + t.name());
 			}
 		}
 		List<String> unknown = config.getToolsets().stream().filter(n -> !byName.containsKey(n)).toList();
 		if (!unknown.isEmpty()) {
-			throw new ConfigException("Bilinmeyen toolset: " + unknown + " (geçerli: " + new TreeSet<>(byName.keySet()) + ")");
+			throw new ConfigException("Unknown toolset: " + unknown + " (valid: " + new TreeSet<>(byName.keySet()) + ")");
 		}
 		List<RegisteredTool> out = new ArrayList<>();
 		Set<String> names = new LinkedHashSet<>();
 		for (String toolsetName : config.getToolsets()) {
 			for (ToolSpec spec : byName.get(toolsetName).tools()) {
 				if (!names.add(spec.name())) {
-					throw new IllegalStateException("Araç adı tekrar ediyor: " + spec.name());
+					throw new IllegalStateException("Duplicate tool name: " + spec.name());
 				}
 				List<String> clusters = eligibleClusters(config, spec);
 				if (clusters.isEmpty()) {
@@ -68,20 +68,20 @@ public final class ToolFilter {
 		return out;
 	}
 
-	/** Araç bu cluster'da neden kullanılamaz; kullanılabiliyorsa null. */
+	/** Why the tool is not available on this cluster; null if it is. */
 	public static String reasonUnavailable(KafkaMcpConfig config, ToolSpec spec, ClusterConfig c) {
 		if (!spec.requirement().supports(c)) {
 			return switch (spec.requirement()) {
-				case CONNECT -> "cluster " + c.getName() + " için connectUrl tanımlı değil";
-				case SCHEMA_REGISTRY -> "cluster " + c.getName() + " için schemaRegistryUrl tanımlı değil";
-				default -> "desteklenmiyor";
+				case CONNECT -> "no connectUrl configured for cluster " + c.getName();
+				case SCHEMA_REGISTRY -> "no schemaRegistryUrl configured for cluster " + c.getName();
+				default -> "not supported";
 			};
 		}
 		if (spec.kind().writes() && config.isReadOnly(c)) {
-			return "cluster " + c.getName() + " readOnly; yazma araçları kapalı";
+			return "cluster " + c.getName() + " is readOnly; write tools are disabled";
 		}
 		if (spec.kind() == ToolKind.DESTRUCTIVE && config.isDisableDestructive()) {
-			return "disableDestructive açık; silme/sıfırlama araçları kapalı";
+			return "disableDestructive is on; delete/reset tools are disabled";
 		}
 		return null;
 	}
@@ -90,7 +90,7 @@ public final class ToolFilter {
 		Map<String, Object> properties = new LinkedHashMap<>();
 		Map<String, Object> cluster = new LinkedHashMap<>();
 		cluster.put("type", "string");
-		cluster.put("description", "Cluster adı");
+		cluster.put("description", "Cluster name");
 		cluster.put("enum", List.copyOf(clusters));
 		properties.put("cluster", cluster);
 		properties.putAll(spec.properties());

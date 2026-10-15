@@ -5,14 +5,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Araç sonuçları için küçük yardımcılar. */
+/** Small helpers for tool results. */
 public final class Results {
 
 	private Results() {
 	}
 
 	/**
-	 * Listeyi limit'e göre keser: {@code {"total": N, "returned": M, "truncated": bool, "<key>": [...]}}.
+	 * Truncates the list to the limit: {@code {"total": N, "returned": M, "truncated": bool, "<key>": [...]}}.
 	 */
 	public static Map<String, Object> page(String key, Collection<?> items, int limit) {
 		List<?> list = items instanceof List<?> l ? l : List.copyOf(items);
@@ -25,10 +25,10 @@ public final class Results {
 		return m;
 	}
 
-	/** Sıralı map; null değerler atlanır. {@code Results.map("a", 1, "b", null)} → {a:1} */
+	/** Ordered map; null values are skipped. {@code Results.map("a", 1, "b", null)} → {a:1} */
 	public static Map<String, Object> map(Object... keyValues) {
 		if (keyValues.length % 2 != 0) {
-			throw new IllegalArgumentException("çift sayıda argüman gerekli");
+			throw new IllegalArgumentException("an even number of arguments is required");
 		}
 		Map<String, Object> m = new LinkedHashMap<>();
 		for (int i = 0; i < keyValues.length; i += 2) {

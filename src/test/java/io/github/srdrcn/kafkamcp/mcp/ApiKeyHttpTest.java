@@ -18,7 +18,7 @@ import io.github.srdrcn.kafkamcp.KafkaMcpApplication;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** API key: doğru → 200, yanlış/eksik → 401, apiKey boş → auth yok. Health her zaman açık. */
+/** API key: correct → 200, wrong/missing → 401, empty apiKey → no auth. Health is always open. */
 class ApiKeyHttpTest {
 
 	static final String INIT = """

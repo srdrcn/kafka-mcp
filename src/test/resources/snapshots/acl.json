@@ -6,7 +6,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
@@ -47,7 +47,7 @@
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -67,7 +67,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
@@ -118,7 +118,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
@@ -156,7 +156,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
@@ -193,7 +193,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
@@ -222,7 +222,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
@@ -231,7 +231,7 @@
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -251,7 +251,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
@@ -260,7 +260,7 @@
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -280,7 +280,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
@@ -289,7 +289,7 @@
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -309,7 +309,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },
@@ -327,7 +327,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },
@@ -339,13 +339,13 @@
   }
 }, {
   "name" : "acls_create",
-  "description" : "YAZMA: ACL oluşturur: tek binding ya da preset (producer, consumer, streams); oluşan binding'leri döner",
+  "description" : "WRITE: ACL oluşturur: tek binding ya da preset (producer, consumer, streams); oluşan binding'leri döner",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "principal" : {
@@ -414,13 +414,13 @@
   }
 }, {
   "name" : "quotas_update",
-  "description" : "YAZMA: Client kotası ayarlar/kaldırır (user, clientId, ip; <default> destekli); önce/sonra değerleri döner",
+  "description" : "WRITE: Client kotası ayarlar/kaldırır (user, clientId, ip; <default> destekli); önce/sonra değerleri döner",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "user" : {
@@ -455,13 +455,13 @@
   }
 }, {
   "name" : "acls_delete",
-  "description" : "YAZMA: Filtreye uyan ACL'leri siler (principal, resourceType, resourceName zorunlu); silinen binding'leri döner",
+  "description" : "WRITE: Filtreye uyan ACL'leri siler (principal, resourceType, resourceName zorunlu); silinen binding'leri döner",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "principal" : {

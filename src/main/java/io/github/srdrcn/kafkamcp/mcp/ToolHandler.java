@@ -1,8 +1,8 @@
 package io.github.srdrcn.kafkamcp.mcp;
 
 /**
- * Aracın gövdesi. Dönen nesne JSON'a çevrilir (String ise olduğu gibi metin döner). Kullanıcıya
- * gösterilecek hatalar için {@link ToolException} fırlatın; Kafka hataları otomatik Türkçeleştirilir.
+ * The tool body. The returned object is serialized to JSON (a String is returned as plain text). Throw
+ * {@link ToolException} for errors shown to the user; Kafka errors are explained automatically.
  */
 @FunctionalInterface
 public interface ToolHandler {

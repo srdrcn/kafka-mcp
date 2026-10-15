@@ -20,9 +20,9 @@ import com.github.dockerjava.api.model.PortBinding;
 import com.github.dockerjava.api.model.Ports;
 
 /**
- * Test JVM'i boyunca paylaşılan tek düğümlü KRaft Kafka (apache/kafka). Dış listener SASL_PLAINTEXT +
- * PLAIN (kullanıcılar: admin, alice, bob), StandardAuthorizer açık (admin süper kullanıcı). Docker ağı
- * içinden {@code kafka:19092} (PLAINTEXT) ile erişilir (Connect/Schema Registry için).
+ * Single-node KRaft Kafka (apache/kafka) shared for the whole test JVM. External listener SASL_PLAINTEXT +
+ * PLAIN (users: admin, alice, bob), StandardAuthorizer enabled (admin is a super user). Reachable inside the
+ * Docker network at {@code kafka:19092} (PLAINTEXT) (for Connect/Schema Registry).
  */
 public final class KafkaTestCluster {
 
@@ -88,7 +88,7 @@ public final class KafkaTestCluster {
 		return "localhost:" + hostPort;
 	}
 
-	/** SASL/PLAIN client property'leri (cluster config'teki {@code properties:} bloğu için). */
+	/** SASL/PLAIN client properties (for the {@code properties:} block of a cluster config). */
 	public static Map<String, String> saslProperties(String user) {
 		Map<String, String> p = new LinkedHashMap<>();
 		p.put("security.protocol", "SASL_PLAINTEXT");
@@ -104,12 +104,12 @@ public final class KafkaTestCluster {
 		return p;
 	}
 
-	/** Test hazırlığı için admin kullanıcısıyla yeni AdminClient (çağıran kapatır). */
+	/** New AdminClient with the admin user, for test setup (the caller closes it). */
 	public static Admin admin() {
 		return Admin.create(clientProperties("admin"));
 	}
 
-	/** Test verisi üretmek için admin kullanıcısıyla producer (çağıran kapatır). */
+	/** Producer with the admin user, for producing test data (the caller closes it). */
 	public static KafkaProducer<byte[], byte[]> producer(Map<String, Object> overrides) {
 		Map<String, Object> p = clientProperties("admin");
 		p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());

@@ -1,5 +1,5 @@
-# Multi-stage: Maven ile derle, UBI9 OpenJDK 21 runtime üzerinde non-root çalıştır.
-# OpenShift restricted-v2 SCC: rastgele UID + GID 0 (chgrp 0 / g=u), salt-okunur root fs, /tmp emptyDir.
+# Multi-stage: build with Maven, run as non-root on the UBI9 OpenJDK 21 runtime.
+# OpenShift restricted-v2 SCC: random UID + GID 0 (chgrp 0 / g=u), read-only root fs, /tmp emptyDir.
 ARG BUILDER_IMAGE=registry.access.redhat.com/ubi9/openjdk-21:latest
 ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi9/openjdk-21-runtime:latest
 

@@ -3,18 +3,18 @@ package io.github.srdrcn.kafkamcp.mcp;
 import java.util.List;
 
 /**
- * Bir toolset: config'teki {@code toolsets} listesiyle açılıp kapanan araç grubu. Her toolset
- * {@code toolsets/<ad>} paketinde bir Spring {@code @Component} olarak tanımlanır.
+ * A toolset: a group of tools switched on and off by the config's {@code toolsets} list. Each toolset is a
+ * Spring {@code @Component} in the {@code toolsets/<name>} package.
  */
 public interface Toolset {
 
-	/** Config'te kullanılan ad (ör. core, messages). */
+	/** Name used in the config (e.g. core, messages). */
 	String name();
 
-	/** Kısa Türkçe açıklama. */
+	/** Short description. */
 	String description();
 
-	/** Toolset'in tüm araçları (filtrelenmemiş). */
+	/** All tools of the toolset (unfiltered). */
 	List<ToolSpec> tools();
 
 }

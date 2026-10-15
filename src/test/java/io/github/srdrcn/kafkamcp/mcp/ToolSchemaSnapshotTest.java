@@ -30,8 +30,8 @@ import io.github.srdrcn.kafkamcp.support.TestToolsets;
 import io.modelcontextprotocol.json.McpJsonMapper;
 
 /**
- * Araç şemalarının snapshot testi ve Claude Code uyumluluk kuralları. Snapshot'lar
- * {@code src/test/resources/snapshots/<toolset>.json}; güncellemek için
+ * Snapshot test of the tool schemas and the Claude Code compatibility rules. Snapshots live in
+ * {@code src/test/resources/snapshots/<toolset>.json}; to update them run
  * {@code ./mvnw test -Dtest=ToolSchemaSnapshotTest -Dsnapshot.update=true}.
  */
 @SpringBootTest(classes = { KafkaMcpApplication.class, ToolSchemaSnapshotTest.Config.class },
@@ -42,7 +42,7 @@ class ToolSchemaSnapshotTest {
 
 	private static final Pattern NAME = Pattern.compile("^[a-z][a-z0-9]*(_[a-z0-9]+)+$");
 
-	/** disableDestructive ile kapanan araçlar: adı *_delete, *_reset ya da *_delete_* olanlar. */
+	/** Tools turned off by disableDestructive: names ending in *_delete, *_reset or *_delete_*. */
 	private static final Pattern DESTRUCTIVE_NAME = Pattern.compile("(_delete|_reset)(_[a-z0-9]+)?$");
 
 	private static final ObjectMapper PRETTY = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
@@ -74,7 +74,7 @@ class ToolSchemaSnapshotTest {
 	void toolsetNamesMatchPackages() {
 		for (Toolset t : toolsets) {
 			String pkg = t.getClass().getPackageName();
-			assertThat(pkg).as("toolset paketi").endsWith(".toolsets." + t.name());
+			assertThat(pkg).as("toolset package").endsWith(".toolsets." + t.name());
 		}
 		assertThat(toolsets).extracting(Toolset::name).containsExactlyInAnyOrderElementsOf(TestToolsets.all());
 	}
@@ -90,8 +90,8 @@ class ToolSchemaSnapshotTest {
 		for (RegisteredTool t : registry.tools()) {
 			String name = t.spec().name();
 			JsonNode json = onTheWire(t);
-			assertThat(name).as("araç adı").matches(NAME).hasSizeLessThanOrEqualTo(64);
-			assertThat(json.path("description").asText()).as("%s açıklama", name).isNotBlank().hasSizeLessThan(400);
+			assertThat(name).as("tool name").matches(NAME).hasSizeLessThanOrEqualTo(64);
+			assertThat(json.path("description").asText()).as("%s description", name).isNotBlank().hasSizeLessThan(400);
 			JsonNode schema = json.get("inputSchema");
 			assertThat(schema.path("type").asText()).as("%s type", name).isEqualTo("object");
 			assertThat(schema.get("properties")).as("%s properties", name).isNotNull();
@@ -99,7 +99,7 @@ class ToolSchemaSnapshotTest {
 			assertThat(schema.get("required")).as("%s required", name).isNotNull();
 			assertThat(schema.get("required").isArray()).isTrue();
 			for (JsonNode r : schema.get("required")) {
-				assertThat(schema.get("properties").has(r.asText())).as("%s required %s properties'te", name, r)
+				assertThat(schema.get("properties").has(r.asText())).as("%s required %s in properties", name, r)
 					.isTrue();
 			}
 			Iterator<Map.Entry<String, JsonNode>> props = schema.get("properties").fields();
@@ -118,10 +118,10 @@ class ToolSchemaSnapshotTest {
 	}
 
 	@Test
-	void writeToolsStartWithYazma() {
+	void writeToolsStartWithWritePrefix() {
 		for (RegisteredTool t : registry.tools()) {
-			boolean yazma = t.spec().description().startsWith("YAZMA:");
-			assertThat(yazma).as("%s: yazma araçları (ve sadece onlar) 'YAZMA:' ile başlar", t.spec().name())
+			boolean write = t.spec().description().startsWith("WRITE:");
+			assertThat(write).as("%s: write tools (and only they) start with 'WRITE:'", t.spec().name())
 				.isEqualTo(t.spec().kind().writes());
 		}
 	}
@@ -131,7 +131,7 @@ class ToolSchemaSnapshotTest {
 		for (RegisteredTool t : registry.tools()) {
 			boolean byName = DESTRUCTIVE_NAME.matcher(t.spec().name()).find();
 			assertThat(t.spec().kind() == ToolKind.DESTRUCTIVE)
-				.as("%s: DESTRUCTIVE ⇔ adı *_delete/*_reset", t.spec().name())
+				.as("%s: DESTRUCTIVE ⇔ name is *_delete/*_reset", t.spec().name())
 				.isEqualTo(byName);
 		}
 	}
@@ -153,22 +153,22 @@ class ToolSchemaSnapshotTest {
 				continue;
 			}
 			if (!Files.exists(file)) {
-				mismatches.add(file + " yok");
+				mismatches.add(file + " missing");
 				continue;
 			}
 			String expected = Files.readString(file, StandardCharsets.UTF_8);
 			if (!PRETTY.readTree(expected).equals(PRETTY.readTree(actual))) {
-				mismatches.add(file + " farklı");
+				mismatches.add(file + " differs");
 			}
 		}
 		assertThat(mismatches)
-			.as("Araç şemaları snapshot'tan farklı. Bilinçli değişiklikse: ./mvnw test -Dtest=ToolSchemaSnapshotTest -Dsnapshot.update=true")
+			.as("Tool schemas differ from the snapshot. If the change is intended: ./mvnw test -Dtest=ToolSchemaSnapshotTest -Dsnapshot.update=true")
 			.isEmpty();
 	}
 
 	private static void assertNoNulls(String tool, JsonNode node) {
 		if (node.isNull()) {
-			throw new AssertionError(tool + ": şemada null değer var");
+			throw new AssertionError(tool + ": schema contains a null value");
 		}
 		if (node.isContainerNode()) {
 			for (JsonNode child : node) {

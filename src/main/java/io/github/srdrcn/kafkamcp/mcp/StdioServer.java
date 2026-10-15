@@ -23,8 +23,8 @@ import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema;
 
 /**
- * stdio transport: stdin'den JSON-RPC okur, stdout'a yazar (loglar bu modda stderr'e gider). stdin
- * kapanınca uygulama durur.
+ * stdio transport: reads JSON-RPC from stdin and writes to stdout (in this mode logs go to stderr). The
+ * application stops when stdin is closed.
  */
 @Component
 @ConditionalOnProperty(name = "kafka-mcp.transport", havingValue = "stdio")
@@ -79,9 +79,9 @@ public class StdioServer implements ApplicationRunner {
 			.capabilities(McpSchema.ServerCapabilities.builder().tools(false).build())
 			.tools(specs)
 			.build();
-		log.info("stdio transport hazır ({} araç)", specs.size());
+		log.info("stdio transport ready ({} tools)", specs.size());
 		eof.await();
-		log.info("stdin kapandı, kapanıyor");
+		log.info("stdin closed, shutting down");
 		server.closeGracefully();
 	}
 

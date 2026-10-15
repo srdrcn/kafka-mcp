@@ -104,16 +104,16 @@ class ConfigLoaderTest {
 
 	@Test
 	void validatesClusters() {
-		assertThatThrownBy(() -> ConfigLoader.parse("readOnly: true")).hasMessageContaining("en az bir cluster");
+		assertThatThrownBy(() -> ConfigLoader.parse("readOnly: true")).hasMessageContaining("at least one cluster");
 		assertThatThrownBy(() -> ConfigLoader.parse("""
 				clusters:
 				  - {name: x, bootstrapServers: 'x:9092'}
 				  - {name: x, bootstrapServers: 'y:9092'}
 				  - {name: 'bad name'}
 				  - {name: z, bootstrapServers: 'z:9092', connectUrl: 'z:8083'}
-				""")).hasMessageContaining("tekrar ediyor: x")
-			.hasMessageContaining("geçersiz cluster adı")
-			.hasMessageContaining("connectUrl http:// veya https://");
+				""")).hasMessageContaining("duplicate cluster name: x")
+			.hasMessageContaining("invalid cluster name")
+			.hasMessageContaining("connectUrl must start with http:// or https://");
 	}
 
 	@Test

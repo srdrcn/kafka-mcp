@@ -36,7 +36,7 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
-    <!-- Resmi MCP Java SDK: çekirdek + Jackson 2 (Spring Boot 3 ile aynı Jackson) -->
+    <!-- Official MCP Java SDK: core + Jackson 2 (the same Jackson as Spring Boot 3) -->
     <dependency>
       <groupId>io.modelcontextprotocol.sdk</groupId>
       <artifactId>mcp-core</artifactId>

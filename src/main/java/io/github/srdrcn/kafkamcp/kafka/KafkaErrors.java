@@ -32,23 +32,23 @@ import org.apache.kafka.common.errors.UnsupportedVersionException;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Kafka ve Kerberos hatalarını kısa Türkçe açıklamalara çevirir. Orijinal mesaj parantez içinde korunur.
+ * Translates Kafka and Kerberos errors into short explanations. The original message is kept in parentheses.
  */
 public final class KafkaErrors {
 
 	/**
-	 * Broker'ın API'yi (ya da istenen sürümünü) desteklemediği durumların Türkçe açıklaması; eski
-	 * (ör. 2.x ZooKeeper) broker'larda bazı işlemler yoktur. Araçlar bu durumu tüm aracı düşürmek yerine
-	 * öğe bazında not olarak raporlar.
+	 * Explanation for when the broker does not support an API (or the requested version of it); older
+	 * (e.g. 2.x ZooKeeper) brokers lack some operations. Tools report this as a per-item note instead of
+	 * failing the whole tool.
 	 */
-	public static final String UNSUPPORTED = "Broker bu işlemi desteklemiyor (sürüm)";
+	public static final String UNSUPPORTED = "Broker does not support this operation (version)";
 
 	private KafkaErrors() {
 	}
 
 	/**
-	 * Hata (ya da ToolException'ın nedeni) UnsupportedVersionException mı? ExecutionException/
-	 * CompletionException sarmalları ve ToolException neden zinciri açılır.
+	 * Is the error (or the cause of a ToolException) an UnsupportedVersionException? ExecutionException/
+	 * CompletionException wrappers and the ToolException cause chain are unwrapped.
 	 */
 	public static boolean isUnsupported(Throwable error) {
 		Throwable t = error;
@@ -65,7 +65,7 @@ public final class KafkaErrors {
 		return false;
 	}
 
-	/** {@link #explain} ile üretilmiş mesaj "desteklenmiyor (sürüm)" mesajı mı? */
+	/** Is a message produced by {@link #explain} the "does not support (version)" message? */
 	public static boolean isUnsupported(String message) {
 		return message != null && message.startsWith(UNSUPPORTED);
 	}
@@ -84,107 +84,107 @@ public final class KafkaErrors {
 		return hint == null ? chain : hint + " (" + chain + ")";
 	}
 
-	/** Kerberos/JAAS kaynaklı bilinen hata kalıplarını Türkçe açıklar; eşleşme yoksa null. */
+	/** Explains known Kerberos/JAAS error patterns; null if nothing matches. */
 	public static String kerberos(String text) {
 		if (text == null) {
 			return null;
 		}
 		String t = text.toLowerCase(Locale.ROOT);
 		if (t.contains("clock skew")) {
-			return "Kerberos clock skew: pod ile KDC arasındaki saat farkı izin verilenden (genelde 5 dk) fazla";
+			return "Kerberos clock skew: the pod clock differs from the KDC by more than the allowed skew (usually 5 minutes)";
 		}
 		if (t.contains("cannot locate kdc") || t.contains("receive timed out") || t.contains("cannot get kdc")
 				|| (t.contains("kdc") && (t.contains("connection refused") || t.contains("unreachable")))) {
-			return "KDC'ye ulaşılamadı (krb5.conf'taki kdc adresleri, DNS, ağ/firewall, port 88)";
+			return "Cannot reach the KDC (check the kdc entries in krb5.conf, DNS, firewall, port 88)";
 		}
 		if (t.contains("unable to obtain password from user") || t.contains("keytab") && t.contains("not exist")
 				|| t.contains("keytab") && t.contains("no such file")) {
-			return "keytab bulunamadı/okunamadı ya da principal keytab'da yok (kerberos.keytab yolu, Secret mount'u, principal adı)";
+			return "Keytab not found or unreadable, or the principal is not in the keytab (check kerberos.keytab, the Secret mount and the principal)";
 		}
 		if (t.contains("client not found in kerberos database")) {
-			return "Principal KDC'de bulunamadı (kerberos.principal ve realm doğru mu?)";
+			return "Principal not found in the KDC (check kerberos.principal and the realm)";
 		}
 		if (t.contains("pre-authentication information was invalid") || t.contains("checksum failed")
 				|| t.contains("integrity check on decrypted field failed")) {
-			return "keytab'daki anahtar geçersiz (parola/kvno değişmiş olabilir; keytab'ı yenileyin)";
+			return "Keytab key is invalid (password/kvno changed; regenerate the keytab)";
 		}
 		if (t.contains("server not found in kerberos database")) {
-			return "Broker servis principal'ı (kafka/<host>@REALM) KDC'de yok: bootstrap adresi FQDN mi, krb5.conf'ta rdns = false mi?";
+			return "Broker service principal (kafka/<host>@REALM) not found in the KDC: is the bootstrap address an FQDN, and is rdns = false set in krb5.conf?";
 		}
 		if (t.contains("cannot find default realm") || t.contains("krb5.conf") && t.contains("not found")
 				|| t.contains("cannot get default realm")) {
-			return "krb5.conf bulunamadı ya da default_realm tanımlı değil (-Djava.security.krb5.conf)";
+			return "krb5.conf not found or default_realm missing (-Djava.security.krb5.conf)";
 		}
 		if (t.contains("message stream modified")) {
-			return "Kerberos 'message stream modified': realm adı büyük/küçük harf ya da enctype uyumsuzluğu";
+			return "Kerberos 'message stream modified': realm name case mismatch or enctype mismatch";
 		}
 		if (t.contains("encryption type") && (t.contains("not supported") || t.contains("not enabled"))) {
-			return "Kerberos şifreleme tipi desteklenmiyor (krb5.conf permitted_enctypes / keytab enctype)";
+			return "Kerberos encryption type not supported (krb5.conf permitted_enctypes / keytab enctype)";
 		}
 		if (t.contains("gssexception") || t.contains("loginexception") || t.contains("krbexception")) {
-			return "Kerberos login hatası";
+			return "Kerberos login failed";
 		}
 		return null;
 	}
 
 	private static String hint(Throwable e) {
 		if (e instanceof TimeoutException) {
-			return "Kafka zaman aşımı: broker'lara ulaşılamadı ya da yanıt gelmedi (bootstrapServers, ağ, Kerberos)";
+			return "Kafka timeout: brokers unreachable or not responding (check bootstrapServers, network, Kerberos)";
 		}
 		if (e instanceof SaslAuthenticationException) {
-			return "SASL kimlik doğrulaması başarısız";
+			return "SASL authentication failed";
 		}
 		if (e instanceof TopicAuthorizationException) {
-			return "Topic yetkisi yok (ACL)";
+			return "Not authorized for the topic (ACL)";
 		}
 		if (e instanceof GroupAuthorizationException) {
-			return "Consumer group yetkisi yok (ACL)";
+			return "Not authorized for the consumer group (ACL)";
 		}
 		if (e instanceof ClusterAuthorizationException) {
-			return "Cluster yetkisi yok (ACL)";
+			return "Not authorized for the cluster (ACL)";
 		}
 		if (e instanceof AuthorizationException) {
-			return "Yetki yok (ACL)";
+			return "Not authorized (ACL)";
 		}
 		if (e instanceof UnknownTopicOrPartitionException) {
-			return "Topic ya da partition bulunamadı";
+			return "Topic or partition not found";
 		}
 		if (e instanceof TopicExistsException) {
-			return "Topic zaten var";
+			return "Topic already exists";
 		}
 		if (e instanceof InvalidTopicException) {
-			return "Geçersiz topic adı";
+			return "Invalid topic name";
 		}
 		if (e instanceof GroupIdNotFoundException) {
-			return "Consumer group bulunamadı";
+			return "Consumer group not found";
 		}
 		if (e instanceof GroupNotEmptyException) {
-			return "Consumer group boş değil (aktif üyeler var)";
+			return "Consumer group is not empty (it has active members)";
 		}
 		if (e instanceof InvalidReplicationFactorException) {
-			return "Geçersiz replication factor";
+			return "Invalid replication factor";
 		}
 		if (e instanceof InvalidPartitionsException) {
-			return "Geçersiz partition sayısı";
+			return "Invalid partition count";
 		}
-		// UnsupportedVersionException bir InvalidRequestException'dır: önce kontrol edilmeli
+		// UnsupportedVersionException is an InvalidRequestException: it must be checked first
 		if (e instanceof UnsupportedVersionException) {
 			return UNSUPPORTED;
 		}
 		if (e instanceof InvalidConfigurationException || e instanceof InvalidRequestException) {
-			return "Geçersiz istek/config";
+			return "Invalid request/config";
 		}
 		if (e instanceof PolicyViolationException) {
-			return "Broker politikası isteği reddetti";
+			return "Broker policy rejected the request";
 		}
 		if (e instanceof SecurityDisabledException) {
-			return "Cluster'da authorizer kapalı (ACL desteklenmiyor)";
+			return "Authorizer is disabled on the cluster (ACLs not supported)";
 		}
 		if (e instanceof TopicDeletionDisabledException) {
-			return "Broker'da topic silme kapalı (delete.topic.enable=false)";
+			return "Topic deletion is disabled on the broker (delete.topic.enable=false)";
 		}
 		if (e instanceof NoReassignmentInProgressException) {
-			return "Partition için devam eden reassignment yok";
+			return "No reassignment in progress for the partition";
 		}
 		return null;
 	}

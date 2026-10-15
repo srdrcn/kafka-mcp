@@ -6,7 +6,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       }
     },
@@ -24,16 +24,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -57,7 +57,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "plugin" : {
@@ -86,16 +86,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -120,7 +120,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -146,7 +146,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -168,16 +168,16 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -197,7 +197,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -219,7 +219,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -232,7 +232,7 @@
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -252,7 +252,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       }
     },
@@ -270,7 +270,7 @@
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -297,13 +297,13 @@
   }
 }, {
   "name" : "connectors_pause",
-  "description" : "YAZMA: Connector'ı ve görevlerini duraklatır (PAUSED)",
+  "description" : "WRITE: Connector'ı ve görevlerini duraklatır (PAUSED)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -319,13 +319,13 @@
   }
 }, {
   "name" : "connectors_resume",
-  "description" : "YAZMA: Duraklatılmış/durdurulmuş connector'ı devam ettirir (RUNNING)",
+  "description" : "WRITE: Duraklatılmış/durdurulmuş connector'ı devam ettirir (RUNNING)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -341,13 +341,13 @@
   }
 }, {
   "name" : "connectors_stop",
-  "description" : "YAZMA: Connector'ı durdurur (STOPPED: görevler kapanır, config korunur)",
+  "description" : "WRITE: Connector'ı durdurur (STOPPED: görevler kapanır, config korunur)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -363,13 +363,13 @@
   }
 }, {
   "name" : "connectors_restart",
-  "description" : "YAZMA: Connector'ı yeniden başlatır (isteğe bağlı görevleriyle ya da sadece FAILED olanları)",
+  "description" : "WRITE: Connector'ı yeniden başlatır (isteğe bağlı görevleriyle ya da sadece FAILED olanları)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -393,13 +393,13 @@
   }
 }, {
   "name" : "connectors_task_restart",
-  "description" : "YAZMA: Connector'ın tek bir görevini yeniden başlatır",
+  "description" : "WRITE: Connector'ın tek bir görevini yeniden başlatır",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -419,13 +419,13 @@
   }
 }, {
   "name" : "connectors_create_or_update",
-  "description" : "YAZMA: Connector oluşturur ya da config'ini tamamen değiştirir",
+  "description" : "WRITE: Connector oluşturur ya da config'ini tamamen değiştirir",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -448,13 +448,13 @@
   }
 }, {
   "name" : "connectors_delete",
-  "description" : "YAZMA: Connector'ı siler (geri alınamaz)",
+  "description" : "WRITE: Connector'ı siler (geri alınamaz)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
@@ -470,13 +470,13 @@
   }
 }, {
   "name" : "connectors_offsets_reset",
-  "description" : "YAZMA: STOPPED durumdaki connector'ın offset'lerini sıfırlar (geri alınamaz)",
+  "description" : "WRITE: STOPPED durumdaki connector'ın offset'lerini sıfırlar (geri alınamaz)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
