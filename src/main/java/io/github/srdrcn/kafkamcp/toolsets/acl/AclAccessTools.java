@@ -36,42 +36,42 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 @Component
 public class AclAccessTools {
 
-	private static final String SUPER_USERS_DESC = "Bilinen süper kullanıcılar (ör. User:admin); broker super.users'ı "
-			+ "gizli döndürdüğünde kullanılır";
+	private static final String SUPER_USERS_DESC = "Known super users (e.g. User:admin); used when the broker "
+			+ "returns super.users as hidden";
 
 	private static final String ALLOW_EVERYONE_PARAM = "allowEveryoneIfNoAclFound";
 
-	private static final String ALLOW_EVERYONE_DESC = "Broker'ın allow.everyone.if.no.acl.found değeri; broker "
-			+ "gizli döndürdüğünde kullanılır (verilmezse false varsayılır)";
+	private static final String ALLOW_EVERYONE_DESC = "The broker's allow.everyone.if.no.acl.found value; used when the "
+			+ "broker returns it as hidden (assumed false if omitted)";
 
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("acls_explain",
-					"Principal'ın kaynakta bir işlemi yapıp yapamayacağını Kafka authorizer kurallarıyla (KRaft StandardAuthorizer, ZooKeeper AclAuthorizer) açıklar (ALLOW/DENY ve nedeni)")
-			.required("principal", P.string("Principal (ör. User:alice; sadece ad verilirse User: eklenir)"))
-			.required("operation", Acls.operationParam("İşlem", false))
-			.required("resourceType", Acls.resourceTypeParam("Kaynak tipi", false))
-			.required("resourceName", P.string("Kaynak adı (CLUSTER için kafka-cluster)"))
-			.param("host", P.string("İstemci IP'si (varsayılan *: sadece host'u * olan ACL'ler eşleşir)"))
+					"Explain whether a principal may perform an operation on a resource under the built-in Kafka authorizer rules (ALLOW/DENY and why)")
+			.required("principal", P.string("Principal (e.g. User:alice; a bare name gets the User: prefix)"))
+			.required("operation", Acls.operationParam("Operation", false))
+			.required("resourceType", Acls.resourceTypeParam("Resource type", false))
+			.required("resourceName", P.string("Resource name (kafka-cluster for CLUSTER)"))
+			.param("host", P.string("Client IP (default *: only ACLs whose host is * match)"))
 			.param("superUsers", P.stringArray(SUPER_USERS_DESC))
 			.param(ALLOW_EVERYONE_PARAM, P.bool(ALLOW_EVERYONE_DESC))
 			.handler(this::explain),
 				ToolSpec
 					.read("acls_who_can_access_topic",
-							"Topic'e kimlerin erişebildiğini (ALLOW), kimlerin açıkça reddedildiğini (DENY) ve süper kullanıcıları gösterir")
-					.required("topic", P.string("Topic adı"))
-					.param("operation", Acls.operationParam("İşlem (varsayılan READ ve WRITE)", false))
+							"Show who can access a topic (ALLOW), who is explicitly denied (DENY), and the super users")
+					.required("topic", P.string("Topic name"))
+					.param("operation", Acls.operationParam("Operation (default READ and WRITE)", false))
 					.param("superUsers", P.stringArray(SUPER_USERS_DESC))
 					.param(ALLOW_EVERYONE_PARAM, P.bool(ALLOW_EVERYONE_DESC))
 					.handler(this::whoCanAccessTopic),
 				ToolSpec
 					.read("acls_principal_permissions",
-							"Principal'a uygulanan ACL'leri kaynağa göre gruplar; etkin ALLOW/DENY işlemlerini özetler")
-					.required("principal", P.string("Principal (ör. User:alice; sadece ad verilirse User: eklenir)"))
-					.param("includeWildcardPrincipal", P.bool("User:* binding'lerini de dahil et (varsayılan true)"))
+							"Group the ACLs that apply to a principal by resource and summarize the effective ALLOW/DENY operations")
+					.required("principal", P.string("Principal (e.g. User:alice; a bare name gets the User: prefix)"))
+					.param("includeWildcardPrincipal", P.bool("Also include User:* bindings (default true)"))
 					.listParams()
-					.param("filter", P.string("Kaynak adı filtresi (regex, kısmi eşleşme)"))
-					.param("limit", AclListTools.limitParam("En fazla kaç kaynak dönsün (varsayılan 100)", 100))
+					.param("filter", P.string("Resource name filter (regex, partial match)"))
+					.param("limit", AclListTools.limitParam("Maximum number of resources to return (default 100)", 100))
 					.handler(this::principalPermissions));
 	}
 
@@ -98,8 +98,8 @@ public class AclAccessTools {
 			.authorize(principal, operation, type, name, host);
 		String reason = d.reason();
 		if (allowEveryone.assumed() && d.noAclOnResource() && !d.superUser()) {
-			reason = "Kaynakta hiç ACL yok; allow.everyone.if.no.acl.found bilinmiyor, false varsayıldı → DENY "
-					+ "(broker'da true ise ALLOW)";
+			reason = "No ACLs on the resource; allow.everyone.if.no.acl.found unknown, assumed false → DENY "
+					+ "(ALLOW if it is true on the broker)";
 		}
 
 		List<String> notes = new ArrayList<>();
@@ -112,17 +112,17 @@ public class AclAccessTools {
 		if (Acls.WILDCARD.equals(host) && bindings.stream()
 			.anyMatch(b -> !Acls.WILDCARD.equals(b.entry().host())
 					&& AclEvaluator.principalMatches(b.entry().principal(), principal))) {
-			notes.add("Bu principal için host'a özel ACL'ler var; host=* ile sadece host'u * olanlar değerlendirildi. "
-					+ "İstemci IP'sini host parametresiyle verin.");
+			notes.add("This principal has host-specific ACLs; with host=* only ACLs whose host is * were evaluated. "
+					+ "Pass the client IP in the host parameter.");
 		}
 		if (type == ResourceType.CLUSTER && !Acls.CLUSTER_NAME.equals(name)) {
-			notes.add("CLUSTER kaynağının adı her zaman " + Acls.CLUSTER_NAME + " olmalı");
+			notes.add("The CLUSTER resource name must always be " + Acls.CLUSTER_NAME);
 		}
 		if (operation == AclOperation.IDEMPOTENT_WRITE && type == ResourceType.CLUSTER && !d.allowed()
 				&& !Boolean.TRUE.equals(broker.idempotentWriteRequired())) {
-			notes.add("Kafka 2.8+ broker'larda (KRaft dahil) idempotent producer IDEMPOTENT_WRITE olmadan da çalışır: "
-					+ "herhangi bir topic'te WRITE yetkisi yeterli (KIP-679); bu karar sadece IDEMPOTENT_WRITE ACL'ini "
-					+ "değerlendirir");
+			notes.add("On Kafka 2.8+ brokers (KRaft included) the idempotent producer also works without IDEMPOTENT_WRITE: "
+					+ "WRITE on any topic is enough (KIP-679); this decision only evaluates the IDEMPOTENT_WRITE "
+					+ "ACL");
 		}
 		if (broker.customAuthorizerNote() != null) {
 			notes.add(broker.customAuthorizerNote());
@@ -161,7 +161,7 @@ public class AclAccessTools {
 		}
 		BrokerSecurity.SuperUsers superUsers = broker.superUsers(call.strings("superUsers"));
 		BrokerSecurity.AllowEveryone allowEveryone = broker.allowEveryone(allowEveryoneParam(call));
-		// ACL'ler süper kullanıcılar olmadan değerlendirilir; süper kullanıcılar ayrıca işaretlenir.
+		// ACLs are evaluated without super users; super users are flagged separately.
 		AclEvaluator evaluator = new AclEvaluator(bindings, Set.of(), allowEveryone.value());
 		Set<String> principals = new TreeSet<>();
 		bindings.forEach(b -> principals.add(b.entry().principal()));
@@ -194,7 +194,7 @@ public class AclAccessTools {
 					}
 				}
 				boolean superUser = superUsers.contains(p);
-				// Süper kullanıcıya DENY uygulanmaz; diğerlerinde host'a özel DENY'ler de gösterilir.
+				// DENY does not apply to a super user; for others host-specific DENYs are shown too.
 				boolean hasDeny = !superUser && !denying.isEmpty();
 				if (!allowedHosts.isEmpty() || superUser) {
 					boolean everywhere = !hasDeny
@@ -214,17 +214,17 @@ public class AclAccessTools {
 		List<String> notes = new ArrayList<>();
 		if (bindings.isEmpty()) {
 			notes.add(allowEveryone.assumed()
-					? "Topic'e uygulanan hiç ACL yok; allow.everyone.if.no.acl.found bilinmiyor (false varsayıldı): "
-							+ "false ise süper kullanıcılar dışında kimse erişemez, true ise herkes erişebilir"
+					? "No ACLs apply to the topic; allow.everyone.if.no.acl.found unknown (assumed false): "
+							+ "if false only super users can access it, if true everyone can"
 					: allowEveryone.value()
-							? "Topic'e uygulanan hiç ACL yok ve allow.everyone.if.no.acl.found=true: herkes erişebilir"
-							: "Topic'e uygulanan hiç ACL yok: süper kullanıcılar dışında kimse erişemez (allow.everyone.if.no.acl.found=false)");
+							? "No ACLs apply to the topic and allow.everyone.if.no.acl.found=true: everyone can access it"
+							: "No ACLs apply to the topic: only super users can access it (allow.everyone.if.no.acl.found=false)");
 			if (allowEveryone.note() != null) {
 				notes.add(allowEveryone.note());
 			}
 		}
 		if (principals.contains(Acls.WILDCARD_PRINCIPAL)) {
-			notes.add("User:* herkesi temsil eder: ALLOW ise açıkça DENY edilmeyen her kullanıcı erişebilir");
+			notes.add("User:* means everyone: with ALLOW, every user that is not explicitly denied can access it");
 		}
 		if (superUsers.note() != null) {
 			notes.add(superUsers.note());
@@ -287,7 +287,7 @@ public class AclAccessTools {
 					wildcardCount++;
 				}
 			}
-			// Bu deseni kapsayan diğer desenlerin (LITERAL "*", PREFIXED önek) ALLOW/DENY'leri de etkilidir.
+			// ALLOW/DENYs of other patterns that cover this pattern (LITERAL "*", PREFIXED prefix) also take effect.
 			Set<AclOperation> effectiveAllow = EnumSet.noneOf(AclOperation.class);
 			effectiveAllow.addAll(allow);
 			Set<AclOperation> effectiveDeny = EnumSet.noneOf(AclOperation.class);
@@ -320,13 +320,13 @@ public class AclAccessTools {
 		boolean superUser = superUsers.contains(principal);
 		List<String> notes = new ArrayList<>();
 		if (superUser) {
-			notes.add("Principal süper kullanıcı: ACL'lerden bağımsız olarak tüm işlemlere yetkili");
+			notes.add("Principal is a super user: authorized for every operation regardless of ACLs");
 		}
 		else if (!superUsers.known()) {
-			notes.add("super.users bilinmiyor (broker gizli döndürdü); principal süper kullanıcıysa tüm işlemlere yetkilidir");
+			notes.add("super.users unknown (the broker returned it as hidden); if the principal is a super user it is authorized for every operation");
 		}
 		if (bindings.isEmpty()) {
-			notes.add("Bu principal'a uygulanan ACL yok");
+			notes.add("No ACLs apply to this principal");
 		}
 		Map<String, Object> out = Results.map("principal", principal, "superUser", superUser,
 				"includeWildcardPrincipal", wildcard, "summary",
@@ -337,7 +337,7 @@ public class AclAccessTools {
 		return out;
 	}
 
-	/** allowEveryoneIfNoAclFound parametresi; verilmediyse null. */
+	/** allowEveryoneIfNoAclFound parameter; null if not given. */
 	private static Boolean allowEveryoneParam(ToolCall call) {
 		return call.has(ALLOW_EVERYONE_PARAM) ? call.bool(ALLOW_EVERYONE_PARAM, false) : null;
 	}

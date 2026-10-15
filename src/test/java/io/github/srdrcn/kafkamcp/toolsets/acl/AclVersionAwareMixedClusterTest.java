@@ -52,11 +52,11 @@ import io.github.srdrcn.kafkamcp.support.TestConfigs;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * Sürüme ve gizli broker ayarlarına bağlı ACL davranışı karışık ortamda: producer/streams preset'lerinde
- * CLUSTER IDEMPOTENT_WRITE (Kafka 2.8 öncesi ZooKeeper broker'ları, KIP-679), acls_explain'in
- * IDEMPOTENT_WRITE notu ve gizli allow.everyone.if.no.acl.found için allowEveryoneIfNoAclFound parametresi.
- * Eski broker, describeConfigs'i inter.broker.protocol.version=2.7-IV2 döndüren Admin proxy'siyle
- * canlandırılır; diğer her istek gerçek ZooKeeper (3.9) broker'ına gider.
+ * ACL behaviour that depends on the version and on hidden broker settings, in the mixed environment: CLUSTER
+ * IDEMPOTENT_WRITE in the producer/streams presets (ZooKeeper brokers older than Kafka 2.8, KIP-679), the
+ * IDEMPOTENT_WRITE note of acls_explain and the allowEveryoneIfNoAclFound parameter for a hidden
+ * allow.everyone.if.no.acl.found. The old broker is simulated with an Admin proxy whose describeConfigs returns
+ * inter.broker.protocol.version=2.7-IV2; every other request goes to the real ZooKeeper (3.9) broker.
  */
 class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 
@@ -79,7 +79,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 				&& b.entry().operation() == AclOperation.IDEMPOTENT_WRITE;
 	}
 
-	/** ZooKeeper cluster'ına kullanıcı olarak idempotent producer ile tek mesaj: başarılıysa null, değilse kök hata. */
+	/** Single message to the ZooKeeper cluster as the user with an idempotent producer: null on success, otherwise the root error. */
 	private static Throwable zkIdempotentProduceError(String user, String topic) {
 		Map<String, Object> o = new HashMap<>(KafkaTestCluster.saslProperties(user));
 		o.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
@@ -101,9 +101,9 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * ZooKeeper 3.9 (IBP 3.9-IV0) ve KRaft: preset'e IDEMPOTENT_WRITE eklenmez; gerçek idempotent producer
-	 * sadece topic WRITE/DESCRIBE ile yazabilir (KIP-679). acls_explain IDEMPOTENT_WRITE için DENY der ama
-	 * bunun 2.8+ broker'da producer'ı engellemediğini not eder.
+	 * ZooKeeper 3.9 (IBP 3.9-IV0) and KRaft: the preset does not add IDEMPOTENT_WRITE; a real idempotent producer
+	 * can write with topic WRITE/DESCRIBE only (KIP-679). acls_explain says DENY for IDEMPOTENT_WRITE but notes
+	 * that this does not block the producer on a 2.8+ broker.
 	 */
 	@Test
 	void modernBrokersNeedNoIdempotentWriteInPresets() throws Exception {
@@ -112,7 +112,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 		String topic = unique("mxidem");
 		createTopic(zkAdmin(), topic);
 		try {
-			// hiçbir topic'te WRITE yokken InitProducerId (Cluster) ya da metadata (Topic) yetkisi reddedilir
+			// without WRITE on any topic, InitProducerId (Cluster) or metadata (Topic) authorization is denied
 			assertThat(zkIdempotentProduceError(user, topic)).isInstanceOfAny(ClusterAuthorizationException.class,
 					TopicAuthorizationException.class);
 			JsonNode producer = ok("acls_create", zkArgs("principal", user, "preset", "producer", "topic", topic));
@@ -126,7 +126,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 			JsonNode explain = ok("acls_explain", zkArgs("principal", user, "operation", "IDEMPOTENT_WRITE",
 					"resourceType", "CLUSTER", "resourceName", Acls.CLUSTER_NAME));
 			assertThat(explain.get("decision").asText()).isEqualTo("DENY");
-			assertThat(explain.get("notes").toString()).contains("KIP-679").contains("WRITE yetkisi yeterli");
+			assertThat(explain.get("notes").toString()).contains("KIP-679").contains("WRITE on any topic is enough");
 		}
 		finally {
 			for (AclBinding b : aclsOf(zkAdmin(), p)) {
@@ -138,7 +138,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 				zkAdmin().deleteTopics(List.of(topic)).all().get(15, TimeUnit.SECONDS);
 			}
 			catch (Exception ignored) {
-				// temizlik
+				// cleanup
 			}
 		}
 
@@ -160,8 +160,8 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * Kafka 2.8 öncesi ZooKeeper broker'ı (IBP 2.7-IV2): idempotent producer CLUSTER IDEMPOTENT_WRITE ister.
-	 * producer (transactionalId'siz) ve streams preset'leri bunu ekler; transactional producer eklemez.
+	 * ZooKeeper broker older than Kafka 2.8 (IBP 2.7-IV2): the idempotent producer needs CLUSTER IDEMPOTENT_WRITE.
+	 * The producer (without transactionalId) and streams presets add it; the transactional producer does not.
 	 */
 	@Test
 	void pre28ZooKeeperBrokerGetsIdempotentWrite() throws Exception {
@@ -179,7 +179,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 			assertThat(aclsOf(zkAdmin(), p)).contains(new AclBinding(CLUSTER,
 					new AccessControlEntry(p, "*", AclOperation.IDEMPOTENT_WRITE, AclPermissionType.ALLOW)));
 
-			// eski broker'da IDEMPOTENT_WRITE kararı gerçekten gerekli: KIP-679 notu yok
+			// on the old broker the IDEMPOTENT_WRITE decision really matters: no KIP-679 note
 			JsonNode explain = run(accessTools::explain, old, zkArgs("principal", "bob", "operation",
 					"IDEMPOTENT_WRITE", "resourceType", "CLUSTER", "resourceName", Acls.CLUSTER_NAME));
 			assertThat(explain.get("decision").asText()).isEqualTo("DENY");
@@ -202,13 +202,13 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 				deleteAllFor(zkAdmin(), txPrincipal);
 			}
 
-			// mod bilinmiyor (process.roles ve zookeeper.connect okunamadı): binding yok, not var
+			// mode unknown (process.roles and zookeeper.connect unreadable): no binding, but a note
 			KafkaClients unknown = clientsWith(Map.of("zookeeper.connect", "", "process.roles", ""));
 			String q = p + "-unknown";
 			try {
 				JsonNode u = run(writeTools::create, unknown, zkArgs("principal", q, "preset", "producer", "topic", topic));
 				assertThat(u.get("created").asInt()).isEqualTo(2);
-				assertThat(u.get("notes").toString()).contains("okunamadı").contains("enable.idempotence=false");
+				assertThat(u.get("notes").toString()).contains("Could not read").contains("enable.idempotence=false");
 			}
 			finally {
 				deleteAllFor(zkAdmin(), q);
@@ -220,8 +220,8 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * İki mod da allow.everyone.if.no.acl.found'u gizli döndürür (her ikisinde de false): parametre verilmezse
-	 * karar varsayım olarak ifade edilir; verilirse o değer kullanılır.
+	 * Both modes return allow.everyone.if.no.acl.found as hidden (false in both): without the parameter the
+	 * decision is phrased as an assumption; with it, that value is used.
 	 */
 	@ParameterizedTest
 	@ValueSource(strings = { ZK_CLUSTER, TestConfigs.CLUSTER })
@@ -236,7 +236,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 			props.put("default.api.timeout.ms", 10_000);
 			props.put("request.timeout.ms", 5_000);
 			try (Admin bob = Admin.create(props)) {
-				// gerçek broker: ACL'siz kaynakta reddeder (allow.everyone.if.no.acl.found=false)
+				// real broker: denies on a resource without ACLs (allow.everyone.if.no.acl.found=false)
 				Throwable error = null;
 				try {
 					bob.describeTopics(List.of(topic)).allTopicNames().get(15, TimeUnit.SECONDS);
@@ -250,45 +250,45 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 			JsonNode assumed = ok("acls_explain", argsOn(cluster, "principal", "bob", "operation", "READ",
 					"resourceType", "TOPIC", "resourceName", topic));
 			assertThat(assumed.get("decision").asText()).isEqualTo("DENY");
-			assertThat(assumed.get("reason").asText()).contains("false varsayıldı").contains("true ise ALLOW");
+			assertThat(assumed.get("reason").asText()).contains("assumed false").contains("ALLOW if it is true");
 			assertThat(assumed.get("allowEveryoneIfNoAclFound").asBoolean()).isFalse();
-			assertThat(assumed.get("notes").toString()).contains("allowEveryoneIfNoAclFound parametresiyle");
+			assertThat(assumed.get("notes").toString()).contains("pass it in allowEveryoneIfNoAclFound");
 
 			JsonNode open = ok("acls_explain", argsOn(cluster, "principal", "bob", "operation", "READ",
 					"resourceType", "TOPIC", "resourceName", topic, "allowEveryoneIfNoAclFound", true));
 			assertThat(open.get("decision").asText()).isEqualTo("ALLOW");
 			assertThat(open.get("reason").asText()).contains("allow.everyone.if.no.acl.found=true");
 			assertThat(open.get("allowEveryoneIfNoAclFound").asBoolean()).isTrue();
-			assertThat(open.get("notes").toString()).contains("parametresindeki değer (true)");
+			assertThat(open.get("notes").toString()).contains("allowEveryoneIfNoAclFound parameter (true)");
 
 			JsonNode closed = ok("acls_explain", argsOn(cluster, "principal", "bob", "operation", "READ",
 					"resourceType", "TOPIC", "resourceName", topic, "allowEveryoneIfNoAclFound", false));
 			assertThat(closed.get("decision").asText()).isEqualTo("DENY");
 			assertThat(closed.get("reason").asText()).contains("allow.everyone.if.no.acl.found=false")
-				.doesNotContain("varsayıldı");
+				.doesNotContain("assumed");
 
 			JsonNode who = ok("acls_who_can_access_topic", argsOn(cluster, "topic", topic));
 			assertThat(who.get("aclCount").asInt()).isZero();
-			assertThat(who.get("notes").toString()).contains("false varsayıldı")
-				.contains("true ise herkes erişebilir")
-				.doesNotContain("kimse erişemez (allow.everyone.if.no.acl.found=false)");
+			assertThat(who.get("notes").toString()).contains("assumed false")
+				.contains("if true everyone can")
+				.doesNotContain("only super users can access it (allow.everyone.if.no.acl.found=false)");
 			JsonNode whoOpen = ok("acls_who_can_access_topic",
 					argsOn(cluster, "topic", topic, "allowEveryoneIfNoAclFound", true));
 			assertThat(whoOpen.get("allowEveryoneIfNoAclFound").asBoolean()).isTrue();
-			assertThat(whoOpen.get("notes").toString()).contains("=true: herkes erişebilir")
-				.doesNotContain("varsayıldı");
+			assertThat(whoOpen.get("notes").toString()).contains("=true: everyone can access it")
+				.doesNotContain("assumed");
 			JsonNode whoClosed = ok("acls_who_can_access_topic",
 					argsOn(cluster, "topic", topic, "allowEveryoneIfNoAclFound", false));
 			assertThat(whoClosed.get("notes").toString())
-				.contains("kimse erişemez (allow.everyone.if.no.acl.found=false)")
-				.doesNotContain("varsayıldı");
+				.contains("only super users can access it (allow.everyone.if.no.acl.found=false)")
+				.doesNotContain("assumed");
 		}
 		finally {
 			try {
 				admin.deleteTopics(List.of(topic)).all().get(15, TimeUnit.SECONDS);
 			}
 			catch (Exception ignored) {
-				// temizlik
+				// cleanup
 			}
 		}
 	}
@@ -304,7 +304,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 		return JSON.valueToTree(tool.apply(new ToolCall("test", args, clients, Instant.now().plusSeconds(30))));
 	}
 
-	/** ZooKeeper cluster'ının broker config'lerinde verilen anahtarları değiştiren Admin ile KafkaClients. */
+	/** KafkaClients with an Admin that overrides the given keys in the ZooKeeper cluster's broker configs. */
 	private KafkaClients clientsWith(Map<String, String> overrides) {
 		Admin proxied = brokerConfigOverride(zkAdmin(), overrides);
 		return new KafkaClients(clients.config()) {
@@ -328,7 +328,7 @@ class AclVersionAwareMixedClusterTest extends MixedClusterIntegrationTest {
 					if (!"describeConfigs".equals(method.getName())) {
 						return result;
 					}
-					// KafkaIntegrationTest.Config ile çakışmaması için tam ad
+					// fully qualified name to avoid a clash with KafkaIntegrationTest.Config
 					Map<ConfigResource, KafkaFuture<org.apache.kafka.clients.admin.Config>> futures = new HashMap<>();
 					((DescribeConfigsResult) result).all().get(15, TimeUnit.SECONDS).forEach((resource, config) -> {
 						List<ConfigEntry> entries = new ArrayList<>();

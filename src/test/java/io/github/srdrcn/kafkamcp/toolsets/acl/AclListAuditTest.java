@@ -31,7 +31,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
-/** acls_list ve acls_audit. */
+/** acls_list and acls_audit. */
 class AclListAuditTest extends KafkaIntegrationTest {
 
 	@Test
@@ -62,19 +62,19 @@ class AclListAuditTest extends KafkaIntegrationTest {
 		assertThat(ok("acls_list", args("principal", p, "operation", "READ")).get("total").asInt()).isEqualTo(2);
 		assertThat(ok("acls_list", args("resourceType", "TOPIC", "resourceName", topic)).get("total").asInt())
 			.isEqualTo(2);
-		// MATCH: topic adı prefix'le de eşleşir
+		// MATCH: the topic name also matches the prefix
 		assertThat(ok("acls_list", args("resourceType", "TOPIC", "resourceName", topic + "-x", "patternType", "MATCH"))
 			.get("acls")
 			.findValuesAsText("patternType")).contains("PREFIXED");
-		// filter: principal ya da kaynak adı üzerinde regex
+		// filter: regex on the principal or resource name
 		JsonNode filtered = ok("acls_list", args("filter", "^" + group + "$", "limit", 5));
 		assertThat(filtered.get("total").asInt()).isEqualTo(1);
 		JsonNode limited = ok("acls_list", args("principal", p, "limit", 1));
 		assertThat(limited.get("returned").asInt()).isEqualTo(1);
 		assertThat(limited.get("truncated").asBoolean()).isTrue();
 
-		assertThat(error("acls_list", args("resourceType", "FOO"))).contains("Geçersiz resourceType");
-		assertThat(error("acls_list", args("filter", "(["))).contains("Geçersiz regex");
+		assertThat(error("acls_list", args("resourceType", "FOO"))).contains("Invalid resourceType");
+		assertThat(error("acls_list", args("filter", "(["))).contains("Invalid regex");
 	}
 
 	@Test
@@ -116,11 +116,11 @@ class AclListAuditTest extends KafkaIntegrationTest {
 			assertThat(field(c.at("/unusedPrefixedTopicAcls/samples"), "resourceName"))
 				.containsExactly(tag + "-nomatch-");
 			assertThat(c.at("/orphanTopicAcls/description").asText()).isNotBlank();
-			// super.users gizli → not düşülür
+			// super.users hidden → a note is added
 			assertThat(r.get("notes").toString()).contains("super.users");
 
 			assertThat(c.at("/unverifiedTopicAcls/count").asInt()).isZero();
-			assertThat(r.get("notes").toString()).contains("DESCRIBE yetkisiyle sınırlı");
+			assertThat(r.get("notes").toString()).contains("limited by the DESCRIBE permission");
 
 			JsonNode limited = ok("acls_audit", args("filter", tag, "limit", 1));
 			assertThat(limited.at("/categories/orphanTopicAcls/count").asInt()).isEqualTo(2);
@@ -134,8 +134,8 @@ class AclListAuditTest extends KafkaIntegrationTest {
 	}
 
 	/**
-	 * Sunucunun Kafka kullanıcısı (bob) sadece bazı topic'leri görebiliyor: göremediği var olan topic'in ACL'i
-	 * sahipsiz sayılmaz (doğrulanamadı), görebildiği ama olmayan topic'inki sahipsiz kalır.
+	 * The server's Kafka user (bob) can only see some topics: the ACL of an existing topic it cannot see is not
+	 * counted as orphaned (unverified), while that of a visible but missing topic stays orphaned.
 	 */
 	@Test
 	void auditDoesNotReportTopicsInvisibleToServerAsOrphans() throws Exception {

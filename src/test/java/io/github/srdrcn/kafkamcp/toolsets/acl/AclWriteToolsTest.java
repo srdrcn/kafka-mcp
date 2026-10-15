@@ -34,7 +34,7 @@ import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** acls_create (tek binding, preset'ler, doğrulamalar), acls_delete ve readOnly reddi. */
+/** acls_create (single binding, presets, validation), acls_delete and readOnly rejection. */
 class AclWriteToolsTest extends KafkaIntegrationTest {
 
 	@Test
@@ -49,7 +49,7 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(acls).containsExactly(AclTestSupport.binding(ResourceType.TOPIC, topic, PatternType.LITERAL, p,
 				"10.0.0.9", AclOperation.WRITE, AclPermissionType.DENY));
 
-		// sadece ad → User:, CLUSTER adı varsayılan kafka-cluster
+		// bare name → User:, CLUSTER name defaults to kafka-cluster
 		String bare = unique("bare");
 		JsonNode cluster = ok("acls_create", args("principal", bare, "resourceType", "CLUSTER", "operation", "DESCRIBE"));
 		assertThat(cluster.at("/bindings/0/principal").asText()).isEqualTo("User:" + bare);
@@ -87,7 +87,7 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 						AclPermissionType.ALLOW),
 				AclTestSupport.binding(ResourceType.TOPIC, topic + "-out", PatternType.LITERAL, p, AclOperation.WRITE,
 						AclPermissionType.ALLOW));
-		// 3 + 4 + 7 binding; aynı topic'teki READ/DESCRIBE/DESCRIBE tekrarları tek sayılır
+		// 3 + 4 + 7 bindings; duplicate READ/DESCRIBE/DESCRIBE on the same topic count once
 		assertThat(acls).hasSize(11);
 	}
 
@@ -95,30 +95,30 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 	void parameterCombinationsAreValidated() {
 		String p = "User:" + unique("bad");
 		assertThat(error("acls_create", args("principal", p, "preset", "producer", "topic", "t", "resourceType", "TOPIC")))
-			.contains("preset ile birlikte verilmez");
+			.contains("cannot be used with preset");
 		assertThat(error("acls_create", args("principal", p, "resourceType", "TOPIC", "resourceName", "t")))
-			.contains("Eksik parametre: operation");
+			.contains("Missing parameter: operation");
 		assertThat(error("acls_create", args("principal", p, "resourceType", "TOPIC", "operation", "READ")))
 			.contains("resourceName");
 		assertThat(error("acls_create", args("principal", p, "preset", "consumer", "topic", "t")))
-			.contains("group zorunlu");
+			.contains("group is required");
 		assertThat(error("acls_create", args("principal", p, "preset", "streams", "topic", "t")))
-			.contains("applicationId zorunlu");
-		assertThat(error("acls_create", args("principal", p, "preset", "producer"))).contains("topic zorunlu");
+			.contains("applicationId is required");
+		assertThat(error("acls_create", args("principal", p, "preset", "producer"))).contains("topic is required");
 		assertThat(error("acls_create",
 				args("principal", p, "resourceType", "TOPIC", "resourceName", "t", "operation", "READ", "group", "g")))
-			.contains("sadece preset ile");
+			.contains("can only be used with preset");
 		assertThat(error("acls_create",
 				args("principal", p, "preset", "consumer", "topic", "t", "group", "g", "transactionalId", "x")))
 			.contains("preset=producer");
 		assertThat(error("acls_create", args("principal", p, "preset", "producer", "topic", "t", "permission", "DENY")))
-			.contains("sadece ALLOW");
+			.contains("only generate ALLOW");
 		assertThat(error("acls_create",
 				args("principal", p, "resourceType", "CLUSTER", "resourceName", "x", "operation", "ALTER")))
 			.contains("kafka-cluster");
 		assertThat(error("acls_create", args("principal", p, "resourceType", "ANY", "resourceName", "t", "operation",
-				"READ"))).contains("Geçersiz resourceType");
-		assertThat(error("acls_create", args("principal", p, "preset", "admin", "topic", "t"))).contains("Geçersiz preset");
+				"READ"))).contains("Invalid resourceType");
+		assertThat(error("acls_create", args("principal", p, "preset", "admin", "topic", "t"))).contains("Invalid preset");
 	}
 
 	@Test
@@ -139,7 +139,7 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 		await().atMost(Duration.ofSeconds(30))
 			.pollInterval(Duration.ofMillis(500))
 			.untilAsserted(() -> assertThat(produceError("alice", topic)).isNull());
-		// bob hâlâ yetkisiz: explain ile gerçek aynı
+		// bob is still unauthorized: explain matches the real broker
 		assertThat(ok("acls_explain",
 				args("principal", "bob", "operation", "WRITE", "resourceType", "TOPIC", "resourceName", topic))
 			.get("decision")
@@ -147,7 +147,7 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(produceError("bob", topic)).isInstanceOf(TopicAuthorizationException.class);
 	}
 
-	/** Kullanıcı olarak tek mesaj üretir; hata yoksa null, varsa kök Kafka hatası. */
+	/** Produces a single message as the user; null if there is no error, otherwise the root Kafka error. */
 	private static Throwable produceError(String user, String topic) {
 		Map<String, Object> props = KafkaTestCluster.clientProperties(user);
 		props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
@@ -194,11 +194,11 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 
 		JsonNode none = ok("acls_delete", args("principal", p, "resourceType", "TOPIC", "resourceName", topic));
 		assertThat(none.get("deleted").asInt()).isZero();
-		assertThat(none.get("note").asText()).contains("hiçbir şey silinmedi");
+		assertThat(none.get("note").asText()).contains("nothing was deleted");
 		assertThat(aclsOf(testAdmin(), p)).hasSize(1);
 	}
 
-	/** MATCH kaynağı kapsayan "*" ve PREFIXED ACL'leri de silerdi: reddedilir; ANY sadece bu adı siler. */
+	/** MATCH would also delete the "*" and PREFIXED ACLs covering the resource: rejected; ANY only deletes this name. */
 	@Test
 	void deleteRefusesMatchAndAnyKeepsWildcardAndPrefixed() throws Exception {
 		String p = "User:" + unique("delm");
@@ -230,7 +230,7 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 	void deleteRefusesWideFilters() {
 		assertThat(error("acls_delete", args("principal", "User:x", "resourceType", "TOPIC"))).contains("resourceName");
 		assertThat(error("acls_delete", args("principal", "User:x", "resourceType", "ANY", "resourceName", "t")))
-			.contains("geniş silme");
+			.contains("broad delete");
 		assertThat(error("acls_delete", args("resourceType", "TOPIC", "resourceName", "t"))).contains("principal");
 		assertThat(error("acls_delete", args("principal", "User:x", "resourceName", "t"))).contains("resourceType");
 	}
@@ -243,14 +243,14 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(error("acls_delete", args("cluster", TestConfigs.READ_ONLY_CLUSTER, "principal", "User:x",
 				"resourceType", "TOPIC", "resourceName", "t")))
 			.contains("readOnly");
-		// okuma araçları readOnly cluster'da çalışır
+		// read tools work on the readOnly cluster
 		assertThat(ok("acls_list", args("cluster", TestConfigs.READ_ONLY_CLUSTER, "limit", 1)).has("total")).isTrue();
 	}
 
 	@Test
 	void principalValidation() {
 		assertThat(error("acls_create", args("principal", "User:", "resourceType", "TOPIC", "resourceName", "t",
-				"operation", "READ"))).contains("Geçersiz principal");
+				"operation", "READ"))).contains("Invalid principal");
 		assertThat(List.of(error("acls_create", args("resourceType", "TOPIC")))).anyMatch(e -> e.contains("principal"));
 	}
 

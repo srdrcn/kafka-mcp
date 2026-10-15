@@ -44,32 +44,32 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 @Component
 public class SecurityTools {
 
-	/** describeUserScramCredentials gereksinimi: ZooKeeper'da KIP-554 (2.7), KRaft'ta KIP-900 (3.5). */
-	static final String SCRAM_REQUIREMENT = "SCRAM kullanıcılarını listelemek ZooKeeper'da Kafka 2.7+, "
-			+ "KRaft'ta 3.5+ (metadata.version 3.5-IV2+) gerektirir";
+	/** describeUserScramCredentials requirement: KIP-554 (2.7) on ZooKeeper, KIP-900 (3.5) on KRaft. */
+	static final String SCRAM_REQUIREMENT = "listing SCRAM users requires Kafka 2.7+ on ZooKeeper, "
+			+ "3.5+ on KRaft (metadata.version 3.5-IV2+)";
 
-	/** describeClientQuotas (KIP-546) gereksinimi. */
-	static final String QUOTA_REQUIREMENT = "kotaları Admin API ile okumak Kafka 2.6+ gerektirir";
+	/** describeClientQuotas (KIP-546) requirement. */
+	static final String QUOTA_REQUIREMENT = "reading quotas with the Admin API requires Kafka 2.6+";
 
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
-			.read("scram_users_list", "SCRAM kullanıcılarını mekanizma ve iterasyon sayısıyla listeler (gizli bilgi dönmez)")
+			.read("scram_users_list", "List SCRAM users with mechanism and iteration count (no secrets returned)")
 			.listParams()
-			.param("filter", P.string("Kullanıcı adı filtresi (regex, kısmi eşleşme)"))
+			.param("filter", P.string("User name filter (regex, partial match)"))
 			.handler(this::scramUsers),
 				ToolSpec
 					.read("delegation_tokens_list",
-							"Delegation token'ları listeler: id, sahip, yenileyenler, süreler, süresi dolmuş mu (HMAC dönmez)")
+							"List delegation tokens: id, owner, renewers, timestamps, expired or not (no HMAC returned)")
 					.listParams()
-					.param("filter", P.string("Token id ya da sahip filtresi (regex, kısmi eşleşme)"))
+					.param("filter", P.string("Token id or owner filter (regex, partial match)"))
 					.handler(this::delegationTokens),
 				ToolSpec
 					.read("kerberos_self_check",
-							"Bu sunucunun Kerberos ayarlarını (krb5.conf, keytab, principal) kontrol eder; login ve Kafka bağlantısını dener")
+							"Check this server's Kerberos setup (krb5.conf, keytab, principal); try a login and a Kafka connection")
 					.handler(this::kerberosSelfCheck),
 				ToolSpec
 					.read("security_summary",
-							"Güvenlik özeti: metadata modu (KRaft/ZooKeeper), listener/SASL/authorizer ayarları, ACL/SCRAM/kota/token sayıları, bu sunucunun bağlantısı")
+							"Security summary: metadata mode (KRaft/ZooKeeper), listener/SASL/authorizer settings, ACL/SCRAM/quota/token counts, this server's connection")
 					.handler(this::securitySummary));
 	}
 
@@ -135,17 +135,17 @@ public class SecurityTools {
 		return out;
 	}
 
-	/** Delegation token kapalı/desteklenmiyor hataları için Türkçe not; başka hata ise null. */
+	/** Note for delegation-token-disabled/unsupported errors; null for any other error. */
 	public static String tokenNote(Throwable e) {
 		if (Acls.causedBy(e, DelegationTokenDisabledException.class)) {
-			return "Delegation token'lar bu cluster'da kapalı (broker'da delegation.token.secret.key tanımlı değil; "
-					+ "Kafka 3.0 öncesi ZooKeeper broker'larında delegation.token.master.key)";
+			return "Delegation tokens are disabled on this cluster (delegation.token.secret.key is not set on the broker; "
+					+ "delegation.token.master.key on ZooKeeper brokers older than Kafka 3.0)";
 		}
 		if (Acls.causedBy(e, UnsupportedByAuthenticationException.class)) {
-			return "Delegation token istekleri bu bağlantı tipinde yapılamaz (PLAINTEXT, tek yönlü SSL ya da token ile kimlik doğrulama)";
+			return "Delegation token requests are not allowed on this connection type (PLAINTEXT, one-way SSL or token authentication)";
 		}
 		if (Acls.causedBy(e, UnsupportedVersionException.class)) {
-			return "Broker delegation token API'sini desteklemiyor (sürüm): ZooKeeper'da Kafka 1.1+, KRaft'ta 3.6+ gerekir";
+			return "Broker does not support the delegation token API (version): requires Kafka 1.1+ on ZooKeeper, 3.6+ on KRaft";
 		}
 		return null;
 	}
@@ -162,8 +162,8 @@ public class SecurityTools {
 			settings = new KerberosCheck.Settings("kerberos", kerberos.getKrb5Conf(), kerberos.getKeytab(),
 					kerberos.getPrincipal(), kerberos.getServiceName());
 			if (!client.gssapi()) {
-				notes.add("kerberos bloğu tanımlı ama bu cluster properties ile sasl.mechanism=" + client.saslMechanism()
-						+ " (" + client.securityProtocol() + ") kullanıyor; Kafka bağlantısı Kerberos kullanmıyor");
+				notes.add("A kerberos block is configured but this cluster uses sasl.mechanism=" + client.saslMechanism()
+						+ " (" + client.securityProtocol() + ") via properties; the Kafka connection does not use Kerberos");
 			}
 		}
 		else if (client.gssapi() && client.jaasOption("keyTab") != null) {
@@ -173,9 +173,9 @@ public class SecurityTools {
 		}
 		if (settings == null) {
 			String mech = client.saslMechanism();
-			out.put("note", "Kerberos yapılandırılmamış (config'te kerberos bloğu yok); bu cluster'a security.protocol="
+			out.put("note", "Kerberos is not configured (no kerberos block in the config); this cluster is reached with security.protocol="
 					+ client.securityProtocol() + (mech == null ? "" : ", sasl.mechanism=" + mech)
-					+ " ile bağlanılıyor. Kerberos login denenmedi.");
+					+ ". Kerberos login was not attempted.");
 		}
 		else {
 			long budget = Math.min(10_000, Math.max(1_000, call.waitMillis() - 4_000));
@@ -184,10 +184,10 @@ public class SecurityTools {
 		Object loginStatus = out.get("login") instanceof Map<?, ?> login ? login.get("status") : null;
 		if (settings != null && client.gssapi() && !"ok".equals(loginStatus)
 				&& Objects.equals(client.jaasOption("keyTab"), settings.keytab())) {
-			// Admin.create aynı Krb5 login'i senkron yapar; KDC'ye ulaşılamıyorsa dakikalarca bloklanabilir.
+			// Admin.create performs the same Krb5 login synchronously; it can block for minutes if the KDC is unreachable.
 			out.put("kafka", Results.map("status", "skipped", "reason",
-					"Kerberos login " + ("skipped".equals(loginStatus) ? "denenemedi" : "başarısız")
-							+ "; Kafka client'ı da aynı ayarlarla GSSAPI login olamayacağı için bağlantı denenmedi"));
+					"Kerberos login " + ("skipped".equals(loginStatus) ? "could not be attempted" : "failed")
+							+ "; the Kafka client cannot log in via GSSAPI with the same settings either, so the connection was not attempted"));
 		}
 		else {
 			out.put("kafka", connectivity(call));
@@ -202,13 +202,13 @@ public class SecurityTools {
 	}
 
 	/**
-	 * Kısa Kafka bağlantı kontrolü: describeCluster clusterId. Client oluşturma (Kerberos login dahil) ayrı
-	 * bir thread'de yapılır ve kalan süreyle sınırlıdır; süre dolarsa {status: timeout} döner.
+	 * Quick Kafka connectivity check: describeCluster clusterId. Client creation (Kerberos login included) runs
+	 * in a separate thread and is bounded by the remaining time; returns {status: timeout} when time runs out.
 	 */
 	public static Map<String, Object> connectivity(ToolCall call) {
 		long timeout = Math.min(5_000, call.waitMillis());
 		if (timeout < 500) {
-			return Results.map("status", "skipped", "reason", "süre kalmadı");
+			return Results.map("status", "skipped", "reason", "no time left");
 		}
 		long start = System.nanoTime();
 		FutureTask<String> task = new FutureTask<>(() -> call
@@ -220,8 +220,9 @@ public class SecurityTools {
 		}
 		catch (TimeoutException e) {
 			task.cancel(true);
-			return Results.map("status", "timeout", "durationMs", elapsed(start), "error", "Kafka client'ı "
-					+ timeout + " ms içinde oluşturulamadı ya da yanıt vermedi (Kerberos login ya da ağ bekleniyor)");
+			return Results.map("status", "timeout", "durationMs", elapsed(start), "error",
+					"Kafka client was not created or did not respond within " + timeout
+							+ " ms (waiting for Kerberos login or network)");
 		}
 		catch (ExecutionException e) {
 			Throwable cause = e.getCause() == null ? e : e.getCause();
@@ -231,7 +232,7 @@ public class SecurityTools {
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			task.cancel(true);
-			return Results.map("status", "error", "error", "Kafka bağlantı kontrolü iptal edildi");
+			return Results.map("status", "error", "error", "Kafka connectivity check was cancelled");
 		}
 	}
 
@@ -304,9 +305,9 @@ public class SecurityTools {
 		List<String> notes = new ArrayList<>();
 		if (broker.error() == null && (broker.hidden(BrokerSecurity.SUPER_USERS)
 				|| broker.hidden(BrokerSecurity.ALLOW_EVERYONE))) {
-			notes.add("super.users / allow.everyone.if.no.acl.found broker tarafından sensitive olarak gizleniyor "
-					+ "(authorizer ayarları; ZooKeeper ve KRaft'ta aynı); değerleri broker config'inden "
-					+ "(server.properties/Helm) kontrol edin");
+			notes.add("super.users / allow.everyone.if.no.acl.found are hidden by the broker as sensitive "
+					+ "(authorizer settings; same on ZooKeeper and KRaft); check their values in the broker config "
+					+ "(server.properties/Helm)");
 		}
 		String customAuthorizer = broker.customAuthorizerNote();
 		if (customAuthorizer != null) {
@@ -314,16 +315,16 @@ public class SecurityTools {
 		}
 		if (ClusterMeta.ZOOKEEPER.equals(mode)
 				&& "false".equalsIgnoreCase(broker.value(BrokerSecurity.ZOOKEEPER_SET_ACL))) {
-			notes.add("ZooKeeper modu: ACL'ler ve SCRAM kimlik bilgileri ZooKeeper'da saklanıyor ve "
-					+ "zookeeper.set.acl=false; ZooKeeper'a ağ erişimi olan herkes bunları okuyup değiştirebilir "
-					+ "(ZooKeeper erişimini kısıtlayın ya da ZooKeeper SASL/mTLS ile zookeeper.set.acl=true kullanın)");
+			notes.add("ZooKeeper mode: ACLs and SCRAM credentials are stored in ZooKeeper and "
+					+ "zookeeper.set.acl=false; anyone with network access to ZooKeeper can read and change them "
+					+ "(restrict ZooKeeper access, or use zookeeper.set.acl=true with ZooKeeper SASL/mTLS)");
 		}
 		String controllerProtocol = broker.controllerSecurityProtocol();
 		if ("PLAINTEXT".equals(controllerProtocol)) {
-			notes.add("KRaft modu: controller listener'ı (" + broker.controllerListener() + ") PLAINTEXT; ACL, SCRAM "
-					+ "ve delegation token metadata'sı broker ile controller'lar arasında şifresiz ve kimlik doğrulamasız "
-					+ "taşınıyor (controller'lar bağlananı ANONYMOUS görür). Controller portlarına ağ erişimini "
-					+ "kısıtlayın ya da SSL/SASL_SSL kullanın");
+			notes.add("KRaft mode: the controller listener (" + broker.controllerListener() + ") is PLAINTEXT; ACL, SCRAM "
+					+ "and delegation token metadata travel between brokers and controllers unencrypted and unauthenticated "
+					+ "(controllers see the peer as ANONYMOUS). Restrict network access to the controller ports "
+					+ "or use SSL/SASL_SSL");
 		}
 		if (!notes.isEmpty()) {
 			out.put("notes", notes);

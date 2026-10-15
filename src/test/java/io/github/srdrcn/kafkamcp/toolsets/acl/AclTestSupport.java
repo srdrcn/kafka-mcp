@@ -23,7 +23,7 @@ import org.apache.kafka.common.resource.ResourceType;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** acl testleri için ACL/topic hazırlama yardımcıları (admin kullanıcısıyla). */
+/** ACL/topic setup helpers for the acl tests (as the admin user). */
 final class AclTestSupport {
 
 	private AclTestSupport() {
@@ -47,7 +47,7 @@ final class AclTestSupport {
 		return binding(ResourceType.TOPIC, topic, PatternType.LITERAL, principal, op, AclPermissionType.DENY);
 	}
 
-	/** ACL'leri oluşturur ve broker'da görünür olana kadar bekler (KRaft'ta kısa gecikme olabilir). */
+	/** Creates the ACLs and waits until they are visible on the broker (there may be a short delay on KRaft). */
 	static void create(Admin admin, AclBinding... bindings) throws Exception {
 		admin.createAcls(List.of(bindings)).all().get(15, TimeUnit.SECONDS);
 		await().atMost(Duration.ofSeconds(15))
@@ -73,7 +73,7 @@ final class AclTestSupport {
 				.noneMatch(List.of(bindings)::contains));
 	}
 
-	/** Principal'ın tüm ACL'lerini siler (test temizliği). */
+	/** Deletes all ACLs of the principal (test cleanup). */
 	static void deleteAllFor(Admin admin, String principal) throws Exception {
 		admin.deleteAcls(List.of(new AclBindingFilter(ResourcePatternFilter.ANY,
 				new AccessControlEntryFilter(principal, null, AclOperation.ANY, AclPermissionType.ANY))))
@@ -96,7 +96,7 @@ final class AclTestSupport {
 		admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get(30, TimeUnit.SECONDS);
 	}
 
-	/** Dizinin üst düzey elemanlarından alanı verilen değere eşit olan ilki. */
+	/** First top-level element of the array whose field equals the given value. */
 	static JsonNode find(JsonNode array, String field, String value) {
 		if (array != null) {
 			for (JsonNode n : array) {
@@ -105,10 +105,10 @@ final class AclTestSupport {
 				}
 			}
 		}
-		throw new AssertionError(field + "=" + value + " bulunamadı: " + array);
+		throw new AssertionError(field + "=" + value + " not found: " + array);
 	}
 
-	/** JSON dizisindeki nesnelerin verilen alan değerleri. */
+	/** Values of the given field of the objects in the JSON array. */
 	static List<String> field(JsonNode array, String field) {
 		List<String> out = new ArrayList<>();
 		if (array != null) {

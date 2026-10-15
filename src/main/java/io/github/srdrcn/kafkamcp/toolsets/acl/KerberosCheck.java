@@ -35,9 +35,9 @@ import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Bu sunucunun Kerberos ayarlarını kontrol eder: krb5.conf (yol, default_realm, realm/kdc'ler, rdns),
- * keytab (yol, okunabilirlik, boyut; içerik asla), principal/realm uyumu ve Krb5LoginModule ile gerçek bir
- * login denemesi (ayrı thread'de, süre sınırlı). Hatalar Türkçe açıklanır.
+ * Checks this server's Kerberos setup: krb5.conf (path, default_realm, realms/kdcs, rdns), keytab (path,
+ * readability, size; never the content), principal/realm match and a real login attempt with Krb5LoginModule
+ * (in a separate thread, time-bounded). Errors are explained in plain language.
  */
 public final class KerberosCheck {
 
@@ -58,24 +58,24 @@ public final class KerberosCheck {
 	private KerberosCheck() {
 	}
 
-	/** Kontrol edilecek ayarlar ({@code source}: kerberos bloğu ya da cluster properties). */
+	/** Settings to check ({@code source}: kerberos block or cluster properties). */
 	public record Settings(String source, String configuredKrb5Conf, String keytab, String principal,
 			String serviceName) {
 	}
 
-	/** krb5.conf'tan okunan (gizli olmayan) bilgiler. */
+	/** (Non-secret) information read from krb5.conf. */
 	public record Krb5Conf(String path, boolean exists, boolean readable, String defaultRealm,
 			Map<String, String> libdefaults, Map<String, Map<String, List<String>>> realms, List<String> includes,
 			String error) {
 
-		/** realm için tanımlı kdc adresleri (yoksa boş). */
+		/** kdc addresses configured for the realm (empty if none). */
 		public List<String> kdcs(String realm) {
 			Map<String, List<String>> r = realms.get(realm);
 			return r == null ? List.of() : r.getOrDefault("kdc", List.of());
 		}
 
 		/**
-		 * JDK kuralı: dns_lookup_kdc, yoksa dns_fallback; ikisi de yoksa true (KDC'ler DNS SRV ile aranır).
+		 * JDK rule: dns_lookup_kdc, otherwise dns_fallback; true if neither is set (KDCs are looked up via DNS SRV).
 		 */
 		public boolean dnsLookupKdc() {
 			Boolean v = bool(libdefaults.get("dns_lookup_kdc"));
@@ -104,7 +104,7 @@ public final class KerberosCheck {
 
 	}
 
-	/** krb5.conf'un efektif yolu: -Djava.security.krb5.conf, yoksa config'teki, yoksa JDK varsayılanı. */
+	/** Effective krb5.conf path: -Djava.security.krb5.conf, otherwise the one from the config, otherwise the JDK default. */
 	public static String effectiveKrb5Conf(String configured) {
 		String p = System.getProperty(KRB5_CONF_PROPERTY);
 		if (p != null && !p.isBlank()) {
@@ -117,14 +117,14 @@ public final class KerberosCheck {
 		return Files.exists(jdk) ? jdk.toString() : "/etc/krb5.conf";
 	}
 
-	/** krb5.conf'u okur: [libdefaults] seçili anahtarlar, [realms] kdc/admin_server, include satırları. */
+	/** Reads krb5.conf: selected [libdefaults] keys, [realms] kdc/admin_server, include lines. */
 	public static Krb5Conf parseKrb5Conf(String path) {
 		Path p = Path.of(path);
 		if (!Files.exists(p)) {
 			return new Krb5Conf(path, false, false, null, Map.of(), Map.of(), List.of(), null);
 		}
 		if (!Files.isReadable(p) || Files.isDirectory(p)) {
-			return new Krb5Conf(path, true, false, null, Map.of(), Map.of(), List.of(), "dosya okunamıyor");
+			return new Krb5Conf(path, true, false, null, Map.of(), Map.of(), List.of(), "file is not readable");
 		}
 		List<String> lines;
 		try {
@@ -186,8 +186,8 @@ public final class KerberosCheck {
 	}
 
 	/**
-	 * Tam kontrol: krb5.conf, keytab, principal/realm ve (krb5.conf varsa) gerçek login.
-	 * @param loginTimeoutMillis login denemesi için en fazla bekleme
+	 * Full check: krb5.conf, keytab, principal/realm and (if krb5.conf exists) a real login.
+	 * @param loginTimeoutMillis maximum wait for the login attempt
 	 */
 	public static Map<String, Object> check(Settings s, long loginTimeoutMillis) {
 		List<String> problems = new ArrayList<>();
@@ -196,20 +196,20 @@ public final class KerberosCheck {
 		Krb5Conf krb5 = parseKrb5Conf(krb5Path);
 		if (s.configuredKrb5Conf() != null && !s.configuredKrb5Conf().isBlank()
 				&& !s.configuredKrb5Conf().equals(krb5Path)) {
-			notes.add("Config'teki krb5Conf (" + s.configuredKrb5Conf() + ") yerine JVM'in kullandığı " + krb5Path
-					+ " geçerli (-D" + KRB5_CONF_PROPERTY + " önceden ayarlı)");
+			notes.add("The JVM uses " + krb5Path + " instead of krb5Conf from the config (" + s.configuredKrb5Conf()
+					+ ") because -D" + KRB5_CONF_PROPERTY + " was already set");
 		}
 		if (!krb5.exists()) {
-			problems.add("krb5.conf bulunamadı: " + krb5Path);
+			problems.add("krb5.conf not found: " + krb5Path);
 		}
 		else if (!krb5.readable()) {
-			problems.add("krb5.conf okunamıyor: " + krb5Path + (krb5.error() == null ? "" : " (" + krb5.error() + ")"));
+			problems.add("krb5.conf is not readable: " + krb5Path + (krb5.error() == null ? "" : " (" + krb5.error() + ")"));
 		}
 		else if (krb5.defaultRealm() == null) {
-			problems.add("krb5.conf'ta [libdefaults] default_realm tanımlı değil");
+			problems.add("krb5.conf has no [libdefaults] default_realm");
 		}
 		if (!krb5.includes().isEmpty()) {
-			notes.add("krb5.conf include/includedir içeriyor; dahil edilen dosyalar ayrıştırılmadı");
+			notes.add("krb5.conf contains include/includedir; included files were not parsed");
 		}
 
 		Map<String, Object> keytab = keytab(s.keytab(), s.principal(), problems);
@@ -220,37 +220,37 @@ public final class KerberosCheck {
 		String effectiveRealm = realm != null ? realm : krb5.defaultRealm();
 		Boolean realmMatches = realm == null || krb5.defaultRealm() == null ? null : realm.equals(krb5.defaultRealm());
 		if (principal == null || principal.isBlank()) {
-			problems.add("principal tanımlı değil");
+			problems.add("principal is not configured");
 		}
 		else if (Boolean.FALSE.equals(realmMatches)) {
-			problems.add("principal realm'i (" + realm + ") default_realm (" + krb5.defaultRealm()
-					+ ") ile aynı değil; cross-realm değilse yanlış realm (büyük/küçük harf dahil)");
+			problems.add("principal realm (" + realm + ") differs from default_realm (" + krb5.defaultRealm()
+					+ "); unless this is cross-realm, the realm is wrong (realm names are case-sensitive)");
 		}
 		if (krb5.readable() && effectiveRealm != null && krb5.kdcs(effectiveRealm).isEmpty()) {
 			if (krb5.dnsLookupKdc()) {
-				notes.add("krb5.conf'ta " + effectiveRealm + " için kdc tanımı yok; KDC'ler DNS SRV kayıtlarıyla "
-						+ "(_kerberos._udp/_tcp." + effectiveRealm + ") aranacak");
+				notes.add("krb5.conf has no kdc entry for " + effectiveRealm + "; KDCs will be looked up via DNS SRV records "
+						+ "(_kerberos._udp/_tcp." + effectiveRealm + ")");
 			}
 			else {
-				problems.add("krb5.conf [realms] altında " + effectiveRealm
-						+ " için kdc tanımı yok (dns_lookup_kdc/dns_fallback = false)");
+				problems.add("krb5.conf [realms] has no kdc entry for " + effectiveRealm
+						+ " (dns_lookup_kdc/dns_fallback = false)");
 			}
 		}
 		if ("true".equalsIgnoreCase(krb5.libdefaults().get("rdns"))) {
-			notes.add("rdns=true: broker adresleri ters DNS ile çözülür; servis principal uyuşmazlığında rdns = false deneyin");
+			notes.add("rdns=true: broker addresses are resolved with reverse DNS; try rdns = false on a service principal mismatch");
 		}
 
 		Map<String, Object> login;
 		if (!krb5.exists()) {
-			login = Results.map("status", "skipped", "reason", "krb5.conf bulunamadı; login denenmedi");
+			login = Results.map("status", "skipped", "reason", "krb5.conf not found; login not attempted");
 		}
 		else if (s.keytab() == null || s.keytab().isBlank() || principal == null || principal.isBlank()) {
-			login = Results.map("status", "skipped", "reason", "keytab/principal tanımlı değil; login denenmedi");
+			login = Results.map("status", "skipped", "reason", "keytab/principal not configured; login not attempted");
 		}
 		else {
 			login = login(s.keytab(), principal, loginTimeoutMillis);
 			if (!"ok".equals(login.get("status"))) {
-				problems.add("Kerberos login başarısız: " + login.get("error"));
+				problems.add("Kerberos login failed: " + login.get("error"));
 			}
 		}
 
@@ -261,10 +261,10 @@ public final class KerberosCheck {
 				"notes", notes.isEmpty() ? null : notes);
 	}
 
-	/** Keytab dosyasının durumu (yol, var mı, okunabilir mi, boyut, principal'ın anahtar tipleri); içerik asla. */
+	/** Keytab file status (path, exists, readable, size, key types of the principal); never the content. */
 	public static Map<String, Object> keytab(String keytab, String principal, List<String> problems) {
 		if (keytab == null || keytab.isBlank()) {
-			problems.add("keytab tanımlı değil");
+			problems.add("keytab is not configured");
 			return Results.map("path", null, "exists", false);
 		}
 		Path p = Path.of(keytab);
@@ -280,13 +280,13 @@ public final class KerberosCheck {
 			}
 		}
 		if (!exists) {
-			problems.add("keytab dosyası yok: " + keytab + " (Secret mount'u, yol)");
+			problems.add("keytab file does not exist: " + keytab + " (check the Secret mount and the path)");
 		}
 		else if (!readable) {
-			problems.add("keytab okunamıyor: " + keytab + " (dosya izinleri)");
+			problems.add("keytab is not readable: " + keytab + " (check file permissions)");
 		}
 		else if (size != null && size == 0) {
-			problems.add("keytab boş: " + keytab);
+			problems.add("keytab is empty: " + keytab);
 		}
 		Boolean contains = null;
 		List<String> keyTypes = null;
@@ -301,11 +301,11 @@ public final class KerberosCheck {
 				}
 				keyTypes = types.isEmpty() ? null : List.copyOf(types);
 				if (!contains) {
-					problems.add("keytab'da " + principal + " için anahtar yok (principal adı/realm ya da keytab yanlış)");
+					problems.add("keytab has no key for " + principal + " (wrong principal name/realm or wrong keytab)");
 				}
 			}
 			catch (Exception e) {
-				// keytab ayrıştırılamadı; login denemesi asıl hatayı gösterecek
+				// keytab could not be parsed; the login attempt will show the actual error
 			}
 		}
 		return Results.map("path", keytab, "exists", exists, "readable", exists ? readable : null, "sizeBytes", size,
@@ -313,8 +313,8 @@ public final class KerberosCheck {
 	}
 
 	/**
-	 * Krb5LoginModule ile (useKeyTab, storeKey, doNotPrompt) ayrı bir thread'de login dener; başarılıysa
-	 * logout yapar. Sonuç: {status: ok|error|timeout, durationMs, error (Türkçe), detail}.
+	 * Tries a login with Krb5LoginModule (useKeyTab, storeKey, doNotPrompt) in a separate thread; logs out on
+	 * success. Result: {status: ok|error|timeout, durationMs, error (explained), detail}.
 	 */
 	public static Map<String, Object> login(String keytab, String principal, long timeoutMillis) {
 		long start = System.nanoTime();
@@ -326,7 +326,7 @@ public final class KerberosCheck {
 				lc.logout();
 			}
 			catch (LoginException e) {
-				// login başarılıydı; logout hatası önemsiz
+				// login succeeded; a logout error does not matter
 			}
 			return null;
 		});
@@ -334,12 +334,12 @@ public final class KerberosCheck {
 		try {
 			task.get(Math.max(1, timeoutMillis), TimeUnit.MILLISECONDS);
 			return Results.map("status", "ok", "durationMs", elapsed(start), "message",
-					"Keytab ile TGT alındı (KDC erişilebilir); logout yapıldı");
+					"Got a TGT with the keytab (KDC reachable); logged out");
 		}
 		catch (TimeoutException e) {
 			task.cancel(true);
 			return Results.map("status", "timeout", "durationMs", elapsed(start), "error",
-					KafkaErrors.kerberos("cannot locate kdc") + ": login " + timeoutMillis + " ms içinde bitmedi");
+					KafkaErrors.kerberos("cannot locate kdc") + ": login did not finish within " + timeoutMillis + " ms");
 		}
 		catch (ExecutionException e) {
 			Throwable cause = e.getCause() == null ? e : e.getCause();
@@ -349,18 +349,18 @@ public final class KerberosCheck {
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			task.cancel(true);
-			return Results.map("status", "error", "error", "Kerberos kontrolü iptal edildi");
+			return Results.map("status", "error", "error", "Kerberos check was cancelled");
 		}
 	}
 
-	/** Kerberos login hatasını Türkçe açıklar (ağ hataları → KDC'ye ulaşılamadı). */
+	/** Explains a Kerberos login error (network errors → KDC unreachable). */
 	public static String explain(Throwable error) {
 		String chain = messages(error);
 		if (networkError(error)) {
 			return KafkaErrors.kerberos("cannot locate kdc");
 		}
 		String k = KafkaErrors.kerberos(chain);
-		return k != null ? k : "Kerberos login hatası";
+		return k != null ? k : "Kerberos login failed";
 	}
 
 	static Configuration jaasConfiguration(String keytab, String principal) {
