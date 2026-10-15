@@ -82,7 +82,7 @@
   }
 }, {
   "name" : "consumer_groups_empty",
-  "description" : "Groups in Empty state with the topics they still have committed offsets on and their total lag (stale candidates)",
+  "description" : "Groups in Empty state with the topics they still have committed offsets on and their total lag (likely stale groups)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -303,7 +303,7 @@
       },
       "shiftBy" : {
         "type" : "integer",
-        "description" : "Amount added to the current commit for to=shift (can be negative)"
+        "description" : "Amount added to the current committed offset for to=shift (can be negative)"
       }
     },
     "required" : [ "cluster", "group", "topic", "to" ]

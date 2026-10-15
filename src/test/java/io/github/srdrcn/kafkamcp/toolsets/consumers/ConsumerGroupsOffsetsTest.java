@@ -104,7 +104,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 			.contains("Partitions not in topic")
 			.contains("[7]");
 		assertThat(error("consumer_groups_offsets_reset", args("group", group, "topic", topic, "to", "middle")))
-			.contains("Invalid to");
+			.contains("Invalid value for to");
 		assertThat(error("consumer_groups_offsets_reset",
 				args("group", group, "topic", unique("no-topic"), "to", "earliest")))
 			.contains("not found");

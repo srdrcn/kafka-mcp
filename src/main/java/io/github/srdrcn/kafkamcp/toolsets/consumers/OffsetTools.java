@@ -91,7 +91,7 @@ public class OffsetTools {
 					.required("to", P.enumOf("Target: earliest, latest, offset, timestamp or shift", TARGETS))
 					.param("offset", offset)
 					.param("timestamp", P.string("Time for to=timestamp (ISO-8601 or epoch ms)"))
-					.param("shiftBy", P.integer("Amount added to the current commit for to=shift (can be negative)"))
+					.param("shiftBy", P.integer("Amount added to the current committed offset for to=shift (can be negative)"))
 					.handler(this::reset),
 				ToolSpec
 					.destructive("consumer_groups_offsets_delete",
@@ -112,7 +112,7 @@ public class OffsetTools {
 		String topic = call.str("topic");
 		String to = call.str("to").toLowerCase(Locale.ROOT);
 		if (!TARGETS.contains(to)) {
-			throw new ToolException("Invalid to: " + to + " (valid: " + TARGETS + ")");
+			throw new ToolException("Invalid value for to: " + to + " (valid: " + TARGETS + ")");
 		}
 		Long offset = null;
 		Long shiftBy = null;

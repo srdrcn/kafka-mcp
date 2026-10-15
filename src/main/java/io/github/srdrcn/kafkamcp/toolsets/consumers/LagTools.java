@@ -417,7 +417,8 @@ public class LagTools {
 				slept < interval * 1000L ? Boolean.TRUE : null);
 		out.putAll(issues.toMap(list));
 		out.put("note",
-				STUCK_NOTE + "; uncheckedPartitions: could not be checked because the end offset was not available");
+				STUCK_NOTE + "; uncheckedPartitions: partitions that could not be checked because their end offset "
+						+ "could not be fetched");
 		out.putAll(Results.page("groups", groups, call.limit()));
 		return out;
 	}

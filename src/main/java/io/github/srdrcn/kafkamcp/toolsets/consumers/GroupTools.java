@@ -88,7 +88,7 @@ public class GroupTools {
 					.handler(this::findByMember),
 				ToolSpec
 					.read("consumer_groups_empty",
-							"Groups in Empty state with the topics they still have committed offsets on and their total lag (stale candidates)")
+							"Groups in Empty state with the topics they still have committed offsets on and their total lag (likely stale groups)")
 					.listParams()
 					.handler(this::empty),
 				ToolSpec
