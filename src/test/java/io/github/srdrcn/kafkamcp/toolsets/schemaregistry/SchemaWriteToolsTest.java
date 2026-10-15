@@ -14,7 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 
-/** schemas_register ve schemas_delete_version; readOnly cluster'da yazma reddi. */
+/** schemas_register and schemas_delete_version; writes are rejected on a readOnly cluster. */
 class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 
 	private static List<Integer> ints(JsonNode array) {
@@ -37,9 +37,9 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(again.get("created").asBoolean()).isFalse();
 		assertThat(again.get("version").asInt()).isEqualTo(1);
 		assertThat(again.get("id").asInt()).isEqualTo(first.get("id").asInt());
-		assertThat(again.get("message").asText()).contains("zaten");
+		assertThat(again.get("message").asText()).contains("already registered");
 
-		// şema JSON nesnesi olarak da verilebilir
+		// the schema can also be given as a JSON object
 		Map<?, ?> asObject = new ObjectMapper().readValue(SrRest.V2, Map.class);
 		JsonNode second = ok("schemas_register", args("subject", s, "schema", asObject));
 		assertThat(second.get("created").asBoolean()).isTrue();
@@ -65,12 +65,12 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		SrRest.register(s, SrRest.V1);
 
 		String incompatible = error("schemas_register", args("subject", s, "schema", SrRest.INCOMPATIBLE));
-		assertThat(incompatible).contains("409").contains("uyumsuz").contains(SrRest.globalLevel())
+		assertThat(incompatible).contains("409").contains("Incompatible schema").contains(SrRest.globalLevel())
 			.contains("TYPE_MISMATCH")
 			.doesNotContain("oldSchema:");
 
 		String invalid = error("schemas_register", args("subject", s, "schema", "{not json"));
-		assertThat(invalid).contains("422").contains("Geçersiz şema").doesNotContain("with refs");
+		assertThat(invalid).contains("422").contains("Schema rejected (422/42201): Invalid schema").doesNotContain("with refs");
 
 		assertThat(SrRest.versions(s, false)).containsExactly(1);
 	}
@@ -83,7 +83,7 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		SrRest.ok("PUT", modePath, Map.of("mode", "READONLY"));
 		try {
 			String err = error("schemas_register", args("subject", s, "schema", SrRest.V2));
-			assertThat(err).contains("422").contains("42205").contains("READONLY").doesNotContain("Geçersiz şema");
+			assertThat(err).contains("422").contains("42205").contains("READONLY").doesNotContain("Schema rejected");
 			assertThat(SrRest.versions(s, false)).containsExactly(1);
 		}
 		finally {
@@ -107,18 +107,18 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(ints(ok("schemas_versions_list", args("subject", s, "deleted", true)).get("softDeletedVersions")))
 			.containsExactly(1);
 
-		// zaten soft-delete edilmiş versiyon kalıcı silinir (tekrar soft delete denenmez)
+		// an already soft-deleted version is deleted permanently (no second soft delete is attempted)
 		JsonNode hard = ok("schemas_delete_version", args("subject", s, "version", 1, "permanent", true));
 		assertThat(hard.get("permanent").asBoolean()).isTrue();
 		assertThat(hard.get("softDeletedNow").asBoolean()).isFalse();
 		assertThat(SrRest.versions(s, true)).containsExactly(2);
 
-		// aktif versiyon permanent=true ile: önce soft, sonra kalıcı
+		// an active version with permanent=true: soft first, then permanent
 		JsonNode latest = ok("schemas_delete_version", args("subject", s, "version", "latest", "permanent", true));
 		assertThat(latest.get("deletedVersion").asInt()).isEqualTo(2);
 		assertThat(latest.get("softDeletedNow").asBoolean()).isTrue();
 		assertThat(latest.get("remainingVersions")).isEmpty();
-		assertThat(latest.get("note").asText()).contains("aktif versiyon kalmadı");
+		assertThat(latest.get("note").asText()).contains("no active versions left");
 		assertThat(SrRest.versions(s, true)).isEmpty();
 		assertThat(ok("subjects_list", args("filter", java.util.regex.Pattern.quote(s), "deleted", true))
 			.get("total").asInt()).isZero();
@@ -131,13 +131,13 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		SrRest.register(s, SrRest.V2);
 		SrRest.softDelete(s, 1);
 
-		assertThat(error("schemas_delete_version", args("subject", s, "version", 1))).contains("zaten soft-delete");
+		assertThat(error("schemas_delete_version", args("subject", s, "version", 1))).contains("already soft-deleted");
 		assertThat(error("schemas_delete_version", args("subject", s, "version", 7, "permanent", true)))
-			.contains("Versiyon bulunamadı")
+			.contains("Version not found")
 			.contains("[1, 2]");
-		assertThat(error("schemas_delete_version", args("subject", s, "version", "son"))).contains("latest");
+		assertThat(error("schemas_delete_version", args("subject", s, "version", "last"))).contains("latest");
 		assertThat(error("schemas_delete_version", args("subject", unique("missing"), "version", "latest")))
-			.contains("Subject bulunamadı");
+			.contains("Subject not found");
 		assertThat(SrRest.versions(s, false)).containsExactly(2);
 		assertThat(SrRest.versions(s, true)).containsExactly(1, 2);
 	}
@@ -157,7 +157,7 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(SrRest.versions(s, false)).containsExactly(1);
 		assertThat(SrRest.subjectLevel(s)).isNull();
 
-		// okuma araçları readOnly cluster'da çalışır
+		// read tools work on a readOnly cluster
 		assertThat(ok("schemas_get", args("cluster", "test-ro", "subject", s)).get("version").asInt()).isEqualTo(1);
 	}
 

@@ -19,13 +19,13 @@ import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient.SchemaRegis
 @Component
 public class SubjectTools {
 
-	/** subjects_for_topic'te son versiyonu sorgulanacak en fazla subject. */
+	/** Maximum number of subjects whose latest version subjects_for_topic looks up. */
 	static final int MAX_TOPIC_LOOKUPS = 20;
 
-	/** subjects_for_topic'te adıyla listelenecek en fazla olası (kesin olmayan) eşleşme. */
+	/** Maximum number of possible (inexact) matches that subjects_for_topic lists by name. */
 	static final int MAX_POSSIBLE_MATCHES = 20;
 
-	/** TopicRecordNameStrategy kayıt adı: Avro/Protobuf tam adı (tire içermez). */
+	/** TopicRecordNameStrategy record name: Avro/Protobuf full name (contains no hyphen). */
 	private static final Pattern RECORD_NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$");
 
 	private final SchemaRegistryApi api;
@@ -36,19 +36,19 @@ public class SubjectTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("subjects_list", "Schema Registry subject adlarını listeler (sıralı); deleted=true soft-delete edilmişleri de getirir")
+				ToolSpec.read("subjects_list", "List Schema Registry subject names (sorted); deleted=true also returns soft-deleted ones")
 					.schemaRegistry()
 					.listParams()
-					.param("deleted", P.bool("Soft-delete edilmiş subject'leri de getir (varsayılan false)"))
+					.param("deleted", P.bool("Also return soft-deleted subjects (default false)"))
 					.handler(this::subjectsList),
-				ToolSpec.read("subjects_for_topic", "Topic'in subject'lerini bulur (<topic>-key/-value ve <topic>-<KayıtAdı>); her birinin son versiyonu, id ve tipiyle")
+				ToolSpec.read("subjects_for_topic", "Find the subjects of a topic (<topic>-key/-value and <topic>-<RecordName>) with the latest version, id and type of each")
 					.schemaRegistry()
-					.required("topic", P.string("Topic adı"))
+					.required("topic", P.string("Topic name"))
 					.handler(this::subjectsForTopic),
-				ToolSpec.read("schemas_versions_list", "Subject'in versiyon numaralarını listeler; deleted=true ile soft-delete edilmiş versiyonlar da işaretlenir")
+				ToolSpec.read("schemas_versions_list", "List the version numbers of a subject; with deleted=true soft-deleted versions are included and marked")
 					.schemaRegistry()
-					.required("subject", P.string("Subject adı"))
-					.param("deleted", P.bool("Soft-delete edilmiş versiyonları da getir (varsayılan false)"))
+					.required("subject", P.string("Subject name"))
+					.param("deleted", P.bool("Also return soft-deleted versions (default false)"))
 					.handler(this::versionsList));
 	}
 
@@ -70,7 +70,7 @@ public class SubjectTools {
 		String topic = call.str("topic");
 		String cluster = call.cluster();
 		List<String[]> matches = new ArrayList<>();
-		// '<topic>-' ile başlayıp kayıt adı tam ad olmayanlar (JSON Schema title'ı ya da başka topic): sadece ad
+		// starts with '<topic>-' but the record name is not a full name (JSON Schema title or another topic): name only
 		List<String> possible = new ArrayList<>();
 		String prefix = topic + "-";
 		for (String s : api.subjects(cluster, false)) {
@@ -116,22 +116,23 @@ public class SubjectTools {
 		if (skipped > 0) {
 			out.put("partial", true);
 			out.put("lookupsSkipped", skipped);
-			out.put("note", "İlk " + lookups + " subject'in son versiyonuna bakıldı; " + skipped
-					+ " subject için versiyon bilgisi atlandı (schemas_get ile bakın)");
+			out.put("note", "Looked up the latest version of the first " + lookups + " subjects; skipped version info for "
+					+ skipped + " subjects (see schemas_get)");
 		}
 		if (!possible.isEmpty()) {
 			out.put("possibleMatchesCount", possible.size());
 			out.put("possibleMatches", possible.stream().limit(MAX_POSSIBLE_MATCHES).toList());
-			out.put("possibleMatchesNote", "'" + prefix + "' ile başlıyor ama kayıt adı Avro/Protobuf tam adı değil: "
-					+ "JSON Schema title'ından türemiş TopicRecordNameStrategy subject'i ya da adı '" + prefix
-					+ "' ile başlayan başka bir topic'in subject'i olabilir; versiyonlarına bakılmadı (schemas_get)");
+			out.put("possibleMatchesNote", "Starts with '" + prefix + "' but the record name is not an Avro/Protobuf full "
+					+ "name: may be a TopicRecordNameStrategy subject derived from a JSON Schema title, or a subject of "
+					+ "another topic whose name starts with '" + prefix + "'; versions not looked up (schemas_get)");
 		}
 		if (rows.isEmpty() && possible.isEmpty()) {
-			out.put("message", "Bu topic için subject bulunamadı (" + topic + "-key, " + topic + "-value ya da " + topic
-					+ "-<KayıtAdı>). RecordNameStrategy kullanılıyorsa subject adı topic'ten bağımsızdır (subjects_list ile arayın).");
+			out.put("message", "No subjects found for this topic (" + topic + "-key, " + topic + "-value or " + topic
+					+ "-<RecordName>). With RecordNameStrategy the subject name does not depend on the topic "
+					+ "(search with subjects_list).");
 		}
 		else if (rows.isEmpty()) {
-			out.put("message", "Kesin eşleşme yok; possibleMatches'teki subject'ler bu topic'e ait olabilir");
+			out.put("message", "No exact match; the subjects in possibleMatches may belong to this topic");
 		}
 		return out;
 	}
@@ -152,7 +153,7 @@ public class SubjectTools {
 		return Results.map("subject", subject, "count", all.size(), "latest",
 				activeSorted.isEmpty() ? null : activeSorted.get(activeSorted.size() - 1), "versions", all,
 				"softDeletedVersions", soft, "note",
-				activeSorted.isEmpty() ? "Tüm versiyonlar soft-delete edilmiş (subject soft-delete durumda)" : null);
+				activeSorted.isEmpty() ? "All versions are soft-deleted (the subject is soft-deleted)" : null);
 	}
 
 }

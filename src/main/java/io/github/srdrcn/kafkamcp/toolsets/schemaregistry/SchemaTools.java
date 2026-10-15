@@ -24,18 +24,18 @@ public class SchemaTools {
 
 	static final int MAX_DIFF_LINES = 300;
 
-	/** Avro referans çözümlemesinde en fazla getirilecek referans şeması. */
+	/** Maximum number of reference schemas fetched when resolving Avro references. */
 	static final int MAX_REFERENCES = 20;
 
 	private static final int MAX_SR_MESSAGE = 1_500;
 
-	/** SR error_code: geçersiz şema. */
+	/** SR error_code: invalid schema. */
 	static final int INVALID_SCHEMA_CODE = 42201;
 
-	/** SR 409 mesajındaki eski şema dökümü (gürültü). */
+	/** Dump of the old schema in the SR 409 message (noise). */
 	private static final Pattern OLD_SCHEMA = Pattern.compile(",?\\s*\\{oldSchema: '.*?'\\}", Pattern.DOTALL);
 
-	/** SR 422 mesajının başındaki gönderilen şema dökümü (gürültü). */
+	/** Dump of the submitted schema at the start of the SR 422 message (noise). */
 	private static final Pattern INVALID_SCHEMA_ECHO = Pattern
 		.compile("^Invalid schema \\{.*\\} with refs \\[.*?\\] of type [A-Z]+, details: ", Pattern.DOTALL);
 
@@ -46,43 +46,43 @@ public class SchemaTools {
 	}
 
 	static Map<String, Object> schemaTypeParam() {
-		return P.enumOf("Şema tipi (varsayılan AVRO)", SchemaTexts.TYPES);
+		return P.enumOf("Schema type (default AVRO)", SchemaTexts.TYPES);
 	}
 
 	static Map<String, Object> schemaParam() {
-		return P.string("Şema metni (Avro ya da JSON Schema JSON'u, PROTOBUF için .proto içeriği)");
+		return P.string("Schema text (Avro or JSON Schema JSON, .proto content for PROTOBUF)");
 	}
 
 	public List<ToolSpec> tools() {
 		Map<String, Object> maxChars = P.integer(
-				"Şema metni için en fazla karakter (varsayılan " + DEFAULT_MAX_CHARS + "); aşan kısım kesilir", 200,
+				"Maximum number of characters of the schema text (default " + DEFAULT_MAX_CHARS + "); the rest is truncated", 200,
 				1_000_000);
 		maxChars.put("default", DEFAULT_MAX_CHARS);
 		return List.of(
-				ToolSpec.read("schemas_get", "Subject versiyonundaki şemayı getirir: id, versiyon, schemaType, referanslar ve şema metni (AVRO/JSON girintili)")
+				ToolSpec.read("schemas_get", "Get the schema of a subject version: id, version, schemaType, references and schema text (AVRO/JSON pretty-printed)")
 					.schemaRegistry()
-					.required("subject", P.string("Subject adı"))
-					.param("version", P.string("Versiyon numarası ya da latest (varsayılan latest)"))
+					.required("subject", P.string("Subject name"))
+					.param("version", P.string("Version number or latest (default latest)"))
 					.param("maxChars", maxChars)
 					.handler(this::get),
-				ToolSpec.read("schemas_diff", "İki şema versiyonunu karşılaştırır: AVRO'da alan bazlı fark + uyumluluk ipucu, JSON/PROTOBUF'ta satır farkı")
+				ToolSpec.read("schemas_diff", "Compare two schema versions: field-level diff and compatibility hint for AVRO, line diff for JSON/PROTOBUF")
 					.schemaRegistry()
-					.required("subject", P.string("Subject adı"))
-					.param("fromVersion", P.string("Eski versiyon (varsayılan: toVersion'dan önceki versiyon)"))
-					.param("toVersion", P.string("Yeni versiyon ya da latest (varsayılan latest)"))
+					.required("subject", P.string("Subject name"))
+					.param("fromVersion", P.string("Old version (default: the version before toVersion)"))
+					.param("toVersion", P.string("New version or latest (default latest)"))
 					.handler(this::diff),
-				ToolSpec.write("schemas_register", "Subject'e şema kaydeder, id ve versiyonu döner; uyumsuz (409) ya da geçersiz (422) şemada SR mesajını verir")
+				ToolSpec.write("schemas_register", "Register a schema under a subject; returns its id and version, or the SR message for an incompatible (409) or invalid (422) schema")
 					.schemaRegistry()
-					.required("subject", P.string("Subject adı (ör. <topic>-value)"))
+					.required("subject", P.string("Subject name (e.g. <topic>-value)"))
 					.required("schema", schemaParam())
 					.param("schemaType", schemaTypeParam())
 					.param("references", SchemaReference.param())
 					.handler(this::register),
-				ToolSpec.destructive("schemas_delete_version", "Şema versiyonunu siler (soft); permanent=true kalıcı siler (gerekirse önce soft delete yapar)")
+				ToolSpec.destructive("schemas_delete_version", "Delete a schema version (soft); permanent=true deletes it permanently (soft-deleting it first if needed)")
 					.schemaRegistry()
-					.required("subject", P.string("Subject adı"))
-					.required("version", P.string("Silinecek versiyon numarası ya da latest"))
-					.param("permanent", P.bool("Kalıcı sil, geri alınamaz (varsayılan false: soft delete)"))
+					.required("subject", P.string("Subject name"))
+					.required("version", P.string("Version number to delete or latest"))
+					.param("permanent", P.bool("Delete permanently, cannot be undone (default false: soft delete)"))
 					.handler(this::deleteVersion));
 	}
 
@@ -111,7 +111,7 @@ public class SchemaTools {
 		Integer fromArg = fromGiven ? SchemaRegistryApi.parseVersion(call.str("fromVersion"), "fromVersion") : null;
 		List<Integer> versions = api.versions(cluster, subject, false);
 		if (versions.isEmpty()) {
-			throw new ToolException("Subject '" + subject + "' için aktif versiyon yok");
+			throw new ToolException("Subject '" + subject + "' has no active versions");
 		}
 		int latest = versions.get(versions.size() - 1);
 		int to = toArg == null ? latest : toArg;
@@ -123,16 +123,16 @@ public class SchemaTools {
 			Integer prev = versions.stream().filter(x -> x < to).reduce((x, y) -> y).orElse(null);
 			if (prev == null) {
 				if (versions.size() == 1) {
-					throw new ToolException("Subject '" + subject + "' tek versiyona sahip (v" + latest
-							+ "); karşılaştırılacak önceki versiyon yok. Şemayı görmek için schemas_get kullanın.");
+					throw new ToolException("Subject '" + subject + "' has a single version (v" + latest
+							+ "); there is no previous version to compare. Use schemas_get to see the schema.");
 				}
-				throw new ToolException("v" + to + " öncesinde aktif versiyon yok; fromVersion verin (mevcut: "
+				throw new ToolException("No active version before v" + to + "; pass fromVersion (available: "
 						+ versions + ")");
 			}
 			from = prev;
 		}
 		if (from == to) {
-			throw new ToolException("fromVersion ve toVersion aynı (v" + from + "); farklı iki versiyon verin");
+			throw new ToolException("fromVersion and toVersion are the same (v" + from + "); pass two different versions");
 		}
 		SchemaVersion a = api.version(cluster, subject, from);
 		SchemaVersion b = api.version(cluster, subject, to);
@@ -143,7 +143,7 @@ public class SchemaTools {
 		}
 		if (a.id() == b.id()) {
 			out.put("identical", true);
-			out.put("message", "İki versiyon aynı şemayı (id " + a.id() + ") gösteriyor; fark yok");
+			out.put("message", "Both versions point to the same schema (id " + a.id() + "); no differences");
 			return out;
 		}
 		if (a.isAvro() && b.isAvro()) {
@@ -154,13 +154,13 @@ public class SchemaTools {
 				out.put("mode", "avro-fields");
 				out.putAll(r.toMap());
 				if (r.totalChanges() == 0) {
-					out.put("message", "Alan bazında fark yok (sadece doc, alan sırası ya da biçim farkı olabilir)");
+					out.put("message", "No field-level differences (only doc, field order or formatting may differ)");
 				}
 				addLevel(cluster, subject, r, out);
 				return out;
 			}
 			catch (RuntimeException e) {
-				out.put("avroParseError", "Avro şeması parse edilemedi, satır farkı verildi: " + e.getMessage());
+				out.put("avroParseError", "Could not parse the Avro schema, returned a line diff: " + e.getMessage());
 			}
 		}
 		LineDiff.Result r = LineDiff.diff(SchemaTexts.pretty(a.schemaType(), a.schema()),
@@ -168,7 +168,7 @@ public class SchemaTools {
 		out.put("mode", "lines");
 		out.putAll(r.toMap());
 		if (r.identical()) {
-			out.put("message", "Satır bazında fark yok (sadece biçim farkı olabilir)");
+			out.put("message", "No line-level differences (only formatting may differ)");
 		}
 		return out;
 	}
@@ -191,13 +191,13 @@ public class SchemaTools {
 		if (ok != null) {
 			compat.put("satisfiesSubjectLevel", ok);
 			if (level.endsWith("_TRANSITIVE")) {
-				compat.put("levelNote", "Sadece bu iki versiyon karşılaştırıldı; " + level
-						+ " tüm eski versiyonlara bakar");
+				compat.put("levelNote", "Only these two versions were compared; " + level
+						+ " checks all previous versions");
 			}
 		}
 	}
 
-	/** Avro şemasını referanslarıyla birlikte parse eder (referanslar önce aynı parser'a yüklenir). */
+	/** Parses an Avro schema together with its references (the references are loaded into the same parser first). */
 	private Schema parseAvro(ToolCall call, String cluster, SchemaVersion v) {
 		Schema.Parser parser = new Schema.Parser().setValidateDefaults(false);
 		loadReferences(call, cluster, parser, v.references(), new HashSet<>(), 0);
@@ -211,7 +211,7 @@ public class SchemaTools {
 				continue;
 			}
 			if (depth > 5 || seen.size() > MAX_REFERENCES || call.nearDeadline(2_000)) {
-				throw new ToolException("Referans zinciri çok derin/büyük ya da süre doldu");
+				throw new ToolException("Reference chain too deep/large or out of time");
 			}
 			SchemaVersion rv = api.version(cluster, ref.subject(), ref.version());
 			loadReferences(call, cluster, parser, rv.references(), seen, depth + 1);
@@ -240,7 +240,7 @@ public class SchemaTools {
 				existing == null);
 		if (existing != null) {
 			out.put("message",
-					"Şema bu subject'te zaten kayıtlıydı (v" + existing.version() + "); yeni versiyon oluşmadı");
+					"Schema was already registered under this subject (v" + existing.version() + "); no new version created");
 		}
 		return out;
 	}
@@ -254,26 +254,26 @@ public class SchemaTools {
 			catch (ToolException ignored) {
 				level = "?";
 			}
-			return new ToolException("Şema uyumsuz (409): '" + subject + "' subject'inin compatibility seviyesi ("
-					+ level + ") yeni şemayı reddetti. SR: " + cleanSrMessage(e.srMessage())
-					+ " — ayrıntı için schemas_compatibility_check, fark için schemas_diff kullanın.", e);
+			return new ToolException("Incompatible schema (409): the compatibility level of subject '" + subject + "' ("
+					+ level + ") rejected the new schema. SR: " + cleanSrMessage(e.srMessage())
+					+ " — use schemas_compatibility_check for details and schemas_diff for the diff.", e);
 		}
 		return invalidSchemaError(e);
 	}
 
 	/**
-	 * SR 42201'i (geçersiz şema) sade mesaja çevirir. Diğer 422 kodları (42205 READONLY/IMPORT modu, 42207, 42208
-	 * geçersiz subject, 42209 vb.) şema hatası değildir: istemcinin Türkçe ipucuyla aynen döner.
+	 * Turns SR 42201 (invalid schema) into a plain message. Other 422 codes (42205 READONLY/IMPORT mode, 42207, 42208
+	 * invalid subject, 42209 etc.) are not schema errors: they are returned unchanged, with the client's hint.
 	 */
 	static ToolException invalidSchemaError(SchemaRegistryException e) {
 		if (e.status() == 422 && e.errorCode() == INVALID_SCHEMA_CODE) {
-			return new ToolException("Geçersiz şema (422/" + INVALID_SCHEMA_CODE + "): " + cleanSrMessage(e.srMessage()),
+			return new ToolException("Schema rejected (422/" + INVALID_SCHEMA_CODE + "): " + cleanSrMessage(e.srMessage()),
 					e);
 		}
 		return e;
 	}
 
-	/** SR mesajından eski şema dökümünü atar ve uzunluğu sınırlar. */
+	/** Removes the old schema dump from an SR message and limits its length. */
 	static String cleanSrMessage(String message) {
 		if (message == null) {
 			return "";
@@ -295,8 +295,9 @@ public class SchemaTools {
 		else {
 			SchemaVersion latest = api.latestOrNull(cluster, subject);
 			if (latest == null) {
-				throw new ToolException("Subject bulunamadı ya da aktif versiyonu yok: " + subject
-						+ ". Soft-delete edilmiş versiyonu kalıcı silmek için versiyon numarası verin (schemas_versions_list deleted=true)");
+				throw new ToolException("Subject not found or has no active versions: " + subject
+						+ ". To delete a soft-deleted version permanently, pass its version number "
+						+ "(schemas_versions_list deleted=true)");
 			}
 			version = latest.version();
 		}
@@ -314,18 +315,18 @@ public class SchemaTools {
 			else {
 				List<Integer> all = api.versionsOrEmpty(cluster, subject, true);
 				if (!all.contains(version)) {
-					throw new ToolException("Versiyon bulunamadı: " + subject + " v" + version
-							+ (all.isEmpty() ? " (subject yok)" : " (mevcut: " + all + ")"));
+					throw new ToolException("Version not found: " + subject + " v" + version
+							+ (all.isEmpty() ? " (subject does not exist)" : " (available: " + all + ")"));
 				}
 			}
 			api.deleteVersion(cluster, subject, version, true);
 		}
 		List<Integer> remaining = api.versionsOrEmpty(cluster, subject, false);
-		String note = permanent ? "Versiyon kalıcı olarak silindi (geri alınamaz)"
-				: "Versiyon soft-delete edildi; deleted=true ile görülür, permanent=true ile kalıcı silinebilir";
+		String note = permanent ? "Version deleted permanently (cannot be undone)"
+				: "Version soft-deleted; visible with deleted=true, can be deleted permanently with permanent=true";
 		return Results.map("subject", subject, "deletedVersion", version, "permanent", permanent, "softDeletedNow",
 				softNow, "remainingVersions", remaining, "note",
-				remaining.isEmpty() ? note + ". Subject'te aktif versiyon kalmadı" : note);
+				remaining.isEmpty() ? note + ". The subject has no active versions left" : note);
 	}
 
 }

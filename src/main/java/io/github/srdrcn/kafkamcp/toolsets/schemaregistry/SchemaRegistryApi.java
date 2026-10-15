@@ -14,8 +14,9 @@ import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient.SchemaRegistryException;
 
 /**
- * Schema Registry REST uç noktalarına tipli erişim (subject, versiyon, config, uyumluluk, kayıt/silme). Subject'ler
- * {@link SchemaRegistryClient#enc(String)} ile kodlanır; hatalar Türkçe {@link SchemaRegistryException}'dır.
+ * Typed access to the Schema Registry REST endpoints (subject, version, config, compatibility, register/delete).
+ * Subjects are encoded with {@link SchemaRegistryClient#enc(String)}; errors are readable
+ * {@link SchemaRegistryException}s.
  */
 @Component
 public class SchemaRegistryApi {
@@ -25,7 +26,7 @@ public class SchemaRegistryApi {
 	public static final List<String> LEVELS = List.of("BACKWARD", "BACKWARD_TRANSITIVE", "FORWARD",
 			"FORWARD_TRANSITIVE", "FULL", "FULL_TRANSITIVE", "NONE");
 
-	/** Subject seviyesinde compatibility tanımlı değil. */
+	/** No subject-level compatibility configured. */
 	private static final int SUBJECT_COMPAT_NOT_CONFIGURED = 40408;
 
 	private static final int SUBJECT_NOT_FOUND = 40401;
@@ -44,7 +45,7 @@ public class SchemaRegistryApi {
 		return client;
 	}
 
-	/** "latest" ya da -1 → null (son versiyon); pozitif tamsayı → değeri; diğerleri Türkçe hata. */
+	/** "latest" or -1 → null (latest version); positive integer → its value; anything else is an error. */
 	public static Integer parseVersion(String raw, String param) {
 		if (raw == null || raw.isBlank() || LATEST.equalsIgnoreCase(raw.trim()) || "-1".equals(raw.trim())) {
 			return null;
@@ -57,26 +58,26 @@ public class SchemaRegistryApi {
 			}
 		}
 		catch (NumberFormatException ignored) {
-			// aşağıda hata
+			// error below
 		}
-		throw new ToolException(param + " pozitif bir versiyon numarası ya da 'latest' olmalı: " + raw);
+		throw new ToolException(param + " must be a positive version number or 'latest': " + raw);
 	}
 
-	/** Versiyon yol parçası: null → latest. */
+	/** Version path segment: null → latest. */
 	public static String versionSegment(Integer version) {
 		return version == null ? LATEST : String.valueOf(version);
 	}
 
-	/** Compatibility seviyesini doğrular ve büyük harfe çevirir. */
+	/** Validates the compatibility level and converts it to upper case. */
 	public static String normalizeLevel(String level) {
 		String l = level == null ? "" : level.trim().toUpperCase(Locale.ROOT);
 		if (!LEVELS.contains(l)) {
-			throw new ToolException("Geçersiz compatibility seviyesi: " + level + " (geçerli: " + LEVELS + ")");
+			throw new ToolException("Invalid compatibility level: " + level + " (valid: " + LEVELS + ")");
 		}
 		return l;
 	}
 
-	/** GET /subjects (deleted=true ise soft-delete edilmişler dahil), sıralı. */
+	/** GET /subjects (soft-deleted ones included if deleted=true), sorted. */
 	public List<String> subjects(String cluster, boolean deleted) {
 		JsonNode n = client.get(cluster, "/subjects" + (deleted ? "?deleted=true" : ""));
 		List<String> out = new ArrayList<>();
@@ -87,7 +88,7 @@ public class SchemaRegistryApi {
 		return out;
 	}
 
-	/** GET /subjects/{s}/versions (deleted=true ise soft-delete edilmişler dahil), artan sırada. */
+	/** GET /subjects/{s}/versions (soft-deleted ones included if deleted=true), in ascending order. */
 	public List<Integer> versions(String cluster, String subject, boolean deleted) {
 		JsonNode n = client.get(cluster,
 				"/subjects/" + SchemaRegistryClient.enc(subject) + "/versions" + (deleted ? "?deleted=true" : ""));
@@ -99,7 +100,9 @@ public class SchemaRegistryApi {
 		return out;
 	}
 
-	/** {@link #versions} ama subject yoksa (ya da tüm versiyonları soft-delete edilmişse) boş liste. */
+	/**
+	 * Like {@link #versions}, but an empty list if the subject does not exist (or all its versions are soft-deleted).
+	 */
 	public List<Integer> versionsOrEmpty(String cluster, String subject, boolean deleted) {
 		try {
 			return versions(cluster, subject, deleted);
@@ -112,7 +115,7 @@ public class SchemaRegistryApi {
 		}
 	}
 
-	/** GET /subjects/{s}/versions/{v}; version null ise latest. */
+	/** GET /subjects/{s}/versions/{v}; latest if version is null. */
 	public SchemaVersion version(String cluster, String subject, Integer version) {
 		JsonNode n = client.get(cluster,
 				"/subjects/" + SchemaRegistryClient.enc(subject) + "/versions/" + versionSegment(version));
@@ -121,7 +124,7 @@ public class SchemaRegistryApi {
 				v.schema()) : v;
 	}
 
-	/** Son versiyon; subject yoksa ya da aktif versiyonu yoksa null. */
+	/** Latest version; null if the subject does not exist or has no active versions. */
 	public SchemaVersion latestOrNull(String cluster, String subject) {
 		try {
 			return version(cluster, subject, null);
@@ -134,7 +137,10 @@ public class SchemaRegistryApi {
 		}
 	}
 
-	/** POST /subjects/{s}: şema bu subject'te kayıtlıysa versiyonu, değilse (ya da subject yoksa) null. */
+	/**
+	 * POST /subjects/{s}: the version if the schema is registered under this subject, otherwise (or if the subject does
+	 * not exist) null.
+	 */
 	public SchemaVersion lookup(String cluster, String subject, SchemaInput input) {
 		try {
 			JsonNode n = client.post(cluster, "/subjects/" + SchemaRegistryClient.enc(subject), input.toBody());
@@ -149,22 +155,22 @@ public class SchemaRegistryApi {
 		}
 	}
 
-	/** POST /subjects/{s}/versions → şema id'si. */
+	/** POST /subjects/{s}/versions → schema id. */
 	public int register(String cluster, String subject, SchemaInput input) {
 		JsonNode n = client.post(cluster, "/subjects/" + SchemaRegistryClient.enc(subject) + "/versions",
 				input.toBody());
 		if (n == null || !n.has("id")) {
-			throw new ToolException("Schema Registry kayıt yanıtında id yok");
+			throw new ToolException("Schema Registry register response has no id");
 		}
 		return n.get("id").asInt();
 	}
 
-	/** GET /config → global compatibility seviyesi. */
+	/** GET /config → global compatibility level. */
 	public String globalCompatibility(String cluster) {
 		return level(client.get(cluster, "/config"));
 	}
 
-	/** GET /config/{s} → subject seviyesinde tanımlı compatibility; tanımlı değilse null. */
+	/** GET /config/{s} → compatibility configured at subject level; null if not configured. */
 	public String subjectCompatibility(String cluster, String subject) {
 		try {
 			return level(client.get(cluster, "/config/" + SchemaRegistryClient.enc(subject)));
@@ -178,7 +184,7 @@ public class SchemaRegistryApi {
 		}
 	}
 
-	/** GET /config/{s}?defaultToGlobal=true → subject için geçerli seviye (subject yoksa global). */
+	/** GET /config/{s}?defaultToGlobal=true → effective level for the subject (global if subject is null). */
 	public String effectiveCompatibility(String cluster, String subject) {
 		if (subject == null) {
 			return globalCompatibility(cluster);
@@ -186,7 +192,7 @@ public class SchemaRegistryApi {
 		return level(client.get(cluster, "/config/" + SchemaRegistryClient.enc(subject) + "?defaultToGlobal=true"));
 	}
 
-	/** PUT /config[/subject] → yeni seviye. */
+	/** PUT /config[/subject] → new level. */
 	public String setCompatibility(String cluster, String subject, String level) {
 		String path = subject == null ? "/config" : "/config/" + SchemaRegistryClient.enc(subject);
 		JsonNode n = client.put(cluster, path, Map.of("compatibility", normalizeLevel(level)));
@@ -194,11 +200,11 @@ public class SchemaRegistryApi {
 		return after == null ? level(n) : after;
 	}
 
-	/** Uyumluluk testi sonucu: SR'ın is_compatible değeri ve (verbose) mesajları. */
+	/** Compatibility test result: the SR is_compatible value and the (verbose) messages. */
 	public record CompatibilityCheck(boolean compatible, List<String> messages) {
 	}
 
-	/** POST /compatibility/subjects/{s}/versions/{v}?verbose=true; version null ise latest. */
+	/** POST /compatibility/subjects/{s}/versions/{v}?verbose=true; latest if version is null. */
 	public CompatibilityCheck checkCompatibility(String cluster, String subject, Integer version, SchemaInput input) {
 		JsonNode n = client.post(cluster, "/compatibility/subjects/" + SchemaRegistryClient.enc(subject) + "/versions/"
 				+ versionSegment(version) + "?verbose=true", input.toBody());
@@ -209,7 +215,7 @@ public class SchemaRegistryApi {
 		return new CompatibilityCheck(n != null && n.path("is_compatible").asBoolean(false), messages);
 	}
 
-	/** DELETE /subjects/{s}/versions/{v}[?permanent=true] → silinen versiyon numarası. */
+	/** DELETE /subjects/{s}/versions/{v}[?permanent=true] → deleted version number. */
 	public int deleteVersion(String cluster, String subject, int version, boolean permanent) {
 		JsonNode n = client.delete(cluster, "/subjects/" + SchemaRegistryClient.enc(subject) + "/versions/" + version
 				+ (permanent ? "?permanent=true" : ""));

@@ -12,7 +12,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 
-/** subjects_list, schemas_versions_list, subjects_for_topic ve özel karakterli subject'ler. */
+/** subjects_list, schemas_versions_list, subjects_for_topic and subjects with special characters. */
 class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 
 	private static final String TITLED_JSON = """
@@ -58,7 +58,7 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(withDeleted.get("softDeletedCount").asInt()).isEqualTo(1);
 		assertThat(texts(withDeleted.get("softDeleted"))).containsExactly(c);
 
-		// okuma araçları readOnly cluster'da da çalışır
+		// read tools also work on a readOnly cluster
 		JsonNode ro = ok("subjects_list", args("cluster", "test-ro", "filter", filter));
 		assertThat(ro.get("total").asInt()).isEqualTo(2);
 	}
@@ -87,7 +87,7 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(gone.has("latest")).isFalse();
 		assertThat(gone.get("note").asText()).contains("soft-delete");
 
-		assertThat(error("schemas_versions_list", args("subject", unique("missing")))).contains("Subject bulunamadı");
+		assertThat(error("schemas_versions_list", args("subject", unique("missing")))).contains("Subject not found");
 	}
 
 	@Test
@@ -97,9 +97,9 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 		SrRest.register(topic + "-value", SrRest.V1);
 		SrRest.register(topic + "-value", SrRest.V2);
 		SrRest.register(topic + "-com.example.Order", SrRest.V1);
-		// başka topic'in (<topic>-v2) subject'i kesin eşleşme sayılmamalı, olası eşleşme olarak raporlanmalı
+		// a subject of another topic (<topic>-v2) must not count as an exact match; it is reported as a possible match
 		SrRest.register(topic + "-v2-value", SrRest.V1);
-		// JSON Schema TopicRecordNameStrategy: kayıt adı title'dan gelir (boşluk/tire içerebilir)
+		// JSON Schema TopicRecordNameStrategy: the record name comes from the title (may contain spaces/hyphens)
 		SrRest.register(topic + "-Order Created", TITLED_JSON, "JSON");
 
 		JsonNode r = ok("subjects_for_topic", args("topic", topic));
@@ -130,17 +130,17 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(texts(r.get("possibleMatches"))).containsExactly(topic + "-Order Created", topic + "-v2-value");
 		assertThat(r.get("possibleMatchesNote").asText()).contains("JSON Schema title");
 
-		// sadece olası eşleşme varsa "bulunamadı" denmez
+		// with only possible matches the message does not say "No subjects found"
 		String jsonTopic = unique("events");
 		SrRest.register(jsonTopic + "-order-created", TITLED_JSON, "JSON");
 		JsonNode onlyPossible = ok("subjects_for_topic", args("topic", jsonTopic));
 		assertThat(onlyPossible.get("found").asInt()).isZero();
 		assertThat(texts(onlyPossible.get("possibleMatches"))).containsExactly(jsonTopic + "-order-created");
-		assertThat(onlyPossible.get("message").asText()).contains("possibleMatches").doesNotContain("bulunamadı");
+		assertThat(onlyPossible.get("message").asText()).contains("possibleMatches").doesNotContain("No subjects found");
 
 		JsonNode none = ok("subjects_for_topic", args("topic", unique("nosubject")));
 		assertThat(none.get("found").asInt()).isZero();
-		assertThat(none.get("message").asText()).contains("bulunamadı");
+		assertThat(none.get("message").asText()).contains("No subjects found");
 		assertThat(none.has("possibleMatches")).isFalse();
 	}
 

@@ -4,7 +4,7 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** Bir subject versiyonu (GET /subjects/{s}/versions/{v} yanıtı); schemaType yoksa AVRO. */
+/** A subject version (GET /subjects/{s}/versions/{v} response); AVRO if schemaType is absent. */
 public record SchemaVersion(String subject, int version, int id, String schemaType, List<SchemaReference> references,
 		String schema) {
 

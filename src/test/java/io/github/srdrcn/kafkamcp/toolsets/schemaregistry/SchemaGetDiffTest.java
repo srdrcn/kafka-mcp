@@ -13,7 +13,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 
-/** schemas_get ve schemas_diff (Avro alan farkı, JSON satır farkı, tek versiyon). */
+/** schemas_get and schemas_diff (Avro field diff, JSON line diff, single version). */
 class SchemaGetDiffTest extends SchemaRegistryIntegrationTest {
 
 	private static JsonNode change(JsonNode diff, String path, String kind) {
@@ -22,7 +22,7 @@ class SchemaGetDiffTest extends SchemaRegistryIntegrationTest {
 				return c;
 			}
 		}
-		throw new AssertionError(path + " " + kind + " bulunamadı: " + diff.get("changes"));
+		throw new AssertionError(path + " " + kind + " not found: " + diff.get("changes"));
 	}
 
 	@Test
@@ -53,8 +53,8 @@ class SchemaGetDiffTest extends SchemaRegistryIntegrationTest {
 		assertThat(cut.get("schema").asText()).hasSize(201).endsWith("…");
 
 		assertThat(error("schemas_get", args("subject", s, "version", "abc"))).contains("latest");
-		assertThat(error("schemas_get", args("subject", s, "version", 9))).contains("Versiyon bulunamadı");
-		assertThat(error("schemas_get", args("subject", unique("missing")))).contains("Subject bulunamadı");
+		assertThat(error("schemas_get", args("subject", s, "version", 9))).contains("Version not found");
+		assertThat(error("schemas_get", args("subject", unique("missing")))).contains("Subject not found");
 	}
 
 	@Test
@@ -141,22 +141,22 @@ class SchemaGetDiffTest extends SchemaRegistryIntegrationTest {
 
 		assertThat(error("schemas_register",
 				args("subject", s, "schema", v2, "references", List.of(Map.of("name", "x")))))
-			.contains("name, subject ve version");
+			.contains("name, subject and version");
 	}
 
 	@Test
 	void diffNeedsTwoDifferentVersions() {
 		String single = unique("single") + "-value";
 		SrRest.register(single, SrRest.V1);
-		assertThat(error("schemas_diff", args("subject", single))).contains("tek versiyon");
+		assertThat(error("schemas_diff", args("subject", single))).contains("single version");
 
 		String two = unique("two") + "-value";
 		SrRest.register(two, SrRest.V1);
 		SrRest.register(two, SrRest.V2);
 		assertThat(error("schemas_diff", args("subject", two, "fromVersion", 2, "toVersion", "latest")))
-			.contains("aynı");
-		assertThat(error("schemas_diff", args("subject", two, "toVersion", 1))).contains("öncesinde");
-		assertThat(error("schemas_diff", args("subject", unique("missing")))).contains("Subject bulunamadı");
+			.contains("are the same");
+		assertThat(error("schemas_diff", args("subject", two, "toVersion", 1))).contains("No active version before v1");
+		assertThat(error("schemas_diff", args("subject", unique("missing")))).contains("Subject not found");
 	}
 
 	@Test

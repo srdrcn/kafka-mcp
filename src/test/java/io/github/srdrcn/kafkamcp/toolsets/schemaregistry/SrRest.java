@@ -18,7 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryTestCluster;
 
-/** Test hazırlığı ve doğrulaması için Schema Registry'ye doğrudan REST erişimi (araçlardan bağımsız). */
+/** Direct REST access to Schema Registry for test setup and verification (independent of the tools). */
 final class SrRest {
 
 	/** Avro v1: id (string), amount (int). */
@@ -26,13 +26,13 @@ final class SrRest {
 			{"type":"record","name":"Order","namespace":"com.example","fields":[
 			{"name":"id","type":"string"},{"name":"amount","type":"int"}]}""";
 
-	/** v1'e BACKWARD uyumlu: amount int → long, currency (varsayılanlı) eklendi. */
+	/** BACKWARD compatible with v1: amount int → long, currency (with a default) added. */
 	static final String V2 = """
 			{"type":"record","name":"Order","namespace":"com.example","fields":[
 			{"name":"id","type":"string"},{"name":"amount","type":"long"},
 			{"name":"currency","type":"string","default":"TRY"}]}""";
 
-	/** v1/v2'ye uyumsuz: id string → int, varsayılansız customer eklendi. */
+	/** Incompatible with v1/v2: id string → int, customer added without a default. */
 	static final String INCOMPATIBLE = """
 			{"type":"record","name":"Order","namespace":"com.example","fields":[
 			{"name":"id","type":"int"},{"name":"amount","type":"long"},
@@ -98,7 +98,7 @@ final class SrRest {
 		return ok("POST", subjectPath(subject) + "/versions", body).get("id").asInt();
 	}
 
-	/** Aktif (deleted=true ise soft-delete edilmişler dahil) versiyonlar; subject yoksa boş. */
+	/** Active versions (soft-deleted ones included if deleted=true); empty if the subject does not exist. */
 	static List<Integer> versions(String subject, boolean deleted) {
 		Resp r = call("GET", subjectPath(subject) + "/versions" + (deleted ? "?deleted=true" : ""), null);
 		List<Integer> out = new ArrayList<>();
@@ -122,7 +122,7 @@ final class SrRest {
 		ok("PUT", "/config", Map.of("compatibility", level));
 	}
 
-	/** Subject seviyesindeki compatibility; tanımlı değilse null. */
+	/** Subject-level compatibility; null if not configured. */
 	static String subjectLevel(String subject) {
 		Resp r = call("GET", "/config/" + SchemaRegistryClient.enc(subject), null);
 		return r.status() == 404 ? null : r.body().get("compatibilityLevel").asText();

@@ -12,7 +12,7 @@ import com.fasterxml.jackson.databind.ObjectWriter;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Şema metni yardımcıları: schemaType normalizasyonu, okunaklı (pretty) JSON ve uzun metin kesme. */
+/** Schema text helpers: schemaType normalization, pretty-printed JSON and truncation of long text. */
 public final class SchemaTexts {
 
 	public static final String AVRO = "AVRO";
@@ -39,24 +39,24 @@ public final class SchemaTexts {
 	private SchemaTexts() {
 	}
 
-	/** null/boş → AVRO; büyük harfe çevirir; AVRO/JSON/PROTOBUF dışı değerlerde Türkçe hata. */
+	/** null/blank → AVRO; converts to upper case; error for values other than AVRO/JSON/PROTOBUF. */
 	public static String normalizeType(String schemaType) {
 		if (schemaType == null || schemaType.isBlank()) {
 			return AVRO;
 		}
 		String t = schemaType.trim().toUpperCase(Locale.ROOT);
 		if (!TYPES.contains(t)) {
-			throw new ToolException("Geçersiz schemaType: " + schemaType + " (geçerli: " + TYPES + ")");
+			throw new ToolException("Invalid schemaType: " + schemaType + " (valid: " + TYPES + ")");
 		}
 		return t;
 	}
 
-	/** SR yanıtındaki schemaType: yoksa AVRO, varsa büyük harfli değer (bilinmeyen tipler de olduğu gibi kalır). */
+	/** schemaType from an SR response: AVRO if absent, otherwise the upper-case value (unknown types are kept). */
 	public static String typeOf(String schemaType) {
 		return schemaType == null || schemaType.isBlank() ? AVRO : schemaType.trim().toUpperCase(Locale.ROOT);
 	}
 
-	/** AVRO/JSON şemalarını girintili JSON'a çevirir; PROTOBUF ya da parse edilemeyen metin olduğu gibi döner. */
+	/** Pretty-prints AVRO/JSON schemas; PROTOBUF or text that cannot be parsed is returned as is. */
 	public static String pretty(String schemaType, String schema) {
 		if (schema == null || PROTOBUF.equals(schemaType)) {
 			return schema;
@@ -70,7 +70,7 @@ public final class SchemaTexts {
 		}
 	}
 
-	/** Metni en fazla maxChars karaktere keser (kesildiyse sonuna "…" eklenir). */
+	/** Truncates the text to at most maxChars characters ("…" is appended if it was truncated). */
 	public static String truncate(String text, int maxChars) {
 		if (text == null || text.length() <= maxChars) {
 			return text;
