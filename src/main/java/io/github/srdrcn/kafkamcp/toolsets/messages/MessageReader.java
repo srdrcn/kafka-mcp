@@ -178,7 +178,7 @@ public final class MessageReader {
 					notes.add("No records at or after this time: partition " + list(none));
 				}
 				at.unsupportedByReason()
-					.forEach((reason, ps) -> notes.add("Could not find a start by time, not read: partition "
+					.forEach((reason, ps) -> notes.add("No start offset found by time; not read: partition "
 							+ list(ps) + " (" + reason + ")"));
 			}
 			default -> throw new IllegalStateException();
@@ -263,7 +263,7 @@ public final class MessageReader {
 		long untimed = records.stream().filter(MessageReader::untimed).count();
 		boolean approximate = (!filtered && (reduced || !shortfall.isEmpty())) || untimed > 0;
 		if (untimed > 0) {
-			notes.add(untimed + " records have no timestamp (old v0 message format): the newest records could not be "
+			notes.add(untimed + " record(s) have no timestamp (old v0 message format): the newest records could not be "
 					+ "picked by time, so they were picked fairly from the end of each partition; these records are listed "
 					+ "before timed records, in partition/offset order");
 		}

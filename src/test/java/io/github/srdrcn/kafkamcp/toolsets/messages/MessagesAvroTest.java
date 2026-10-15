@@ -61,7 +61,7 @@ class MessagesAvroTest extends SchemaRegistryIntegrationTest {
 		for (int i = 0; i < 4; i++) {
 			GenericRecord r = new GenericData.Record(schema);
 			r.put("id", (long) i);
-			r.put("customer", "customer-" + i);
+			r.put("customer", "customer-€" + i);
 			r.put("amount", ByteBuffer.wrap(new BigDecimal("12.3" + i).unscaledValue().toByteArray()));
 			r.put("note", i % 2 == 0 ? null : "note-" + i);
 			r.put("createdAt", 1_700_000_000_000L + i);
@@ -105,7 +105,7 @@ class MessagesAvroTest extends SchemaRegistryIntegrationTest {
 		assertThat(first.get("valueSchemaId").asInt()).isEqualTo(schemaId);
 		JsonNode v = first.get("value");
 		assertThat(v.get("id").asLong()).isZero();
-		assertThat(v.get("customer").asText()).isEqualTo("customer-0");
+		assertThat(v.get("customer").asText()).isEqualTo("customer-€0");
 		assertThat(v.get("amount").decimalValue()).isEqualByComparingTo("12.30");
 		assertThat(v.has("note")).isTrue();
 		assertThat(v.get("note").isNull()).isTrue();

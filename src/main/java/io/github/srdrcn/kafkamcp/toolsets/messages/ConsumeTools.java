@@ -70,7 +70,7 @@ public class ConsumeTools {
 					.handler(this::get),
 				ToolSpec
 					.read("messages_headers",
-							"Summarize the headers of the messages read: count per key, distinct value count, sample values")
+							"Summarize headers of the latest (or earliest) messages: count per key, distinct value count, sample values")
 					.required("topic", MessageParams.topic())
 					.param("partition", MessageParams.partition())
 					.param("from", P.enumOf("Start position (default latest = the most recent records)", "earliest", "latest"))

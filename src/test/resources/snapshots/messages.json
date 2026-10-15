@@ -134,7 +134,7 @@
   }
 }, {
   "name" : "messages_headers",
-  "description" : "Summarize the headers of the messages read: count per key, distinct value count, sample values",
+  "description" : "Summarize headers of the latest (or earliest) messages: count per key, distinct value count, sample values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
