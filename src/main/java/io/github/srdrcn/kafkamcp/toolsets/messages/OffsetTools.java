@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -63,12 +64,15 @@ public class OffsetTools {
 		List<TopicPartition> tps = sel.online();
 		ListOffsetsResult byTime = PartitionOffsets.request(call, tps, OffsetSpec.forTimestamp(ts));
 		ListOffsetsResult latest = PartitionOffsets.request(call, tps, OffsetSpec.latest());
-		Map<TopicPartition, OffsetAt> at = PartitionOffsets.await(call, byTime);
+		// eski ZooKeeper broker'ları (v0 mesaj formatı / eski protokol) zamana göre aramayı partition bazında
+		// reddedebilir: o partition'lar hata notu alır, diğerleri döner
+		PartitionOffsets.Lookup at = PartitionOffsets.awaitEach(call, tps, byTime);
 		Map<TopicPartition, OffsetAt> ends = PartitionOffsets.await(call, latest);
 		List<Map<String, Object>> rows = new ArrayList<>();
 		int found = 0;
 		for (TopicPartition tp : tps) {
-			OffsetAt a = at.get(tp);
+			OffsetAt a = at.offsets().get(tp);
+			String unsupported = at.unsupported().get(tp);
 			Map<String, Object> row = Results.map("partition", tp.partition());
 			if (a != null && a.found()) {
 				found++;
@@ -78,17 +82,32 @@ public class OffsetTools {
 			else {
 				row.put("offset", NullNode.getInstance());
 				row.put("latestOffset", ends.get(tp).offset());
+				if (unsupported != null) {
+					row.put("error", unsupported);
+				}
 			}
 			rows.add(row);
 		}
+		int failed = at.unsupported().size();
+		int notFound = tps.size() - found - failed;
 		Map<String, Object> out = Results.map("topic", topic, "timestamp", Timestamps.iso(ts), "found", found,
-				"notFound", tps.size() - found);
-		if (found < tps.size()) {
+				"notFound", notFound, "unsupported", failed > 0 ? failed : null);
+		if (notFound > 0) {
 			out.put("note", "offset null: o partition'da bu zamandan sonra kayıt yok (latestOffset'ten itibaren yeni kayıt gelir)");
+		}
+		if (failed > 0) {
+			out.put("unsupportedNote", unsupportedNote(at));
 		}
 		offline(out, sel);
 		out.put("partitions", rows);
 		return out;
+	}
+
+	/** Zamana göre aramayı desteklemeyen partition'lar için not (nedene göre gruplu). */
+	private static String unsupportedNote(PartitionOffsets.Lookup at) {
+		List<String> parts = new ArrayList<>();
+		at.unsupportedByReason().forEach((reason, ps) -> parts.add("partition " + ps + ": " + reason));
+		return "Zamana göre offset aranamadı (" + String.join("; ", parts) + ")";
 	}
 
 	Object count(ToolCall call) {
@@ -115,11 +134,26 @@ public class OffsetTools {
 		ListOffsetsResult t = toTs == null ? null : PartitionOffsets.request(call, tps, OffsetSpec.forTimestamp(toTs));
 		Map<TopicPartition, OffsetAt> earliest = PartitionOffsets.await(call, e);
 		Map<TopicPartition, OffsetAt> latest = PartitionOffsets.await(call, l);
-		Map<TopicPartition, OffsetAt> fromAt = f == null ? null : PartitionOffsets.await(call, f);
-		Map<TopicPartition, OffsetAt> toAt = t == null ? null : PartitionOffsets.await(call, t);
+		// zaman sınırları: eski ZooKeeper broker'larında desteklenmeyen partition'lar sayıma girmez, not alır
+		PartitionOffsets.Lookup fromLookup = f == null ? null : PartitionOffsets.awaitEach(call, tps, f);
+		PartitionOffsets.Lookup toLookup = t == null ? null : PartitionOffsets.awaitEach(call, tps, t);
+		Map<TopicPartition, OffsetAt> fromAt = fromLookup == null ? null : fromLookup.offsets();
+		Map<TopicPartition, OffsetAt> toAt = toLookup == null ? null : toLookup.offsets();
+		Map<TopicPartition, String> unsupported = new LinkedHashMap<>();
+		if (fromLookup != null) {
+			unsupported.putAll(fromLookup.unsupported());
+		}
+		if (toLookup != null) {
+			toLookup.unsupported().forEach(unsupported::putIfAbsent);
+		}
 		List<Map<String, Object>> rows = new ArrayList<>();
 		long total = 0;
 		for (TopicPartition tp : tps) {
+			String reason = unsupported.get(tp);
+			if (reason != null) {
+				rows.add(Results.map("partition", tp.partition(), "count", NullNode.getInstance(), "error", reason));
+				continue;
+			}
 			long lo = earliest.get(tp).offset();
 			long hi = latest.get(tp).offset();
 			long start = lo;
@@ -148,6 +182,12 @@ public class OffsetTools {
 				"fromTimestamp", fromTs == null ? null : Timestamps.iso(fromTs), "toTimestamp",
 				toTs == null ? null : Timestamps.iso(toTs), "total", total, "approximate", true, "note",
 				"Sayım offset farkıdır (end hariç): compacted ya da transactional topic'lerde gerçek kayıt sayısı daha az olabilir");
+		if (!unsupported.isEmpty()) {
+			out.put("partial", true);
+			out.put("unsupported", unsupported.size());
+			out.put("unsupportedNote", unsupportedNote(new PartitionOffsets.Lookup(Map.of(), unsupported))
+					+ "; total bu partition'ları içermez");
+		}
 		offline(out, sel);
 		out.put("partitions", rows);
 		return out;

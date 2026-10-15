@@ -105,7 +105,8 @@ class AclExplainTest extends KafkaIntegrationTest {
 		// Kafka 4.x super.users'ı sensitive döndürür: bilinmiyorsa not düşülür
 		JsonNode admin = explain("User:admin", "WRITE", "TOPIC", topic);
 		assertThat(admin.get("decision").asText()).isEqualTo("DENY");
-		assertThat(admin.get("reason").asText()).contains("allow.everyone.if.no.acl.found=false");
+		// değer gizli: karar kesinmiş gibi değil, varsayım olarak ifade edilir
+		assertThat(admin.get("reason").asText()).contains("false varsayıldı").contains("true ise ALLOW");
 		assertThat(admin.get("allowEveryoneIfNoAclFound").asBoolean()).isFalse();
 		assertThat(admin.get("resourceAclCount").asInt()).isZero();
 		assertThat(admin.get("notes").toString()).contains("super.users").contains("allow.everyone.if.no.acl.found");

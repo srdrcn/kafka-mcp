@@ -91,6 +91,8 @@ public class LagTools {
 		for (PartitionLag p : g.lag().partitions()) {
 			byTopic.get(p.topic()).add(p);
 		}
+		Map<TopicPartition, MemberDescription> incoming = ConsumerGroups.incomingOwners(g.description());
+		int reassigning = 0;
 		List<Map<String, Object>> topics = new ArrayList<>();
 		int budget = maxRows;
 		int omitted = 0;
@@ -114,10 +116,12 @@ public class LagTools {
 				}
 				budget--;
 				MemberDescription owner = g.owners().get(p.topicPartition());
+				MemberDescription target = owner == null ? incoming.get(p.topicPartition()) : null;
+				reassigning += target == null ? 0 : 1;
 				rows.add(Results.map("partition", p.partition(), "committed", p.committed(), "end", p.end(), "lag",
 						p.lag(), "clientId", owner == null ? null : owner.clientId(), "host",
-						owner == null ? null : owner.host(), "noCommit", p.committed() == null ? Boolean.TRUE : null,
-						"error", p.error()));
+						owner == null ? null : owner.host(), "reassigningTo", target == null ? null : target.clientId(),
+						"noCommit", p.committed() == null ? Boolean.TRUE : null, "error", p.error()));
 			}
 			omitted += topicOmitted;
 			topics.add(Results.map("topic", e.getKey(), "lag", lagByTopic.get(e.getKey()), "partitions", rows,
@@ -131,15 +135,16 @@ public class LagTools {
 				withoutEnd > 0 ? Boolean.TRUE : null, "topics", topics, "partitionRowsOmitted",
 				omitted > 0 ? omitted : null, "topicsOmitted", topicsOmitted > 0 ? topicsOmitted : null,
 				"omittedTopicsLag", topicsOmitted > 0 ? omittedTopicsLag : null, "note",
-				topics.isEmpty() ? "Grubun commit edilmiş offset'i ya da partition ataması yok" : null);
+				topics.isEmpty() ? "Grubun commit edilmiş offset'i ya da partition ataması yok"
+						: reassigning > 0 ? ConsumerGroups.REASSIGNING_NOTE : null);
 	}
 
 	Object withLag(ToolCall call) {
 		long threshold = Math.max(0, call.longValue("threshold", DEFAULT_THRESHOLD));
 		Pattern topicRe = call.regex("topic");
 		Predicate<String> topicFilter = topicRe == null ? null : t -> topicRe.matcher(t).find();
-		GroupList list = ConsumerGroups.list(call);
-		List<GroupSummary> groups = list.groups().stream().filter(g -> call.matches(g.groupId())).toList();
+		GroupList list = ConsumerGroups.list(call, ConsumerGroups.LIST_RESERVE_MS, call::matches);
+		List<GroupSummary> groups = list.groups();
 		GroupLag.Snapshot snapshot = GroupLag.lagSnapshot(call, groups.stream().map(GroupSummary::groupId).toList(),
 				topicFilter);
 		Map<String, GroupLagInfo> lags = snapshot.groups();
@@ -290,9 +295,9 @@ public class LagTools {
 
 	Object stuck(ToolCall call) {
 		int interval = Params.intervalSeconds(call);
-		GroupList list = ConsumerGroups.list(call, Params.FIRST_LIST_RESERVE_MS);
+		GroupList list = ConsumerGroups.list(call, Params.FIRST_LIST_RESERVE_MS, call::matches);
 		Map<String, GroupSummary> summaries = new LinkedHashMap<>();
-		list.groups().stream().filter(g -> call.matches(g.groupId())).forEach(g -> summaries.put(g.groupId(), g));
+		list.groups().forEach(g -> summaries.put(g.groupId(), g));
 		long t0 = System.nanoTime();
 		Map<String, Committed> c0 = GroupLag.committed(call, summaries.keySet(), null,
 				Params.FIRST_COMMITTED_RESERVE_MS);

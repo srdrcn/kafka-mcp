@@ -12,6 +12,7 @@ import java.util.regex.Pattern;
 
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.MemberDescription;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.acl.AccessControlEntryFilter;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -70,7 +71,9 @@ public class GroupTools {
 		return List.of(
 				ToolSpec.read("consumer_groups_list", "Consumer group'ları listeler (groupId, state, type, protocol)")
 					.listParams()
-					.param("state", P.enumOf("Sadece bu durumdaki gruplar", STATES))
+					.param("state", P.enumOf(
+							"Sadece bu durumdaki gruplar (Assigning/Reconciling sadece KRaft'taki consumer tipi gruplarda)",
+							STATES))
 					.handler(this::list),
 				ToolSpec
 					.read("consumer_groups_get",
@@ -100,13 +103,10 @@ public class GroupTools {
 		if (state != null && STATES.stream().noneMatch(state::equalsIgnoreCase)) {
 			throw new ToolException("Geçersiz state: " + state + " (geçerli: " + STATES + ")");
 		}
-		GroupList list = ConsumerGroups.list(call, LIST_ONLY_RESERVE_MS);
+		GroupList list = ConsumerGroups.list(call, LIST_ONLY_RESERVE_MS, call::matches);
 		Map<String, Integer> byState = new TreeMap<>();
 		List<Map<String, Object>> rows = new ArrayList<>();
 		for (GroupSummary g : list.groups()) {
-			if (!call.matches(g.groupId())) {
-				continue;
-			}
 			byState.merge(g.state() == null ? "Unknown" : g.state(), 1, Integer::sum);
 			if (state == null || state.equalsIgnoreCase(g.state() == null ? "Unknown" : g.state())) {
 				rows.add(g.toMap());
@@ -139,6 +139,8 @@ public class GroupTools {
 			assignmentOmitted += Math.max(0, assigned - assignmentBudget);
 			assignmentBudget = Math.max(0, assignmentBudget - assigned);
 		}
+		Map<TopicPartition, MemberDescription> incoming = ConsumerGroups.incomingOwners(d);
+		int reassigning = 0;
 		Map<String, List<PartitionLag>> byTopic = new TreeMap<>();
 		for (PartitionLag p : g.lag().partitions()) {
 			byTopic.computeIfAbsent(p.topic(), k -> new ArrayList<>()).add(p);
@@ -163,8 +165,11 @@ public class GroupTools {
 				}
 				budget--;
 				MemberDescription owner = g.owners().get(p.topicPartition());
+				MemberDescription target = owner == null ? incoming.get(p.topicPartition()) : null;
+				reassigning += target == null ? 0 : 1;
 				rows.add(Results.map("partition", p.partition(), "committed", p.committed(), "end", p.end(), "lag",
-						p.lag(), "owner", owner == null ? null : owner.consumerId(), "noCommit",
+						p.lag(), "owner", owner == null ? null : owner.consumerId(), "reassigningTo",
+						target == null ? null : target.consumerId(), "noCommit",
 						p.committed() == null ? Boolean.TRUE : null, "error", p.error()));
 			}
 			omitted += topicOmitted;
@@ -181,15 +186,23 @@ public class GroupTools {
 				withoutEnd > 0 ? withoutEnd : null);
 		String assignor = d.partitionAssignor() == null || d.partitionAssignor().isBlank() ? null
 				: d.partitionAssignor();
-		return Results.map("groupId", d.groupId(), "state", g.state(), "type", ConsumerGroups.type(d.type()),
-				"simple", d.isSimpleConsumerGroup() ? Boolean.TRUE : null, "coordinator",
-				ConsumerGroups.node(d.coordinator()), "partitionAssignor", assignor, "memberCount", members.size(),
-				"members", members, "assignmentPartitionsOmitted", assignmentOmitted > 0 ? assignmentOmitted : null,
-				"offsets", topics, "totals", totals, "partitionRowsOmitted", omitted > 0 ? omitted : null,
+		List<String> notes = new ArrayList<>();
+		if (withoutCommit > 0) {
+			notes.add("noCommit: atanmış ama commit edilmiş offset'i olmayan partition (lag hesaplanmadı)");
+		}
+		if (reassigning > 0) {
+			notes.add(ConsumerGroups.REASSIGNING_NOTE);
+		}
+		Map<String, Object> out = Results.map("groupId", d.groupId(), "state", g.state(), "type",
+				ConsumerGroups.type(d.type()), "simple", d.isSimpleConsumerGroup() ? Boolean.TRUE : null,
+				"coordinator", ConsumerGroups.node(d.coordinator()), "partitionAssignor", assignor);
+		// KIP-848 consumer tipi gruplar (sadece KRaft): groupEpoch, targetAssignmentEpoch.
+		out.putAll(ConsumerGroups.consumerProtocolFields(d));
+		out.putAll(Results.map("memberCount", members.size(), "members", members, "assignmentPartitionsOmitted",
+				assignmentOmitted > 0 ? assignmentOmitted : null, "offsets", topics, "totals", totals, "partitionRowsOmitted", omitted > 0 ? omitted : null,
 				"topicsOmitted", topicsOmitted > 0 ? topicsOmitted : null, "partial",
-				withoutEnd > 0 ? Boolean.TRUE : null, "note",
-				withoutCommit > 0 ? "noCommit: atanmış ama commit edilmiş offset'i olmayan partition (lag hesaplanmadı)"
-						: null);
+				withoutEnd > 0 ? Boolean.TRUE : null, "note", notes.isEmpty() ? null : String.join("; ", notes)));
+		return out;
 	}
 
 	/** Sıralı map'in ilk max girdisi. */
@@ -215,24 +228,30 @@ public class GroupTools {
 		}
 		GroupList list = ConsumerGroups.list(call, LIST_BEFORE_DESCRIBE_RESERVE_MS);
 		List<GroupSummary> candidates = list.groups().stream().filter(GroupSummary::mayHaveMembers).toList();
-		Map<String, Settled<ConsumerGroupDescription>> described = ConsumerGroups.describe(call,
-				candidates.stream().map(GroupSummary::groupId).toList());
+		// Eski broker'da (state'siz liste) list() grupları zaten describe etti: onlar tekrar sorulmaz.
+		Map<String, ConsumerGroupDescription> known = list.descriptions();
+		Map<String, Settled<ConsumerGroupDescription>> fresh = ConsumerGroups.describe(call,
+				candidates.stream().map(GroupSummary::groupId).filter(id -> !known.containsKey(id)).toList());
 		List<Map<String, Object>> groups = new ArrayList<>();
 		int matchedGroups = 0;
 		int matchedMembers = 0;
 		int skipped = 0;
 		int noResponse = 0;
-		for (Map.Entry<String, Settled<ConsumerGroupDescription>> e : described.entrySet()) {
-			if (!e.getValue().ok()) {
-				if (e.getValue().timedOut()) {
-					noResponse++;
+		for (GroupSummary candidate : candidates) {
+			ConsumerGroupDescription d = known.get(candidate.groupId());
+			if (d == null) {
+				Settled<ConsumerGroupDescription> s = fresh.get(candidate.groupId());
+				if (s == null || !s.ok()) {
+					if (s == null || s.timedOut()) {
+						noResponse++;
+					}
+					else {
+						skipped++;
+					}
+					continue;
 				}
-				else {
-					skipped++;
-				}
-				continue;
+				d = s.value();
 			}
-			ConsumerGroupDescription d = e.getValue().value();
 			List<MemberDescription> matching = new ArrayList<>();
 			for (MemberDescription m : ConsumerGroups.sortedMembers(d)) {
 				if (host != null && (m.host() == null || !host.matcher(m.host()).find())) {
@@ -273,12 +292,8 @@ public class GroupTools {
 	}
 
 	Object empty(ToolCall call) {
-		GroupList list = ConsumerGroups.list(call);
-		List<GroupSummary> empty = list.groups()
-			.stream()
-			.filter(GroupSummary::isEmptyState)
-			.filter(g -> call.matches(g.groupId()))
-			.toList();
+		GroupList list = ConsumerGroups.list(call, ConsumerGroups.LIST_RESERVE_MS, call::matches);
+		List<GroupSummary> empty = list.groups().stream().filter(GroupSummary::isEmptyState).toList();
 		GroupLag.Snapshot snapshot = GroupLag.lagSnapshot(call, empty.stream().map(GroupSummary::groupId).toList(),
 				null);
 		Map<String, GroupLagInfo> lags = snapshot.groups();

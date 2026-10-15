@@ -32,6 +32,7 @@ import org.springframework.stereotype.Component;
 
 import io.github.srdrcn.kafkamcp.config.ClusterConfig;
 import io.github.srdrcn.kafkamcp.config.KerberosConfig;
+import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
 import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.Results;
@@ -42,6 +43,13 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 /** scram_users_list, delegation_tokens_list, kerberos_self_check, security_summary. */
 @Component
 public class SecurityTools {
+
+	/** describeUserScramCredentials gereksinimi: ZooKeeper'da KIP-554 (2.7), KRaft'ta KIP-900 (3.5). */
+	static final String SCRAM_REQUIREMENT = "SCRAM kullanıcılarını listelemek ZooKeeper'da Kafka 2.7+, "
+			+ "KRaft'ta 3.5+ (metadata.version 3.5-IV2+) gerektirir";
+
+	/** describeClientQuotas (KIP-546) gereksinimi. */
+	static final String QUOTA_REQUIREMENT = "kotaları Admin API ile okumak Kafka 2.6+ gerektirir";
 
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
@@ -61,13 +69,22 @@ public class SecurityTools {
 					.handler(this::kerberosSelfCheck),
 				ToolSpec
 					.read("security_summary",
-							"Güvenlik özeti: listener/SASL/authorizer ayarları, ACL/SCRAM/kota/token sayıları, bu sunucunun bağlantısı")
+							"Güvenlik özeti: metadata modu (KRaft/ZooKeeper), listener/SASL/authorizer ayarları, ACL/SCRAM/kota/token sayıları, bu sunucunun bağlantısı")
 					.handler(this::securitySummary));
 	}
 
 	Object scramUsers(ToolCall call) {
-		Map<String, UserScramCredentialsDescription> all = call
-			.await(call.admin().describeUserScramCredentials().all());
+		Map<String, UserScramCredentialsDescription> all;
+		try {
+			all = call.await(call.admin().describeUserScramCredentials().all());
+		}
+		catch (ToolException e) {
+			String note = Acls.unsupportedNote(e, SCRAM_REQUIREMENT);
+			if (note != null) {
+				return Acls.unsupported(note);
+			}
+			throw e;
+		}
 		List<Map<String, Object>> rows = new ArrayList<>();
 		for (UserScramCredentialsDescription d : new TreeMap<>(all).values()) {
 			if (!call.matches(d.name())) {
@@ -121,13 +138,14 @@ public class SecurityTools {
 	/** Delegation token kapalı/desteklenmiyor hataları için Türkçe not; başka hata ise null. */
 	public static String tokenNote(Throwable e) {
 		if (Acls.causedBy(e, DelegationTokenDisabledException.class)) {
-			return "Delegation token'lar bu cluster'da kapalı (broker'da delegation.token.secret.key tanımlı değil)";
+			return "Delegation token'lar bu cluster'da kapalı (broker'da delegation.token.secret.key tanımlı değil; "
+					+ "Kafka 3.0 öncesi ZooKeeper broker'larında delegation.token.master.key)";
 		}
 		if (Acls.causedBy(e, UnsupportedByAuthenticationException.class)) {
 			return "Delegation token istekleri bu bağlantı tipinde yapılamaz (PLAINTEXT, tek yönlü SSL ya da token ile kimlik doğrulama)";
 		}
 		if (Acls.causedBy(e, UnsupportedVersionException.class)) {
-			return "Broker delegation token API'sini desteklemiyor";
+			return "Broker delegation token API'sini desteklemiyor (sürüm): ZooKeeper'da Kafka 1.1+, KRaft'ta 3.6+ gerekir";
 		}
 		return null;
 	}
@@ -234,6 +252,10 @@ public class SecurityTools {
 
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("cluster", call.cluster());
+		String mode = broker.mode();
+		if (mode != null) {
+			out.put("mode", mode);
+		}
 		out.put("broker", broker.render());
 		try {
 			List<AclBinding> acls = Acls.await(call, aclsFuture);
@@ -257,13 +279,15 @@ public class SecurityTools {
 			out.put("scram", Results.map("users", call.await(scramFuture).size()));
 		}
 		catch (ToolException e) {
-			out.put("scram", Results.map("error", e.getMessage()));
+			String note = Acls.unsupportedNote(e, SCRAM_REQUIREMENT);
+			out.put("scram", note != null ? Acls.unsupported(note) : Results.map("error", e.getMessage()));
 		}
 		try {
 			out.put("quotas", Results.map("entities", call.await(quotasFuture).size()));
 		}
 		catch (ToolException e) {
-			out.put("quotas", Results.map("error", e.getMessage()));
+			String note = Acls.unsupportedNote(e, QUOTA_REQUIREMENT);
+			out.put("quotas", note != null ? Acls.unsupported(note) : Results.map("error", e.getMessage()));
 		}
 		try {
 			List<DelegationToken> tokens = call.await(tokensFuture);
@@ -281,7 +305,25 @@ public class SecurityTools {
 		if (broker.error() == null && (broker.hidden(BrokerSecurity.SUPER_USERS)
 				|| broker.hidden(BrokerSecurity.ALLOW_EVERYONE))) {
 			notes.add("super.users / allow.everyone.if.no.acl.found broker tarafından sensitive olarak gizleniyor "
-					+ "(Kafka 4.x); değerleri broker config'inden (server.properties/Helm) kontrol edin");
+					+ "(authorizer ayarları; ZooKeeper ve KRaft'ta aynı); değerleri broker config'inden "
+					+ "(server.properties/Helm) kontrol edin");
+		}
+		String customAuthorizer = broker.customAuthorizerNote();
+		if (customAuthorizer != null) {
+			notes.add(customAuthorizer);
+		}
+		if (ClusterMeta.ZOOKEEPER.equals(mode)
+				&& "false".equalsIgnoreCase(broker.value(BrokerSecurity.ZOOKEEPER_SET_ACL))) {
+			notes.add("ZooKeeper modu: ACL'ler ve SCRAM kimlik bilgileri ZooKeeper'da saklanıyor ve "
+					+ "zookeeper.set.acl=false; ZooKeeper'a ağ erişimi olan herkes bunları okuyup değiştirebilir "
+					+ "(ZooKeeper erişimini kısıtlayın ya da ZooKeeper SASL/mTLS ile zookeeper.set.acl=true kullanın)");
+		}
+		String controllerProtocol = broker.controllerSecurityProtocol();
+		if ("PLAINTEXT".equals(controllerProtocol)) {
+			notes.add("KRaft modu: controller listener'ı (" + broker.controllerListener() + ") PLAINTEXT; ACL, SCRAM "
+					+ "ve delegation token metadata'sı broker ile controller'lar arasında şifresiz ve kimlik doğrulamasız "
+					+ "taşınıyor (controller'lar bağlananı ANONYMOUS görür). Controller portlarına ağ erişimini "
+					+ "kısıtlayın ya da SSL/SASL_SSL kullanın");
 		}
 		if (!notes.isEmpty()) {
 			out.put("notes", notes);

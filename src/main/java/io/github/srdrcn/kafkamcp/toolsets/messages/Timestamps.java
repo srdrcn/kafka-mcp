@@ -30,8 +30,19 @@ public final class Timestamps {
 
 	/**
 	 * ISO-8601 (2025-01-31T10:00:00Z, +03:00 ofsetli, ofsetsiz = UTC, sadece tarih = gün başı UTC) ya da epoch ms.
+	 * Negatif değer (1970 öncesi) reddedilir: listOffsets'te -1/-2/-3... LATEST/EARLIEST/MAX_TIMESTAMP gibi özel
+	 * anlamlar taşır ve broker sürümüne göre farklı sonuç (ya da eski broker'da UnsupportedVersionException) verir.
 	 */
 	public static long parse(String name, String value) {
+		long ms = parseAny(name, value);
+		if (ms < 0) {
+			throw new ToolException("Geçersiz zaman (" + name + "): " + value
+					+ " — zaman negatif/1970 öncesi olamaz (epoch milisaniye >= 0)");
+		}
+		return ms;
+	}
+
+	private static long parseAny(String name, String value) {
 		String v = value.trim();
 		if (v.matches("-?\\d+")) {
 			try {
