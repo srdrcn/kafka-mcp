@@ -1,0 +1,370 @@
+[ {
+  "name" : "consumer_groups_list",
+  "description" : "Consumer group'ları listeler (groupId, state, type, protocol)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      },
+      "state" : {
+        "type" : "string",
+        "description" : "Sadece bu durumdaki gruplar",
+        "enum" : [ "Stable", "Empty", "PreparingRebalance", "CompletingRebalance", "Dead", "Assigning", "Reconciling", "Unknown" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_get",
+  "description" : "Group detayı: state, coordinator, assignor, üyeler ve atamaları, partition bazında committed/end offset, lag ve sahip üye",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_find_by_member",
+  "description" : "Üye host'u ya da clientId'si (regex) eşleşen grupları ve üyelerini bulur (en az biri gerekli)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "host" : {
+        "type" : "string",
+        "description" : "Üye host regex'i (ör. 10\\.1\\.2\\.)"
+      },
+      "clientId" : {
+        "type" : "string",
+        "description" : "Üye clientId regex'i"
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_empty",
+  "description" : "Empty durumdaki gruplar, hâlâ commit'li offset'i olan topic'leri ve toplam lag'leri (eski grup adayları)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_acls",
+  "description" : "Gruba uygulanan ACL'ler (literal, prefixed, wildcard): principal, host, operation, permission",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_lag",
+  "description" : "Grubun lag'i: topic toplamları ve partition bazında committed, end, lag, sahip clientId/host (lag'e göre azalan)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Sadece bu topic (tam ad)"
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_with_lag",
+  "description" : "Toplam lag'i eşiğin üstündeki gruplar (azalan): state ve en yüksek lag'li 5 topic ile",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "threshold" : {
+        "type" : "integer",
+        "description" : "En az toplam lag (varsayılan 1000)",
+        "minimum" : 0,
+        "default" : 1000
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Sadece bu regex'e uyan topic'ler sayılır"
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_lag_trend",
+  "description" : "Lag eğilimi: iki örnekle topic bazında lag, tüketim/üretim hızı (mesaj/sn), trend ve yetişme süresi tahmini",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "İki örnek arası bekleme, sn (varsayılan 5)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_stuck",
+  "description" : "Takılı gruplar: iki örnek arasında commit'i ilerlemeyen, end offset'i artan ve lag'i olan partition'lar",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "İki örnek arası bekleme, sn (varsayılan 5)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "consumer_groups_offsets_reset",
+  "description" : "YAZMA: Grubun bir topic'teki offset'lerini earliest/latest/offset/timestamp/shift'e taşır; grup Empty olmalı (aktif üye yok)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partitions" : {
+        "type" : "array",
+        "description" : "Partition numaraları (boşsa topic'in tüm partition'ları)",
+        "items" : {
+          "type" : "integer"
+        }
+      },
+      "to" : {
+        "type" : "string",
+        "description" : "Hedef: earliest, latest, offset, timestamp ya da shift",
+        "enum" : [ "earliest", "latest", "offset", "timestamp", "shift" ]
+      },
+      "offset" : {
+        "type" : "integer",
+        "description" : "to=offset için hedef offset",
+        "minimum" : 0
+      },
+      "timestamp" : {
+        "type" : "string",
+        "description" : "to=timestamp için zaman (ISO-8601 ya da epoch ms)"
+      },
+      "shiftBy" : {
+        "type" : "integer",
+        "description" : "to=shift için mevcut commit'e eklenecek miktar (negatif olabilir)"
+      }
+    },
+    "required" : [ "cluster", "group", "topic", "to" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : true
+  }
+}, {
+  "name" : "consumer_groups_offsets_delete",
+  "description" : "YAZMA: Grubun bir topic'teki commit edilmiş offset'lerini siler (tüm ya da seçili partition'lar)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partitions" : {
+        "type" : "array",
+        "description" : "Partition numaraları (boşsa commit'i olan tüm partition'lar)",
+        "items" : {
+          "type" : "integer"
+        }
+      }
+    },
+    "required" : [ "cluster", "group", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : true
+  }
+}, {
+  "name" : "consumer_groups_delete",
+  "description" : "YAZMA: Consumer group'u siler; grup boş olmalı (aktif üye yok)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : false,
+    "destructiveHint" : true
+  }
+} ]
