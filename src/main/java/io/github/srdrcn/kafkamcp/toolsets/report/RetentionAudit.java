@@ -86,7 +86,7 @@ public final class RetentionAudit {
 			Double ratio = ConfigValues.doubleValue(c, "min.cleanable.dirty.ratio");
 			if (ratio != null && (ratio < 0.1 || ratio > 0.9)) {
 				f.add("dirty_ratio_extreme", Severity.LOW,
-						"Extreme min.cleanable.dirty.ratio: < 0.1 means frequent compaction (CPU/disk IO), > 0.9 keeps duplicate keys for long",
+						"Extreme min.cleanable.dirty.ratio: < 0.1 means frequent compaction (CPU/disk IO), > 0.9 keeps duplicate keys for a long time",
 						ConfigValues.item(topic, c, "min.cleanable.dirty.ratio"));
 			}
 		}

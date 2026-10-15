@@ -100,7 +100,7 @@ public final class ReplicationAudit {
 				ConfigEntry e = c.get("min.insync.replicas");
 				if (minIsr > rf) {
 					f.add("min_isr_above_rf", Severity.CRITICAL,
-							"min.insync.replicas > RF: older brokers always reject acks=all writes; newer versions cap min ISR at RF (no expected durability)",
+							"min.insync.replicas > RF: older brokers always reject acks=all writes; newer versions cap min ISR at RF, so the intended durability is not provided",
 							minIsrItem(t, rf, minIsr, e));
 				}
 				else if (minIsr == rf && rf > 1) {

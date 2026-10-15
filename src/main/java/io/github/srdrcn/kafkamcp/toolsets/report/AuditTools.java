@@ -45,12 +45,12 @@ public class AuditTools {
 				ToolSpec.read("report_partition_outliers",
 						"Partition outliers: partition counts far above the median, size skew within topics, leader imbalance across brokers")
 					.param("partitionFactor",
-							ReportParams.integer("Multiple of the median partition count that is an outlier (default 4)", 4,
+							ReportParams.integer("Multiple of the median partition count above which a topic is an outlier (default 4)", 4,
 									2, 1000))
 					.param("minPartitions", ReportParams.integer("Minimum partition count for an outlier (default 50)", 50, 1,
 							100_000))
 					.param("skewFactor",
-							ReportParams.integer("Multiple of the topic's average partition size that is skew (default 3)", 3,
+							ReportParams.integer("Multiple of the topic's average partition size above which a partition is skewed (default 3)", 3,
 									2, 1000))
 					.param("minSizeMb", ReportParams.integer("Minimum partition size in MB for skew (default 1)", 1,
 							0, 10_000_000))
@@ -128,7 +128,7 @@ public class AuditTools {
 		out.put("findings", f.render());
 		scan.coverage().note("source: topic = topic override, broker = broker config, default = Kafka default");
 		if (withoutConfig > 0) {
-			scan.coverage().note("Could not audit " + withoutConfig + " topics whose config could not be read");
+			scan.coverage().note("Retention checks skipped for " + withoutConfig + " topics whose config could not be read");
 		}
 		scan.coverage().addTo(out);
 		return out;

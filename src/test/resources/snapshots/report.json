@@ -251,7 +251,7 @@
       },
       "partitionFactor" : {
         "type" : "integer",
-        "description" : "Multiple of the median partition count that is an outlier (default 4)",
+        "description" : "Multiple of the median partition count above which a topic is an outlier (default 4)",
         "minimum" : 2,
         "maximum" : 1000,
         "default" : 4
@@ -265,7 +265,7 @@
       },
       "skewFactor" : {
         "type" : "integer",
-        "description" : "Multiple of the topic's average partition size that is skew (default 3)",
+        "description" : "Multiple of the topic's average partition size above which a partition is skewed (default 3)",
         "minimum" : 2,
         "maximum" : 1000,
         "default" : 3
