@@ -31,9 +31,9 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 /**
- * Kısmen erişilemeyen cluster ve az yetkili kullanıcı durumları. Araç metotları doğrudan, kendi
- * {@link KafkaClients}'ıyla çağrılır: {@code admin} (süper kullanıcı) ve {@code alice} (Cluster:Describe ve
- * DESCRIBE_CONFIGS yetkisi yok).
+ * Partly unreachable clusters and users with few permissions. Tool methods are called directly with their own
+ * {@link KafkaClients}: {@code admin} (super user) and {@code alice} (no Cluster:Describe and no
+ * DESCRIBE_CONFIGS permission).
  */
 class DegradedClusterTest {
 
@@ -60,7 +60,7 @@ class DegradedClusterTest {
 		ToolCall call = call("admin", Map.of());
 		int live = ClusterMeta.describe(call, false).brokerIds().get(0);
 		long start = System.nanoTime();
-		// 99: replika listesinde kalmış ama kapalı broker gibi; admin client onun için isteği 15 sn bekletirdi
+		// 99: like a broker still in a replica list but down; the admin client would hold the request for it for 15 s
 		Futures.Each<Integer, Map<String, LogDirDescription>> dirs = LogDirs.describe(call, List.of(live, 99));
 		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 		assertThat(elapsedMs).isLessThan(5_000);
@@ -73,9 +73,9 @@ class DegradedClusterTest {
 		@SuppressWarnings("unchecked")
 		Map<String, Object> r = (Map<String, Object>) new ClusterTools(clients).clustersGet(call("alice", Map.of()));
 		assertThat(r.get("quorumError")).isNotNull();
-		// KRaft broker'ı describeCluster'da rastgele bir broker döndürür; controller diye raporlanmamalı
+		// a KRaft broker returns a random broker in describeCluster; it must not be reported as the controller
 		assertThat(r).doesNotContainKey("controllerId");
-		assertThat(r.get("controllerNote")).asString().contains("belirlenemedi");
+		assertThat(r.get("controllerNote")).asString().contains("could not be determined");
 		assertThat(r.get("mode")).isEqualTo(ClusterMeta.KRAFT);
 		assertThat(r.get("minKafkaVersion")).isNotNull();
 		assertThat(r.get("brokerCount")).isEqualTo(1);
@@ -105,7 +105,7 @@ class DegradedClusterTest {
 			Map<String, Object> r = (Map<String, Object>) new TopicWriteTools().topicsCreate(call("alice", args));
 			assertThat(r.get("topic")).isEqualTo(topic);
 			assertThat(r.get("partitions")).isEqualTo(2);
-			assertThat(r.get("note")).asString().contains("Topic oluşturuldu");
+			assertThat(r.get("note")).asString().contains("Topic created");
 			assertThat(admin.listTopics().names().get()).contains(topic);
 		}
 		finally {
@@ -118,7 +118,7 @@ class DegradedClusterTest {
 		for (int i = 0; i < 100 && admin.describeAcls(filter).values().get().isEmpty(); i++) {
 			Thread.sleep(100);
 		}
-		// broker'ın authorizer'ı metadata'yı uygulasın
+		// let the broker's authorizer apply the metadata
 		Thread.sleep(500);
 	}
 

@@ -57,9 +57,10 @@ import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
- * Eski (ör. 2.x) ZooKeeper broker'larında olmayan API'ler (describeProducers, listTransactions, ListOffsets
- * maxTimestamp 3.0+; DescribeLogDirs disk boyutu 3.3+; DescribeQuorum hiç yok): UnsupportedVersionException
- * aracı düşürmez, öğe bazında Türkçe not olur ve beklemeden döner. Admin mock'lanır (gerçek eski broker yok).
+ * APIs missing on old (e.g. 2.x) ZooKeeper brokers (describeProducers, listTransactions, ListOffsets
+ * maxTimestamp 3.0+; DescribeLogDirs disk size 3.3+; no DescribeQuorum at all): an UnsupportedVersionException
+ * does not fail the tool, it becomes a per-item note and returns without waiting. Admin is mocked (no real old
+ * broker).
  */
 class OldBrokerCompatTest {
 
@@ -126,7 +127,7 @@ class OldBrokerCompatTest {
 
 	@Test
 	void topicsLastWriteTimeNotesMissingMaxTimestamp() {
-		// iki partition da boş: okunacak son kayıt yok, not "son kayıt okundu" dememeli
+		// both partitions are empty: no last record to read, the note must not say "last record read"
 		stubOffsets(Map.of());
 
 		@SuppressWarnings("unchecked")
@@ -135,13 +136,13 @@ class OldBrokerCompatTest {
 		assertThat(r.get("method")).isEqualTo("maxTimestamp");
 		assertThat((String) r.get("note")).startsWith(KafkaErrors.UNSUPPORTED)
 			.contains("maxTimestamp")
-			.doesNotContain("son kayıt okundu");
+			.doesNotContain("last record read");
 		assertThat(r).doesNotContainKey("lastWriteTime");
 	}
 
 	@Test
 	void topicsLastWriteTimeReadsLastRecordWhenMaxTimestampUnsupported() {
-		// p0'da 5 kayıt (0..4), p1 boş; maxTimestamp desteklenmiyor → p0'ın son kaydı consumer'la okunur
+		// p0 has 5 records (0..4), p1 is empty; no maxTimestamp → the last record of p0 is read with a consumer
 		stubOffsets(Map.of(0, 5L));
 		long ts = 1_700_000_000_000L;
 		TopicPartition p0 = new TopicPartition(TOPIC, 0);
@@ -157,7 +158,7 @@ class OldBrokerCompatTest {
 		@SuppressWarnings("unchecked")
 		Map<String, Object> r = (Map<String, Object>) new TopicDataTools().topicsLastWriteTime(call(TOPIC));
 		assertThat(r.get("method")).isEqualTo("maxTimestamp+lastRecord");
-		assertThat((String) r.get("note")).startsWith(KafkaErrors.UNSUPPORTED).contains("son kayıt okundu");
+		assertThat((String) r.get("note")).startsWith(KafkaErrors.UNSUPPORTED).contains("last record read");
 		assertThat(r.get("lastWriteTime")).isEqualTo(Instant.ofEpochMilli(ts).toString());
 		assertThat(r.get("partition")).isEqualTo(0);
 		assertThat(r.get("emptyPartitions")).isEqualTo(1);
@@ -171,8 +172,8 @@ class OldBrokerCompatTest {
 	}
 
 	/**
-	 * listOffsets: maxTimestamp desteklenmiyor (Kafka &lt; 3.0); earliest 0, latest {@code latest}'teki değer (yoksa
-	 * 0 = boş partition).
+	 * listOffsets: maxTimestamp unsupported (Kafka &lt; 3.0); earliest 0, latest the value in {@code latest} (or
+	 * 0 = empty partition).
 	 */
 	private void stubOffsets(Map<Integer, Long> latest) {
 		when(admin.listOffsets(anyMap())).thenAnswer(i -> {
@@ -193,7 +194,7 @@ class OldBrokerCompatTest {
 	@Test
 	void brokersLogdirsNotesMissingDiskSize() {
 		DescribeLogDirsResult dirs = mock(DescribeLogDirsResult.class);
-		// DescribeLogDirs v4 öncesi: totalBytes/usableBytes yok
+		// before DescribeLogDirs v4: no totalBytes/usableBytes
 		LogDirDescription dir = new LogDirDescription(null,
 				Map.of(new TopicPartition(TOPIC, 0), new ReplicaInfo(1234, 0, false)));
 		when(dirs.descriptions()).thenReturn(Map.of(1, KafkaFuture.completedFuture(Map.of("/data", dir))));
@@ -212,7 +213,7 @@ class OldBrokerCompatTest {
 
 	@Test
 	void clusterMetaModeOnBrokersWithoutDescribeQuorum() {
-		// ZooKeeper: DescribeQuorum yok, finalize edilmiş feature yok → controller describeCluster'dan
+		// ZooKeeper: no DescribeQuorum, no finalized features → controller from describeCluster
 		stubQuorum(unsupported());
 		stubFeatures(KafkaFuture.completedFuture(features(Map.of())));
 		ClusterMeta.Info zk = ClusterMeta.describe(call(null), true);
@@ -221,7 +222,7 @@ class OldBrokerCompatTest {
 		assertThat(zk.quorumError()).isNull();
 		assertThat(ClusterMeta.mode(call(null))).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
 
-		// DescribeQuorum'u bilmeyen ama metadata.version finalize etmiş KRaft: describeCluster controller'ı rastgele
+		// KRaft without DescribeQuorum but with a finalized metadata.version: the describeCluster controller is random
 		stubFeatures(KafkaFuture.completedFuture(
 				features(Map.of("metadata.version", new FinalizedVersionRange((short) 7, (short) 7)))));
 		ClusterMeta.Info oldKraft = ClusterMeta.describe(call(null), true);
@@ -229,18 +230,18 @@ class OldBrokerCompatTest {
 		assertThat(oldKraft.controllerId()).isNull();
 		assertThat(oldKraft.quorumError()).startsWith(KafkaErrors.UNSUPPORTED);
 
-		// quorum yetkisi yok ve feature sorgusu da başarısız: mod bilinmiyor, controller raporlanmaz
+		// no quorum permission and the feature query fails too: mode unknown, controller not reported
 		stubQuorum(failed(new ClusterAuthorizationException("denied")));
 		stubFeatures(failed(new org.apache.kafka.common.errors.TimeoutException("timeout")));
 		ClusterMeta.Info unknown = ClusterMeta.describe(call(null), true);
 		assertThat(unknown.clusterMode()).isEqualTo(ClusterMeta.Mode.UNKNOWN);
 		assertThat(unknown.mode()).isNull();
 		assertThat(unknown.controllerId()).isNull();
-		assertThat(unknown.quorumError()).contains("Cluster yetkisi yok");
+		assertThat(unknown.quorumError()).contains("Not authorized for the cluster");
 		assertThat(ClusterMeta.mode(call(null))).isEqualTo(ClusterMeta.Mode.UNKNOWN);
-		assertThat(ClusterTools.controllerNote(unknown)).contains("belirlenemedi");
+		assertThat(ClusterTools.controllerNote(unknown)).contains("could not be determined");
 
-		// feature sorgusu başarısız ama DescribeQuorum desteklenmiyor: ZooKeeper
+		// feature query fails but DescribeQuorum is unsupported: ZooKeeper
 		stubQuorum(unsupported());
 		assertThat(ClusterMeta.mode(call(null))).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
 	}

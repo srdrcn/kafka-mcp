@@ -1,6 +1,6 @@
 [ {
   "name" : "clusters_list",
-  "description" : "Config'teki cluster'ları, erişilebilirliklerini ve modlarını (KRaft/ZooKeeper) listeler",
+  "description" : "List configured clusters with reachability and mode (KRaft/ZooKeeper)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -22,7 +22,7 @@
       },
       "check" : {
         "type" : "boolean",
-        "description" : "Bağlantıyı da test et (varsayılan true)"
+        "description" : "Also test the connection (default true)"
       }
     },
     "required" : [ ]
@@ -33,7 +33,7 @@
   }
 }, {
   "name" : "clusters_get",
-  "description" : "Cluster özeti: id, mod (KRaft/ZooKeeper, geçiş), aktif controller/quorum, en düşük Kafka sürümü (IBP/metadata.version), KRaft feature'ları ya da ZooKeeper bağlantısı, authorizer, broker/topic/partition sayıları, URP ve offline partition'lar",
+  "description" : "Cluster summary: id, mode (KRaft/ZooKeeper, migration), controller/quorum, min Kafka version, authorizer, counts, URP/offline partitions",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -51,7 +51,7 @@
   }
 }, {
   "name" : "brokers_list",
-  "description" : "Broker'ları listeler: host, port, rack, controller mı, lider ve replika sayıları",
+  "description" : "List brokers: host, port, rack, controller flag, leader and replica counts",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -80,7 +80,7 @@
   }
 }, {
   "name" : "brokers_config_get",
-  "description" : "Bir broker'ın config'leri (varsayılan: sadece varsayılandan farklı olanlar)",
+  "description" : "Configs of a broker (by default only non-default values)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -91,11 +91,11 @@
       },
       "brokerId" : {
         "type" : "integer",
-        "description" : "Broker id (boşsa controller ya da ilk broker)"
+        "description" : "Broker id (default: the controller or the first broker)"
       },
       "includeDefaults" : {
         "type" : "boolean",
-        "description" : "Varsayılan değerleri de getir (varsayılan false)"
+        "description" : "Also return default values (default false)"
       },
       "filter" : {
         "type" : "string",
@@ -117,7 +117,7 @@
   }
 }, {
   "name" : "brokers_config_drift",
-  "description" : "Broker'lar arasında değeri farklı olan config'ler (broker'a özgü anahtarlar; ZooKeeper ve KRaft broker'ları karışıksa moda özgü anahtarlar hariç)",
+  "description" : "Configs whose values differ between brokers (skips broker-specific keys, and mode-specific keys on mixed ZooKeeper/KRaft clusters)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -146,7 +146,7 @@
   }
 }, {
   "name" : "brokers_logdirs",
-  "description" : "Broker log dizinleri: yol, disk/kullanılan boyut, hata, partition sayısı ve en büyük partition'lar",
+  "description" : "Broker log dirs: path, disk and used size, error, partition count and the largest partitions",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -157,7 +157,7 @@
       },
       "brokerId" : {
         "type" : "integer",
-        "description" : "Sadece bu broker (boşsa hepsi)"
+        "description" : "Only this broker (default: all brokers)"
       },
       "filter" : {
         "type" : "string",
@@ -179,7 +179,7 @@
   }
 }, {
   "name" : "brokers_partition_skew",
-  "description" : "Broker başına lider/replika sayısı, ortalamadan sapma (%) ve tercih edilmeyen lider sayısı",
+  "description" : "Leader/replica counts per broker, deviation from the average (%) and non-preferred leader count",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -197,7 +197,7 @@
   }
 }, {
   "name" : "brokers_config_update",
-  "description" : "WRITE: Broker dinamik config'ini değiştirir (brokerId yoksa cluster geneli varsayılan); önce/sonra değerlerini döner",
+  "description" : "WRITE: Change dynamic broker configs (cluster-wide default if brokerId is omitted); returns before/after values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -208,18 +208,18 @@
       },
       "brokerId" : {
         "type" : "integer",
-        "description" : "Broker id (boşsa cluster geneli varsayılan config)"
+        "description" : "Broker id (default: the cluster-wide default config)"
       },
       "set" : {
         "type" : "object",
-        "description" : "Atanacak config'ler (anahtar → değer)",
+        "description" : "Configs to set (key → value)",
         "additionalProperties" : {
           "type" : "string"
         }
       },
       "delete" : {
         "type" : "array",
-        "description" : "Silinecek (varsayılana dönecek) config adları",
+        "description" : "Config names to delete (revert to default)",
         "items" : {
           "type" : "string"
         }
@@ -233,7 +233,7 @@
   }
 }, {
   "name" : "brokers_elect_preferred_leaders",
-  "description" : "WRITE: Tercih edilen lider seçimi; topic yoksa lideri tercih edilen replika olmayan tüm partition'lar",
+  "description" : "WRITE: Run preferred leader election; without a topic, on every partition whose leader is not the preferred replica",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -244,11 +244,11 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı (boşsa tüm uygun partition'lar)"
+        "description" : "Topic name (default: all eligible partitions)"
       },
       "partitions" : {
         "type" : "array",
-        "description" : "Partition numaraları (topic gerekir; boşsa topic'in tümü)",
+        "description" : "Partition numbers (requires topic; default: all partitions of the topic)",
         "items" : {
           "type" : "integer"
         }
@@ -262,7 +262,7 @@
   }
 }, {
   "name" : "partition_reassignments_list",
-  "description" : "Devam eden partition reassignment'ları listeler: replikalar, eklenen ve çıkarılanlar",
+  "description" : "List ongoing partition reassignments: replicas, adding and removing",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -291,7 +291,7 @@
   }
 }, {
   "name" : "partition_reassignments_alter",
-  "description" : "WRITE: Partition reassignment başlatır ya da iptal eder (replicas boşsa iptal); partition bazında sonuç döner",
+  "description" : "WRITE: Start or cancel partition reassignments (empty replicas cancels); returns a result per partition",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -302,21 +302,21 @@
       },
       "reassignments" : {
         "type" : "array",
-        "description" : "Reassignment listesi",
+        "description" : "List of reassignments",
         "items" : {
           "type" : "object",
           "properties" : {
             "topic" : {
               "type" : "string",
-              "description" : "Topic adı"
+              "description" : "Topic name"
             },
             "partition" : {
               "type" : "integer",
-              "description" : "Partition numarası"
+              "description" : "Partition number"
             },
             "replicas" : {
               "type" : "array",
-              "description" : "Hedef replika broker id'leri (ilk = tercih edilen lider); boşsa iptal",
+              "description" : "Target replica broker ids (first = preferred leader); empty cancels",
               "items" : {
                 "type" : "integer"
               }
@@ -334,7 +334,7 @@
   }
 }, {
   "name" : "topics_list",
-  "description" : "Topic'leri partition sayısı ve replication factor ile listeler",
+  "description" : "List topics with partition count and replication factor",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -345,7 +345,7 @@
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "İç topic'leri de listele (varsayılan false)"
+        "description" : "Also list internal topics (default false)"
       },
       "filter" : {
         "type" : "string",
@@ -367,7 +367,7 @@
   }
 }, {
   "name" : "topics_get",
-  "description" : "Topic detayı: partition'lar (lider, replika, ISR, KRaft'ta ELR, URP), varsayılandan farklı config'ler, boyut, offset'ler",
+  "description" : "Topic details: partitions (leader, replicas, ISR, ELR on KRaft, URP), non-default configs, size, offsets",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -378,7 +378,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -389,7 +389,7 @@
   }
 }, {
   "name" : "topics_config_get",
-  "description" : "Topic config'leri: değer, kaynak, varsayılan mı, salt okunur mu",
+  "description" : "Topic configs: value, source, default and read-only flags",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -400,15 +400,15 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "includeDefaults" : {
         "type" : "boolean",
-        "description" : "Varsayılan değerleri de getir (varsayılan true)"
+        "description" : "Also return default values (default true)"
       },
       "filter" : {
         "type" : "string",
-        "description" : "Config adı filtresi (regex, kısmi eşleşme)"
+        "description" : "Config name filter (regex, partial match)"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -419,7 +419,7 @@
   }
 }, {
   "name" : "topics_find_by_config",
-  "description" : "Config değerine göre topic arar (ör. retention.ms gt 604800000, cleanup.policy eq compact)",
+  "description" : "Find topics by config value (e.g. retention.ms gt 604800000, cleanup.policy eq compact)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -430,20 +430,20 @@
       },
       "key" : {
         "type" : "string",
-        "description" : "Config adı (ör. retention.ms)"
+        "description" : "Config name (e.g. retention.ms)"
       },
       "operator" : {
         "type" : "string",
-        "description" : "Karşılaştırma (gt/gte/lt/lte sayısal)",
+        "description" : "Comparison operator (gt/gte/lt/lte are numeric)",
         "enum" : [ "eq", "ne", "gt", "gte", "lt", "lte", "contains", "regex", "exists" ]
       },
       "value" : {
         "type" : "string",
-        "description" : "Karşılaştırılacak değer (exists için gerekmez)"
+        "description" : "Value to compare with (not needed for exists)"
       },
       "onlyNonDefault" : {
         "type" : "boolean",
-        "description" : "Sadece varsayılandan farklı değerler (varsayılan false)"
+        "description" : "Only non-default values (default false)"
       },
       "filter" : {
         "type" : "string",
@@ -465,7 +465,7 @@
   }
 }, {
   "name" : "topics_size",
-  "description" : "Topic boyutu: lider replikalar (mantıksal) ve tüm replikalar; topic yoksa en büyük topic'ler",
+  "description" : "Topic size: leader replicas (logical) and all replicas; without a topic, the largest topics",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -476,11 +476,11 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı (boşsa en büyük topic'ler listelenir)"
+        "description" : "Topic name (default: list the largest topics)"
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "Topic verilmediğinde iç topic'leri de say (varsayılan false)"
+        "description" : "Also count internal topics when no topic is given (default false)"
       },
       "filter" : {
         "type" : "string",
@@ -502,7 +502,7 @@
   }
 }, {
   "name" : "topics_offsets",
-  "description" : "Partition başına earliest/latest offset ve yaklaşık mesaj sayısı (latest - earliest), toplamlar",
+  "description" : "Earliest/latest offsets and approximate message count (latest - earliest) per partition, with totals",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -513,7 +513,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -524,7 +524,7 @@
   }
 }, {
   "name" : "topics_last_write_time",
-  "description" : "Topic'e son yazılma zamanı (partition bazında ve topic geneli, ISO-8601 ve yaş)",
+  "description" : "Last write time of a topic (per partition and overall, as ISO-8601 and age)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -535,7 +535,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -546,7 +546,7 @@
   }
 }, {
   "name" : "topics_write_rate",
-  "description" : "Yazma hızı (mesaj/sn): iki offset örneği arasındaki fark; topic yoksa en hızlı topic'ler",
+  "description" : "Write rate (messages/s) from two offset samples; without a topic, the busiest topics",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -557,11 +557,11 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı (boşsa en hızlı topic'ler)"
+        "description" : "Topic name (default: the busiest topics)"
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "Örnekler arası saniye (varsayılan 5, 1-10)",
+        "description" : "Sampling interval in seconds (default 5, 1-10)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 5
@@ -586,7 +586,7 @@
   }
 }, {
   "name" : "topics_consumers",
-  "description" : "Topic'te commit'li offset'i olan consumer group'lar: tip (Classic/Consumer), durum, üye sayısı, bu topic'teki lag",
+  "description" : "Consumer groups with committed offsets on the topic: type (Classic/Consumer), state, member count, lag on this topic",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -597,7 +597,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "filter" : {
         "type" : "string",
@@ -619,7 +619,7 @@
   }
 }, {
   "name" : "topics_connectors",
-  "description" : "Topic'i kullanan Connect connector'ları (aktif topic'ler ya da config'teki topic/topics/regex/prefix)",
+  "description" : "Connect connectors that use the topic (active topics, or topic/topics/regex/prefix in the config)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -630,7 +630,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -641,7 +641,7 @@
   }
 }, {
   "name" : "topics_producers",
-  "description" : "Topic partition'larındaki aktif producer'lar: producerId, epoch, son sequence/zaman, açık transaction",
+  "description" : "Active producers on the topic partitions: producerId, epoch, last sequence/timestamp, open transaction",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -652,11 +652,11 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -670,7 +670,7 @@
   }
 }, {
   "name" : "topics_transactions",
-  "description" : "Topic'e dokunan açık transaction'lar ve askıda kalmış (hanging) olabilecek transaction ipuçları",
+  "description" : "Open transactions touching the topic, with hints of possibly hanging transactions",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -681,7 +681,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -692,7 +692,7 @@
   }
 }, {
   "name" : "topics_create",
-  "description" : "WRITE: Topic oluşturur (partition/RF boşsa broker varsayılanı)",
+  "description" : "WRITE: Create a topic (partitions and RF default to the broker defaults)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -703,23 +703,23 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partitions" : {
         "type" : "integer",
-        "description" : "Partition sayısı (boşsa broker varsayılanı)",
+        "description" : "Partition count (default: broker default)",
         "minimum" : 1,
         "maximum" : 100000
       },
       "replicationFactor" : {
         "type" : "integer",
-        "description" : "Replication factor (boşsa broker varsayılanı)",
+        "description" : "Replication factor (default: broker default)",
         "minimum" : 1,
         "maximum" : 32
       },
       "configs" : {
         "type" : "object",
-        "description" : "Topic config'leri (anahtar → değer)",
+        "description" : "Topic configs (key → value)",
         "additionalProperties" : {
           "type" : "string"
         }
@@ -733,7 +733,7 @@
   }
 }, {
   "name" : "topics_clone",
-  "description" : "WRITE: Kaynak topic'in partition sayısı, RF ve topic seviyesindeki config'leriyle yeni topic oluşturur (veri kopyalanmaz)",
+  "description" : "WRITE: Create a topic with the partition count, RF and topic-level configs of a source topic (data is not copied)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -744,27 +744,27 @@
       },
       "source" : {
         "type" : "string",
-        "description" : "Kaynak topic"
+        "description" : "Source topic"
       },
       "target" : {
         "type" : "string",
-        "description" : "Oluşturulacak topic"
+        "description" : "Topic to create"
       },
       "partitions" : {
         "type" : "integer",
-        "description" : "Partition sayısı (boşsa kaynaktaki)",
+        "description" : "Partition count (default: same as the source)",
         "minimum" : 1,
         "maximum" : 100000
       },
       "replicationFactor" : {
         "type" : "integer",
-        "description" : "Replication factor (boşsa kaynaktaki)",
+        "description" : "Replication factor (default: same as the source)",
         "minimum" : 1,
         "maximum" : 32
       },
       "configs" : {
         "type" : "object",
-        "description" : "Kaynaktakilerin üzerine yazılacak config'ler (anahtar → değer)",
+        "description" : "Configs that override the source configs (key → value)",
         "additionalProperties" : {
           "type" : "string"
         }
@@ -778,7 +778,7 @@
   }
 }, {
   "name" : "topics_config_update",
-  "description" : "WRITE: Topic config'ini değiştirir (set/delete); önce/sonra değerlerini döner",
+  "description" : "WRITE: Change topic configs (set/delete); returns before/after values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -789,18 +789,18 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "set" : {
         "type" : "object",
-        "description" : "Atanacak config'ler (anahtar → değer)",
+        "description" : "Configs to set (key → value)",
         "additionalProperties" : {
           "type" : "string"
         }
       },
       "delete" : {
         "type" : "array",
-        "description" : "Silinecek (varsayılana dönecek) config adları",
+        "description" : "Config names to delete (revert to default)",
         "items" : {
           "type" : "string"
         }
@@ -814,7 +814,7 @@
   }
 }, {
   "name" : "topics_partitions_increase",
-  "description" : "WRITE: Topic partition sayısını artırır (azaltılamaz; key'li verilerde key→partition eşlemesi değişir)",
+  "description" : "WRITE: Increase the partition count of a topic (cannot be decreased; changes the key→partition mapping of keyed data)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -825,11 +825,11 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "totalCount" : {
         "type" : "integer",
-        "description" : "Yeni toplam partition sayısı (mevcuttan büyük)",
+        "description" : "New total partition count (greater than the current one)",
         "minimum" : 2,
         "maximum" : 100000
       }
@@ -842,7 +842,7 @@
   }
 }, {
   "name" : "topics_delete",
-  "description" : "WRITE: Topic'i ve tüm verisini siler (iç/sistem topic'leri reddedilir)",
+  "description" : "WRITE: Delete a topic and all its data (internal and system topics are refused)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -853,7 +853,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Silinecek topic adı (tek)"
+        "description" : "Name of the topic to delete (a single topic)"
       }
     },
     "required" : [ "cluster", "topic" ]

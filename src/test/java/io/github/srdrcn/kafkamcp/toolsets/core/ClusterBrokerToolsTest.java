@@ -57,7 +57,7 @@ class ClusterBrokerToolsTest extends KafkaIntegrationTest {
 		assertThat(b.get("leaders").asInt()).isGreaterThanOrEqualTo(3);
 		assertThat(b.get("replicas").asInt()).isEqualTo(b.get("leaders").asInt());
 
-		assertThat(ok("brokers_list", args("filter", "^yok$")).get("total").asInt()).isZero();
+		assertThat(ok("brokers_list", args("filter", "^missing$")).get("total").asInt()).isZero();
 	}
 
 	@Test
@@ -81,7 +81,7 @@ class ClusterBrokerToolsTest extends KafkaIntegrationTest {
 		assertThat(defaults.at("/configs/0/source").asText()).isEqualTo("DEFAULT_CONFIG");
 		assertThat(defaults.at("/configs/0/value").asText()).isEqualTo("8");
 
-		assertThat(error("brokers_config_get", args("brokerId", 99))).contains("Broker bulunamadı: 99");
+		assertThat(error("brokers_config_get", args("brokerId", 99))).contains("Broker not found: 99");
 	}
 
 	@Test
@@ -90,7 +90,7 @@ class ClusterBrokerToolsTest extends KafkaIntegrationTest {
 		assertThat(r.get("brokersCompared")).hasSize(1);
 		assertThat(r.get("total").asInt()).isZero();
 		assertThat(r.get("differences")).isEmpty();
-		assertThat(r.get("note").asText()).contains("en az 2 broker");
+		assertThat(r.get("note").asText()).contains("At least 2 brokers");
 		List<String> excluded = new ArrayList<>();
 		r.get("excludedKeys").forEach(k -> excluded.add(k.asText()));
 		assertThat(excluded).contains("broker.id", "node.id", "advertised.listeners", "listeners", "broker.rack");
@@ -115,7 +115,7 @@ class ClusterBrokerToolsTest extends KafkaIntegrationTest {
 		assertThat(largest.get("size").asText()).endsWith("B");
 
 		assertThat(ok("brokers_logdirs", args("brokerId", 1, "limit", 1)).get("largestPartitions")).hasSize(1);
-		assertThat(error("brokers_logdirs", args("brokerId", 42))).contains("Broker bulunamadı");
+		assertThat(error("brokers_logdirs", args("brokerId", 42))).contains("Broker not found");
 	}
 
 	@Test
@@ -150,7 +150,7 @@ class ClusterBrokerToolsTest extends KafkaIntegrationTest {
 				return n;
 			}
 		}
-		throw new AssertionError(name + " bulunamadı: " + array);
+		throw new AssertionError(name + " not found: " + array);
 	}
 
 }

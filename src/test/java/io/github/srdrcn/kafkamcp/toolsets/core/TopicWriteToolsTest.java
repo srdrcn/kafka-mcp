@@ -36,9 +36,9 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(def.has("configs")).isFalse();
 		assertThat(describe(defaults).partitions()).hasSize(1);
 
-		assertThat(error("topics_create", args("topic", topic))).contains("Topic zaten var");
+		assertThat(error("topics_create", args("topic", topic))).contains("Topic already exists");
 		assertThat(error("topics_create", args("topic", unique("rf"), "replicationFactor", 3)))
-			.contains("broker sayısından (1) büyük olamaz");
+			.contains("cannot be greater than the broker count (1)");
 		assertThat(error("topics_create", args("cluster", "test-ro", "topic", unique("ro")))).contains("readOnly");
 	}
 
@@ -58,7 +58,7 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(r.at("/copiedConfigs/retention.ms").asText()).isEqualTo("120000");
 		assertThat(r.at("/copiedConfigs/cleanup.policy").asText()).isEqualTo("compact,delete");
 		assertThat(r.at("/overriddenConfigs/retention.ms").asText()).isEqualTo("240000");
-		assertThat(r.get("note").asText()).contains("kopyalanmadı");
+		assertThat(r.get("note").asText()).contains("not copied");
 		assertThat(describe(target).partitions()).hasSize(4);
 		assertThat(topicConfig(target, "retention.ms").value()).isEqualTo("240000");
 		assertThat(topicConfig(target, "cleanup.policy").value()).isEqualTo("compact,delete");
@@ -75,8 +75,8 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 
 		JsonNode wider = ok("topics_clone", args("source", source, "target", unique("clone-wide"), "partitions", 6));
 		assertThat(wider.get("partitions").asInt()).isEqualTo(6);
-		assertThat(error("topics_clone", args("source", unique("yok"), "target", unique("x"))))
-			.contains("Topic bulunamadı");
+		assertThat(error("topics_clone", args("source", unique("missing"), "target", unique("x"))))
+			.contains("Topic not found");
 	}
 
 	@Test
@@ -102,9 +102,9 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(del.at("/changes/0/after").asText()).isEqualTo("604800000");
 		assertThat(topicConfig(topic, "retention.ms").source()).isNotEqualTo(ConfigEntry.ConfigSource.DYNAMIC_TOPIC_CONFIG);
 
-		assertThat(error("topics_config_update", args("topic", topic))).contains("set ya da delete");
-		assertThat(error("topics_config_update", args("topic", unique("yok"), "set", Map.of("retention.ms", "1"))))
-			.contains("Topic bulunamadı");
+		assertThat(error("topics_config_update", args("topic", topic))).contains("set or delete");
+		assertThat(error("topics_config_update", args("topic", unique("missing"), "set", Map.of("retention.ms", "1"))))
+			.contains("Topic not found");
 		assertThat(error("topics_config_update",
 				args("cluster", "test-ro", "topic", topic, "set", Map.of("retention.ms", "1"))))
 			.contains("readOnly");
@@ -122,7 +122,7 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 		TestData.awaitTopic(testAdmin(), topic, 5);
 		assertThat(describe(topic).partitions()).hasSize(5);
 		assertThat(error("topics_partitions_increase", args("topic", topic, "totalCount", 5)))
-			.contains("büyük olmalı");
+			.contains("must be greater than");
 		assertThat(error("topics_partitions_increase", args("cluster", "test-ro", "topic", topic, "totalCount", 9)))
 			.contains("readOnly");
 	}
@@ -138,20 +138,20 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 
 		String connectConfigs = unique("my") + "-connect-configs";
 		TestData.createTopic(testAdmin(), connectConfigs, 1, Map.of());
-		assertThat(error("topics_delete", args("topic", connectConfigs))).contains("reddedildi");
+		assertThat(error("topics_delete", args("topic", connectConfigs))).contains("refused");
 		assertThat(testAdmin().listTopics().names().get()).contains(connectConfigs);
 		String confluent = "_confluent-" + unique("metrics");
 		TestData.createTopic(testAdmin(), confluent, 1, Map.of());
-		assertThat(error("topics_delete", args("topic", confluent))).contains("reddedildi");
+		assertThat(error("topics_delete", args("topic", confluent))).contains("refused");
 		String internal = "__" + unique("internal");
 		TestData.createTopic(testAdmin(), internal, 1, Map.of());
-		assertThat(error("topics_delete", args("topic", internal))).contains("iç topic");
+		assertThat(error("topics_delete", args("topic", internal))).contains("internal topic");
 
-		assertThat(error("topics_delete", args("topic", unique("yok")))).contains("Topic bulunamadı");
+		assertThat(error("topics_delete", args("topic", unique("missing")))).contains("Topic not found");
 		assertThat(error("topics_delete", args("cluster", "test-ro", "topic", connectConfigs))).contains("readOnly");
 	}
 
-	/** Araçla yeni oluşturulan topic'in metadata'sı broker'a biraz geç yansıyabilir: kısa süre tekrar dener. */
+	/** The metadata of a topic just created by a tool can reach the broker a bit late: retries for a short while. */
 	private static TopicDescription describe(String topic) throws Exception {
 		return TestData.retryUnknownTopic(
 				() -> testAdmin().describeTopics(List.of(topic)).allTopicNames().get().get(topic));

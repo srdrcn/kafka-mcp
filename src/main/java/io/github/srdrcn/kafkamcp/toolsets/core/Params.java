@@ -10,13 +10,13 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** core araçlarının ortak parametre/sonuç parçaları. */
+/** Shared parameter and result helpers of the core tools. */
 final class Params {
 
 	private Params() {
 	}
 
-	/** Tamsayı dizisi şeması. */
+	/** Integer array schema. */
 	static Map<String, Object> integerArray(String description) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("type", "array");
@@ -25,25 +25,25 @@ final class Params {
 		return m;
 	}
 
-	/** Sadece limit parametresi (filter'sız liste araçları için). */
+	/** Only the limit parameter (for list tools without a filter). */
 	static Map<String, Object> limit(int defaultLimit) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("type", "integer");
-		m.put("description", "En fazla kaç kayıt dönsün (varsayılan " + defaultLimit + ")");
+		m.put("description", "Maximum number of items to return (default " + defaultLimit + ")");
 		m.put("minimum", 1);
 		m.put("maximum", ToolSpec.MAX_LIST_LIMIT);
 		m.put("default", defaultLimit);
 		return m;
 	}
 
-	/** Tamsayı listesi parametresi; dizi ya da virgülle ayrılmış string. Yoksa boş liste. */
+	/** Integer list parameter; an array or a comma-separated string. Empty list if absent. */
 	static List<Integer> ints(ToolCall call, String name) {
 		return intList(call.args().get(name), name);
 	}
 
 	/**
-	 * JSON değerini tamsayı listesine çevirir: dizi, tek sayı, "2,3" ya da JSON metni "[2,3]". null ya da boş
-	 * ise boş liste; tamsayı olmayan (null dahil) eleman Türkçe hata, sessizce atlanmaz.
+	 * Converts a JSON value to an integer list: an array, a single number, "2,3" or the JSON text "[2,3]". Empty
+	 * list if null or empty; a non-integer element (null included) is an error, never silently skipped.
 	 */
 	static List<Integer> intList(Object v, String name) {
 		List<Integer> out = new ArrayList<>();
@@ -69,7 +69,7 @@ final class Params {
 		return out;
 	}
 
-	/** JSON değerini tamsayıya çevirir; olmazsa Türkçe hata. */
+	/** Converts a JSON value to an integer; throws a readable error otherwise. */
 	static int toInt(Object v, String name) {
 		if (v instanceof Number n && n.doubleValue() == Math.rint(n.doubleValue())) {
 			return n.intValue();
@@ -78,11 +78,11 @@ final class Params {
 			return Integer.parseInt(String.valueOf(v).trim());
 		}
 		catch (NumberFormatException e) {
-			throw new ToolException("Tamsayı bekleniyordu: " + name + "=" + v);
+			throw new ToolException("Expected an integer: " + name + "=" + v);
 		}
 	}
 
-	/** Zaten limit'e göre kesilmiş satırlar için Results.page biçiminde sonuç. */
+	/** Result in the Results.page format for rows already cut to the limit. */
 	static Map<String, Object> page(String key, List<?> rows, int total) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("total", total);

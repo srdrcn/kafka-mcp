@@ -26,22 +26,22 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Broker yazma araçları: dinamik config güncelleme, tercih edilen lider seçimi. */
+/** Broker write tools: dynamic config update, preferred leader election. */
 @Component
 public class BrokerWriteTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.write("brokers_config_update",
-						"Broker dinamik config'ini değiştirir (brokerId yoksa cluster geneli varsayılan); önce/sonra değerlerini döner")
-					.param("brokerId", P.integer("Broker id (boşsa cluster geneli varsayılan config)"))
-					.param("set", P.stringMap("Atanacak config'ler (anahtar → değer)"))
-					.param("delete", P.stringArray("Silinecek (varsayılana dönecek) config adları"))
+						"Change dynamic broker configs (cluster-wide default if brokerId is omitted); returns before/after values")
+					.param("brokerId", P.integer("Broker id (default: the cluster-wide default config)"))
+					.param("set", P.stringMap("Configs to set (key → value)"))
+					.param("delete", P.stringArray("Config names to delete (revert to default)"))
 					.handler(this::brokersConfigUpdate),
 				ToolSpec.write("brokers_elect_preferred_leaders",
-						"Tercih edilen lider seçimi; topic yoksa lideri tercih edilen replika olmayan tüm partition'lar")
-					.param("topic", P.string("Topic adı (boşsa tüm uygun partition'lar)"))
-					.param("partitions", Params.integerArray("Partition numaraları (topic gerekir; boşsa topic'in tümü)"))
+						"Run preferred leader election; without a topic, on every partition whose leader is not the preferred replica")
+					.param("topic", P.string("Topic name (default: all eligible partitions)"))
+					.param("partitions", Params.integerArray("Partition numbers (requires topic; default: all partitions of the topic)"))
 					.handler(this::electPreferredLeaders));
 	}
 
@@ -62,7 +62,7 @@ public class BrokerWriteTools {
 		String topic = call.str("topic", null);
 		List<Integer> partitions = Params.ints(call, "partitions");
 		if (topic == null && !partitions.isEmpty()) {
-			throw new ToolException("partitions verildiğinde topic de gerekli");
+			throw new ToolException("topic is required when partitions is given");
 		}
 		Set<TopicPartition> tps = new LinkedHashSet<>();
 		if (topic != null) {
@@ -73,7 +73,7 @@ public class BrokerWriteTools {
 			}
 			for (int p : partitions) {
 				if (p < 0 || p >= count) {
-					throw new ToolException("Topic " + topic + " için geçersiz partition: " + p + " (0.." + (count - 1) + ")");
+					throw new ToolException("Invalid partition " + p + " for topic " + topic + " (valid: 0.." + (count - 1) + ")");
 				}
 				tps.add(new TopicPartition(topic, p));
 			}
@@ -88,7 +88,7 @@ public class BrokerWriteTools {
 			}
 			if (tps.isEmpty()) {
 				return Results.map("requested", 0, "message",
-						"Tüm partition'ların lideri zaten tercih edilen replika; seçim gerekmiyor");
+						"Every partition is already led by its preferred replica; no election needed");
 			}
 		}
 		Map<TopicPartition, Optional<Throwable>> result = call

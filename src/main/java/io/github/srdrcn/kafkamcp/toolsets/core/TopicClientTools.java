@@ -41,15 +41,15 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Topic'in istemcileri: consumer group'lar, Connect connector'ları, producer'lar, transaction'lar. */
+/** Clients of a topic: consumer groups, Connect connectors, producers, transactions. */
 @Component
 public class TopicClientTools {
 
-	/** describeProducers'ı desteklemeyen (Kafka 3.0 öncesi) broker'lar için not. */
+	/** Note for brokers that do not support describeProducers (before Kafka 3.0). */
 	static final String UNSUPPORTED_PRODUCERS = KafkaErrors.UNSUPPORTED
-			+ ": describeProducers Kafka 3.0+ broker gerektirir (bu partition'ların producer'ları okunamadı)";
+			+ ": describeProducers requires Kafka 3.0+ brokers (producers of these partitions could not be read)";
 
-	/** Connect REST'e aynı anda en fazla bu kadar istek. */
+	/** At most this many concurrent requests to the Connect REST API. */
 	private static final int CONNECT_PARALLELISM = 8;
 
 	private final ConnectClient connect;
@@ -61,23 +61,23 @@ public class TopicClientTools {
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("topics_consumers",
-						"Topic'te commit'li offset'i olan consumer group'lar: tip (Classic/Consumer), durum, üye sayısı, bu topic'teki lag")
-					.required("topic", P.string("Topic adı"))
+						"Consumer groups with committed offsets on the topic: type (Classic/Consumer), state, member count, lag on this topic")
+					.required("topic", P.string("Topic name"))
 					.listParams()
 					.handler(this::topicsConsumers),
 				ToolSpec.read("topics_connectors",
-						"Topic'i kullanan Connect connector'ları (aktif topic'ler ya da config'teki topic/topics/regex/prefix)")
+						"Connect connectors that use the topic (active topics, or topic/topics/regex/prefix in the config)")
 					.connect()
-					.required("topic", P.string("Topic adı"))
+					.required("topic", P.string("Topic name"))
 					.handler(this::topicsConnectors),
 				ToolSpec.read("topics_producers",
-						"Topic partition'larındaki aktif producer'lar: producerId, epoch, son sequence/zaman, açık transaction")
-					.required("topic", P.string("Topic adı"))
+						"Active producers on the topic partitions: producerId, epoch, last sequence/timestamp, open transaction")
+					.required("topic", P.string("Topic name"))
 					.param("limit", Params.limit(ToolSpec.DEFAULT_LIST_LIMIT))
 					.handler(this::topicsProducers),
 				ToolSpec.read("topics_transactions",
-						"Topic'e dokunan açık transaction'lar ve askıda kalmış (hanging) olabilecek transaction ipuçları")
-					.required("topic", P.string("Topic adı"))
+						"Open transactions touching the topic, with hints of possibly hanging transactions")
+					.required("topic", P.string("Topic name"))
 					.handler(this::topicsTransactions));
 	}
 
@@ -172,8 +172,8 @@ public class TopicClientTools {
 	}
 
 	/**
-	 * Config'te topic'e referans veren anahtarlar: adında "topic" geçen ve değeri (virgülle ayrılmış) topic
-	 * olan, *regex/*pattern ile eşleşen ya da *prefix ile başlayan.
+	 * Config keys that refer to the topic: keys whose name contains "topic" and whose (comma-separated) value
+	 * lists the topic, whose *regex/*pattern matches it, or whose *prefix it starts with.
 	 */
 	static List<String> configMatches(JsonNode config, String topic) {
 		List<String> out = new ArrayList<>();
@@ -191,7 +191,7 @@ public class TopicClientTools {
 					match = Pattern.compile(value).matcher(topic).matches();
 				}
 				catch (PatternSyntaxException ignored) {
-					// geçersiz regex: eşleşme yok
+					// invalid regex: no match
 				}
 			}
 			else if (key.endsWith("prefix")) {
@@ -217,7 +217,7 @@ public class TopicClientTools {
 		TopicDescription d = Topics.describeOne(call, topic);
 		List<TopicPartition> online = Topics.onlinePartitions(List.of(d));
 		Futures.Each<TopicPartition, List<ProducerState>> each = Producers.describe(call, online);
-		// describeProducers Kafka 3.0+ ister: eski broker'ların partition'ları not olarak raporlanır, araç düşmez
+		// describeProducers requires Kafka 3.0+: partitions on older brokers go into a note, the tool does not fail
 		Map<TopicPartition, String> failed = new LinkedHashMap<>();
 		int unsupported = 0;
 		for (Map.Entry<TopicPartition, String> e : each.errors().entrySet()) {
@@ -256,7 +256,7 @@ public class TopicClientTools {
 	Object topicsTransactions(ToolCall call) {
 		String topic = call.str("topic");
 		TopicDescription d = Topics.describeOne(call, topic);
-		// önce partition'lar, sonra coordinator: arada başlayan transaction coordinator'da açık görünür
+		// partitions first, then the coordinator: a transaction started in between shows up as open on the coordinator
 		Futures.Each<TopicPartition, List<ProducerState>> producers = Producers
 			.describe(call, Topics.onlinePartitions(List.of(d)));
 		Producers.OpenTransactions open = Producers.listOpen(call);
@@ -288,7 +288,7 @@ public class TopicClientTools {
 		Map<TopicPartition, List<ProducerState>> byPartition = new TreeMap<>(
 				Comparator.comparingInt(TopicPartition::partition));
 		byPartition.putAll(producers.values());
-		// eşik sadece coordinator'da bulunmayan açık transaction varsa okunur (ek describeConfigs)
+		// the threshold is read only if an open transaction is missing on the coordinator (extra describeConfigs)
 		boolean candidates = byPartition.values()
 			.stream()
 			.flatMap(List::stream)
@@ -318,14 +318,15 @@ public class TopicClientTools {
 			notes.add(UNSUPPORTED_PRODUCERS);
 		}
 		if (open.errors().values().stream().anyMatch(KafkaErrors::isUnsupported)) {
-			notes.add(KafkaErrors.UNSUPPORTED + ": listTransactions Kafka 3.0+ broker gerektirir (açık transaction listesi eksik)");
+			notes.add(KafkaErrors.UNSUPPORTED + ": listTransactions requires Kafka 3.0+ brokers (the open transaction list is incomplete)");
 		}
 		if (!notes.isEmpty()) {
 			out.put("notes", notes);
 		}
 		if (hanging > 0) {
-			out.put("hint", "hangingSuspect: partition'daki transaction transaction.max.timeout.ms'den uzun süredir "
-					+ "açık ve coordinator'da karşılığı yok; askıda olabilir (kafka-transactions.sh find-hanging ile doğrulayın)");
+			out.put("hint", "hangingSuspect: the transaction on the partition has been open longer than "
+					+ "transaction.max.timeout.ms and the coordinator does not know it; it may be hanging "
+					+ "(verify with kafka-transactions.sh find-hanging)");
 		}
 		if (!described.errors().isEmpty() || !producers.errors().isEmpty() || !open.errors().isEmpty()) {
 			out.put("errors", Results.map("transactions", described.errors().isEmpty() ? null : described.errors(),

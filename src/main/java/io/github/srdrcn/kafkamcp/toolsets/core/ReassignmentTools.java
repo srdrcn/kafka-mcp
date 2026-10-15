@@ -26,24 +26,24 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Partition reassignment araçları: devam edenleri listeleme, başlatma/iptal. */
+/** Partition reassignment tools: list ongoing ones, start/cancel. */
 @Component
 public class ReassignmentTools {
 
 	public List<ToolSpec> tools() {
 		Map<String, Object> item = new LinkedHashMap<>();
-		item.put("topic", P.string("Topic adı"));
-		item.put("partition", P.integer("Partition numarası"));
-		item.put("replicas", Params.integerArray("Hedef replika broker id'leri (ilk = tercih edilen lider); boşsa iptal"));
+		item.put("topic", P.string("Topic name"));
+		item.put("partition", P.integer("Partition number"));
+		item.put("replicas", Params.integerArray("Target replica broker ids (first = preferred leader); empty cancels"));
 		return List.of(
 				ToolSpec.read("partition_reassignments_list",
-						"Devam eden partition reassignment'ları listeler: replikalar, eklenen ve çıkarılanlar")
+						"List ongoing partition reassignments: replicas, adding and removing")
 					.listParams()
 					.handler(this::list),
 				ToolSpec.write("partition_reassignments_alter",
-						"Partition reassignment başlatır ya da iptal eder (replicas boşsa iptal); partition bazında sonuç döner")
+						"Start or cancel partition reassignments (empty replicas cancels); returns a result per partition")
 					.required("reassignments",
-							P.objectArray("Reassignment listesi", item, List.of("topic", "partition")))
+							P.objectArray("List of reassignments", item, List.of("topic", "partition")))
 					.handler(this::alter));
 	}
 
@@ -67,26 +67,26 @@ public class ReassignmentTools {
 	Object alter(ToolCall call) {
 		Object raw = call.args().get("reassignments");
 		if (!(raw instanceof Collection<?> items) || items.isEmpty()) {
-			throw new ToolException("reassignments boş olmayan bir dizi olmalı");
+			throw new ToolException("reassignments must be a non-empty array");
 		}
 		Map<TopicPartition, List<Integer>> requested = new LinkedHashMap<>();
 		for (Object o : items) {
 			if (!(o instanceof Map<?, ?> m)) {
-				throw new ToolException("reassignments elemanları {topic, partition, replicas} nesnesi olmalı");
+				throw new ToolException("reassignments items must be {topic, partition, replicas} objects");
 			}
 			Object topic = m.get("topic");
 			Object partition = m.get("partition");
 			if (topic == null || String.valueOf(topic).isBlank() || partition == null) {
-				throw new ToolException("Her reassignment için topic ve partition gerekli");
+				throw new ToolException("Each reassignment needs topic and partition");
 			}
 			TopicPartition tp = new TopicPartition(String.valueOf(topic).trim(), Params.toInt(partition, "partition"));
-			// sadece eksik/null/boş replicas iptal demek; dizi dışı değerler ("2,3", "[2,3]", 2) de ayrıştırılır
+			// only missing/null/empty replicas means cancel; non-array values ("2,3", "[2,3]", 2) are parsed too
 			List<Integer> replicas = Params.intList(m.get("replicas"), "replicas");
 			if (new HashSet<>(replicas).size() != replicas.size()) {
-				throw new ToolException("replicas tekrar eden broker id içeriyor: " + tp + " " + replicas);
+				throw new ToolException("replicas contains duplicate broker ids: " + tp + " " + replicas);
 			}
 			if (requested.put(tp, replicas) != null) {
-				throw new ToolException("Aynı partition birden fazla kez verilmiş: " + tp);
+				throw new ToolException("Same partition given more than once: " + tp);
 			}
 		}
 		validate(call, requested);
@@ -109,30 +109,30 @@ public class ReassignmentTools {
 					result.errors().get(tp)));
 		}
 		return Results.map("requested", requested.size(), "ok", ok, "failed", requested.size() - ok, "results", rows,
-				"hint", ok > 0 ? "İlerlemeyi partition_reassignments_list ile izleyin" : null);
+				"hint", ok > 0 ? "Track progress with partition_reassignments_list" : null);
 	}
 
-	/** Topic/partition'ların ve broker id'lerinin var olduğunu doğrular. */
+	/** Checks that the topics/partitions and broker ids exist. */
 	private static void validate(ToolCall call, Map<TopicPartition, List<Integer>> requested) {
 		Set<String> topics = new LinkedHashSet<>();
 		requested.keySet().forEach(tp -> topics.add(tp.topic()));
 		Futures.Each<String, TopicDescription> described = Topics.describe(call, topics);
 		for (String t : topics) {
 			if (!described.values().containsKey(t)) {
-				throw new ToolException("Topic bulunamadı: " + t + " (" + described.errors().get(t) + ")");
+				throw new ToolException("Topic not found: " + t + " (" + described.errors().get(t) + ")");
 			}
 		}
 		for (TopicPartition tp : requested.keySet()) {
 			int count = described.values().get(tp.topic()).partitions().size();
 			if (tp.partition() < 0 || tp.partition() >= count) {
-				throw new ToolException("Geçersiz partition: " + tp + " (topic'te " + count + " partition var)");
+				throw new ToolException("Invalid partition: " + tp + " (the topic has " + count + " partitions)");
 			}
 		}
 		List<Integer> brokers = ClusterMeta.describe(call, false).brokerIds();
 		for (Map.Entry<TopicPartition, List<Integer>> e : requested.entrySet()) {
 			for (Integer b : e.getValue()) {
 				if (!brokers.contains(b)) {
-					throw new ToolException("Broker bulunamadı: " + b + " (" + e.getKey() + "); mevcut broker'lar: " + brokers);
+					throw new ToolException("Broker not found: " + b + " (" + e.getKey() + "); available brokers: " + brokers);
 				}
 			}
 		}
