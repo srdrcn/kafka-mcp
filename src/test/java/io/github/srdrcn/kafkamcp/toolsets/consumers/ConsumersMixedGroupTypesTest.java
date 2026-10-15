@@ -2,12 +2,17 @@ package io.github.srdrcn.kafkamcp.toolsets.consumers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+import org.apache.kafka.clients.admin.ConsumerGroupDescription;
+import org.apache.kafka.clients.admin.MemberDescription;
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.GroupState;
 import org.apache.kafka.common.TopicPartition;
@@ -86,7 +91,6 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 			assertThat(m.get("assignment").get(topic)).hasSize(1);
 			// Stable: mevcut atama hedef atamayla aynı; alınacak/bırakılacak partition yok.
 			assertThat(m.has("pendingPartitions")).isFalse();
-			assertThat(m.has("revokingPartitions")).isFalse();
 			assertThat(m.has("classicMember")).isFalse();
 		}
 		assertThat(clientIds).containsExactly(prefix + "-cli-0", prefix + "-cli-1");
@@ -155,6 +159,118 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 		// ZooKeeper'daki aynı adlı classic grup etkilenmez.
 		assertThat(groupIds(ZK)).contains(group);
 		assertThat(committed(ZK, group, topic)).isEqualTo(Map.of(0, 3L, 1, 1L));
+	}
+
+	/**
+	 * KIP-848 revoke sırasında (sadece KRaft): ConsumerGroupDescribe'daki atama broker'ın mevcut ∩ hedef
+	 * kümesidir, revoke edilmekte olan partition yanıtta yoktur. Bırakan üyede uydurma bir "revoking" sayısı
+	 * çıkmaz; sahipsiz görünen partition hedef üyesiyle (reassigningTo) işaretlenir, bekleyen üyede
+	 * pendingPartitions görünür.
+	 */
+	@Test
+	void revokingMemberOfConsumerTypeGroupOnKraft() throws Exception {
+		awaitGroupCoordinator(KRAFT);
+		String prefix = unique("rvk");
+		String topic = prefix + "-t";
+		String group = prefix + "-g";
+		createTopic(KRAFT, topic, 2);
+		produce(KRAFT, topic, 0, 6);
+		produce(KRAFT, topic, 1, 4);
+		// A'nın revoke callback'i uygulama thread'inde (poll içinde) çalışır: A poll edilmedikçe revoke bitmez.
+		KafkaConsumer<byte[], byte[]> a = newGroupConsumer(KRAFT, CONSUMER, group, prefix + "-a");
+		a.subscribe(List.of(topic), new ConsumerRebalanceListener() {
+
+			@Override
+			public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+			}
+
+			@Override
+			public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+			}
+
+		});
+		long deadline = System.currentTimeMillis() + 120_000;
+		while (a.assignment().size() < 2 || state(KRAFT, group) != GroupState.STABLE) {
+			assertThat(System.currentTimeMillis()).as("A gruba katılamadı").isLessThan(deadline);
+			a.poll(Duration.ofMillis(100));
+		}
+		commit(a, topic, Map.of(0, 1L, 1, 1L));
+
+		KafkaConsumer<byte[], byte[]> b = newGroupConsumer(KRAFT, CONSUMER, group, prefix + "-b");
+		b.subscribe(List.of(topic));
+		// Sadece B poll edilir: hedef atamada A bir partition'ı B'ye bırakmalı, ama callback'i çalışmadığı için
+		// A revoke'ta (UNREVOKED_PARTITIONS) kalır, B o partition'ı bekler (Reconciling).
+		ConsumerGroupDescription d = null;
+		while (d == null) {
+			assertThat(System.currentTimeMillis()).as("grup revoke aşamasına gelmedi").isLessThan(deadline);
+			b.poll(Duration.ofMillis(200));
+			ConsumerGroupDescription now = describe(KRAFT, group);
+			MemberDescription ma = member(now, prefix + "-a");
+			MemberDescription mb = member(now, prefix + "-b");
+			if (ma != null && mb != null && ma.assignment().topicPartitions().size() == 1
+					&& ma.targetAssignment().map(t -> t.topicPartitions().size()).orElse(0) == 1
+					&& mb.assignment().topicPartitions().isEmpty()
+					&& mb.targetAssignment().map(t -> t.topicPartitions().size()).orElse(0) == 1) {
+				d = now;
+			}
+		}
+		MemberDescription ma = member(d, prefix + "-a");
+		MemberDescription mb = member(d, prefix + "-b");
+		int kept = ma.assignment().topicPartitions().iterator().next().partition();
+		int given = 1 - kept;
+		assertThat(mb.targetAssignment().get().topicPartitions()).containsExactly(new TopicPartition(topic, given));
+
+		JsonNode get = ok("consumer_groups_get", on(KRAFT, "group", group));
+		assertThat(get.get("state").asText()).isEqualTo("Reconciling");
+		assertThat(get.get("memberCount").asInt()).isEqualTo(2);
+		JsonNode memberA = get.at("/members/0");
+		JsonNode memberB = get.at("/members/1");
+		assertThat(memberA.get("clientId").asText()).isEqualTo(prefix + "-a");
+		assertThat(memberA.at("/assignment/" + topic)).hasSize(1);
+		assertThat(memberA.has("revokingPartitions")).isFalse();
+		assertThat(memberA.has("pendingPartitions")).isFalse();
+		assertThat(memberB.get("clientId").asText()).isEqualTo(prefix + "-b");
+		assertThat(memberB.get("pendingPartitions").asInt()).isEqualTo(1);
+		JsonNode keptRow = get.at("/offsets/0/partitions/" + kept);
+		JsonNode givenRow = get.at("/offsets/0/partitions/" + given);
+		assertThat(keptRow.get("partition").asInt()).isEqualTo(kept);
+		assertThat(keptRow.get("owner").asText()).isEqualTo(ma.consumerId());
+		assertThat(keptRow.has("reassigningTo")).isFalse();
+		assertThat(givenRow.get("partition").asInt()).isEqualTo(given);
+		assertThat(givenRow.has("owner")).isFalse();
+		assertThat(givenRow.get("reassigningTo").asText()).isEqualTo(mb.consumerId());
+		assertThat(givenRow.get("committed").asLong()).isEqualTo(1);
+		assertThat(get.get("note").asText()).contains("reassigningTo");
+
+		JsonNode lag = ok("consumer_groups_lag", on(KRAFT, "group", group));
+		assertThat(lag.get("totalLag").asLong()).isEqualTo(8);
+		for (JsonNode row : lag.at("/topics/0/partitions")) {
+			if (row.get("partition").asInt() == kept) {
+				assertThat(row.get("clientId").asText()).isEqualTo(prefix + "-a");
+				assertThat(row.has("reassigningTo")).isFalse();
+			}
+			else {
+				assertThat(row.has("clientId")).isFalse();
+				assertThat(row.get("reassigningTo").asText()).isEqualTo(prefix + "-b");
+			}
+		}
+		assertThat(lag.get("note").asText()).contains("reassigningTo");
+
+		// A poll edince revoke biter: partition B'ye geçer, grup Stable olur ve reassigningTo kalkar.
+		long settle = System.currentTimeMillis() + 120_000;
+		while (b.assignment().isEmpty() || state(KRAFT, group) != GroupState.STABLE) {
+			assertThat(System.currentTimeMillis()).as("revoke tamamlanmadı").isLessThan(settle);
+			a.poll(Duration.ofMillis(100));
+			b.poll(Duration.ofMillis(100));
+		}
+		JsonNode settled = ok("consumer_groups_get", on(KRAFT, "group", group));
+		assertThat(settled.at("/offsets/0/partitions/" + given + "/owner").asText()).isEqualTo(mb.consumerId());
+		assertThat(settled.at("/offsets/0/partitions/" + given).has("reassigningTo")).isFalse();
+		assertThat(settled.has("note")).isFalse();
+	}
+
+	private static MemberDescription member(ConsumerGroupDescription d, String clientId) {
+		return d.members().stream().filter(m -> clientId.equals(m.clientId())).findFirst().orElse(null);
 	}
 
 }

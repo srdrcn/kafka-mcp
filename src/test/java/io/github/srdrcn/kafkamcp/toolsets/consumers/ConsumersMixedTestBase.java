@@ -168,8 +168,8 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		return joinAll(cluster, protocol, group, clientId, 1, List.of(topic)).get(0);
 	}
 
-	private KafkaConsumer<byte[], byte[]> newGroupConsumer(String cluster, String protocol, String group,
-			String clientId) {
+	/** Gruba katılacak (henüz subscribe olmamış) consumer; test sonunda kapanır. */
+	KafkaConsumer<byte[], byte[]> newGroupConsumer(String cluster, String protocol, String group, String clientId) {
 		Map<String, Object> p = clientProperties(cluster);
 		p.put(ConsumerConfig.GROUP_ID_CONFIG, group);
 		p.put(ConsumerConfig.CLIENT_ID_CONFIG, clientId);

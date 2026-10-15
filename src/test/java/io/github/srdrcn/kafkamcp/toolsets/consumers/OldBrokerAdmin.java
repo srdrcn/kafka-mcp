@@ -6,9 +6,11 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.DeleteConsumerGroupOffsetsResult;
@@ -22,26 +24,59 @@ import org.apache.kafka.common.internals.KafkaFutureImpl;
 import org.apache.kafka.common.protocol.Errors;
 
 /**
- * Gerçek (ZooKeeper) Admin'i saran ve eski ZooKeeper broker'larının (Kafka 2.x) yanıtlarını taklit eden test
- * proxy'si:
+ * Gerçek Admin'i saran ve eski broker'ların yanıtlarını taklit eden test proxy'si ({@link Era}):
  * <ul>
- * <li>listGroups: state ve type alanları yok (ListGroups v4 öncesi, Kafka &lt; 2.6; type ise v5 öncesi,
- * Kafka &lt; 3.8).</li>
- * <li>deleteConsumerGroupOffsets: OffsetDelete API'si yok (Kafka &lt; 2.4), AdminClient'ın verdiği gibi
+ * <li>{@link Era#KAFKA_2_3}: listGroups'ta state ve type yok (ListGroups v4 öncesi, Kafka &lt; 2.6);
+ * deleteConsumerGroupOffsets'te OffsetDelete API'si yok (Kafka &lt; 2.4), AdminClient'ın verdiği gibi
  * UnsupportedVersionException.</li>
+ * <li>{@link Era#KAFKA_3_7}: listGroups'ta state var, type yok (ListGroups v4, Kafka 2.6-3.7; gerçek
+ * ZooKeeper filolarının çoğu).</li>
  * </ul>
+ * describeConsumerGroups'a giden grup id'leri {@link #describedGroups()}'ta toplanır.
  */
 final class OldBrokerAdmin implements InvocationHandler {
 
-	private final Admin real;
+	enum Era {
 
-	private OldBrokerAdmin(Admin real) {
-		this.real = real;
+		/** ListGroups v3 (state/type yok), OffsetDelete yok. */
+		KAFKA_2_3,
+
+		/** ListGroups v4 (state var, type yok). */
+		KAFKA_3_7
+
 	}
 
+	private final Admin real;
+
+	private final Era era;
+
+	private final Admin proxy;
+
+	private final List<String> described = new CopyOnWriteArrayList<>();
+
+	private OldBrokerAdmin(Admin real, Era era) {
+		this.real = real;
+		this.era = era;
+		this.proxy = (Admin) Proxy.newProxyInstance(Admin.class.getClassLoader(), new Class<?>[] { Admin.class },
+				this);
+	}
+
+	/** Kafka 2.3 broker'ı ({@link Era#KAFKA_2_3}). */
 	static Admin wrap(Admin real) {
-		return (Admin) Proxy.newProxyInstance(Admin.class.getClassLoader(), new Class<?>[] { Admin.class },
-				new OldBrokerAdmin(real));
+		return of(real, Era.KAFKA_2_3).admin();
+	}
+
+	static OldBrokerAdmin of(Admin real, Era era) {
+		return new OldBrokerAdmin(real, era);
+	}
+
+	Admin admin() {
+		return proxy;
+	}
+
+	/** describeConsumerGroups'a gönderilen grup id'leri (çağrı sırasıyla, tekrarlar dahil). */
+	List<String> describedGroups() {
+		return List.copyOf(described);
 	}
 
 	@Override
@@ -51,7 +86,10 @@ final class OldBrokerAdmin implements InvocationHandler {
 		if (name.equals("listGroups")) {
 			return listGroups(args == null || args.length == 0 ? new ListGroupsOptions() : (ListGroupsOptions) args[0]);
 		}
-		if (name.equals("deleteConsumerGroupOffsets")) {
+		if (name.equals("describeConsumerGroups") && args != null && args.length >= 1) {
+			described.addAll((Collection<String>) args[0]);
+		}
+		if (name.equals("deleteConsumerGroupOffsets") && era == Era.KAFKA_2_3) {
 			KafkaFutureImpl<Map<TopicPartition, Errors>> f = new KafkaFutureImpl<>();
 			f.completeExceptionally(new UnsupportedVersionException(
 					"The broker does not support OFFSET_DELETE (simulated Kafka 2.3 broker)"));
@@ -76,7 +114,8 @@ final class OldBrokerAdmin implements InvocationHandler {
 				return;
 			}
 			stripped.complete(groups.stream()
-				.map(g -> (Object) new GroupListing(g.groupId(), Optional.empty(), g.protocol(), Optional.empty()))
+				.map(g -> (Object) new GroupListing(g.groupId(), Optional.empty(), g.protocol(),
+						era == Era.KAFKA_3_7 ? g.groupState() : Optional.empty()))
 				.toList());
 		});
 		Constructor<ListGroupsResult> c = ListGroupsResult.class.getDeclaredConstructor(KafkaFuture.class);

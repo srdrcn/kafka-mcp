@@ -44,7 +44,11 @@ public record GroupDetail(String groupId, ConsumerGroupDescription description, 
 		}
 		Map<TopicPartition, MemberDescription> owners = ConsumerGroups.owners(d);
 		Set<TopicPartition> assigned = new LinkedHashSet<>();
-		for (TopicPartition tp : owners.keySet()) {
+		// KIP-848 reconciling: hedef üyeye aktarılmakta olan (önceki sahibi describe'da görünmeyen) partition'lar
+		// da atanmış sayılır; commit'leri yoksa satırları kaybolmasın.
+		Set<TopicPartition> targeted = new LinkedHashSet<>(owners.keySet());
+		targeted.addAll(ConsumerGroups.incomingOwners(d).keySet());
+		for (TopicPartition tp : targeted) {
 			if (topicFilter == null || topicFilter.test(tp.topic())) {
 				assigned.add(tp);
 			}
