@@ -119,6 +119,27 @@ Notes:
   (e.g. `:ro,Z`).
 - To mimic OpenShift's read-only root filesystem, add `--read-only --tmpfs /tmp`.
 
+### On OpenShift
+
+The short version (each step is explained in [OpenShift deployment](#openshift-deployment)):
+
+```bash
+oc new-project kafka-mcp                                     # or: oc project <namespace>
+oc new-build --name kafka-mcp --binary --strategy docker
+oc start-build kafka-mcp --from-repo . --follow              # builds the image into the internal registry
+# in deploy/openshift/kustomization.yaml set images[0].newName to
+#   image-registry.openshift-image-registry.svc:5000/<namespace>/kafka-mcp
+cp deploy/openshift/kafka-mcp.yaml.example kafka-mcp.yaml    # set apiKey, principal, clusters (git-ignored)
+cp deploy/openshift/krb5.conf.example krb5.conf              # set the realm and the KDCs (git-ignored)
+oc create configmap kafka-mcp-config --from-file=kafka-mcp.yaml --from-file=krb5.conf
+oc create secret generic kafka-mcp-keytab --from-file=svc.keytab=/path/to/<principal>.keytab
+oc apply -k deploy/openshift
+oc rollout status deployment/kafka-mcp
+oc get route kafka-mcp                                       # MCP endpoint: https://<route-host>/mcp
+```
+
+Clients send the key in the `X-Authorization` header; see [Claude Code](#claude-code) for the `.mcp.json` entry.
+
 ### Command line
 
 | Option | Meaning |
@@ -662,6 +683,12 @@ The ConfigMap `kafka-mcp-config` (keys `kafka-mcp.yaml` and `krb5.conf`) and the
 environment-specific data, so `oc apply -k` does not create them. You create them with `oc create`. Neither probe
 depends on Kafka: a Kafka or KDC outage does not restart the pod or take it out of the Service. Use `clusters_list`
 or `diagnose_connectivity` to check the clusters.
+
+**0. Select the project** the server runs in. The commands below use the current project:
+
+```bash
+oc new-project kafka-mcp      # or switch to an existing one: oc project <namespace>
+```
 
 **1. Build and push the image**, either to a registry the cluster can pull from:
 
