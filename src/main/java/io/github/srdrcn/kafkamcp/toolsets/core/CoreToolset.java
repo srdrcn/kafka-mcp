@@ -14,8 +14,31 @@ public class CoreToolset implements Toolset {
 
 	private final ClusterTools clusterTools;
 
-	public CoreToolset(ClusterTools clusterTools) {
+	private final BrokerTools brokerTools;
+
+	private final BrokerWriteTools brokerWriteTools;
+
+	private final ReassignmentTools reassignmentTools;
+
+	private final TopicTools topicTools;
+
+	private final TopicDataTools topicDataTools;
+
+	private final TopicClientTools topicClientTools;
+
+	private final TopicWriteTools topicWriteTools;
+
+	public CoreToolset(ClusterTools clusterTools, BrokerTools brokerTools, BrokerWriteTools brokerWriteTools,
+			ReassignmentTools reassignmentTools, TopicTools topicTools, TopicDataTools topicDataTools,
+			TopicClientTools topicClientTools, TopicWriteTools topicWriteTools) {
 		this.clusterTools = clusterTools;
+		this.brokerTools = brokerTools;
+		this.brokerWriteTools = brokerWriteTools;
+		this.reassignmentTools = reassignmentTools;
+		this.topicTools = topicTools;
+		this.topicDataTools = topicDataTools;
+		this.topicClientTools = topicClientTools;
+		this.topicWriteTools = topicWriteTools;
 	}
 
 	@Override
@@ -32,6 +55,13 @@ public class CoreToolset implements Toolset {
 	public List<ToolSpec> tools() {
 		List<ToolSpec> tools = new ArrayList<>();
 		tools.addAll(clusterTools.tools());
+		tools.addAll(brokerTools.tools());
+		tools.addAll(brokerWriteTools.tools());
+		tools.addAll(reassignmentTools.tools());
+		tools.addAll(topicTools.tools());
+		tools.addAll(topicDataTools.tools());
+		tools.addAll(topicClientTools.tools());
+		tools.addAll(topicWriteTools.tools());
 		return tools;
 	}
 
