@@ -23,8 +23,8 @@ import io.github.srdrcn.kafkamcp.support.ConnectIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 /**
- * diagnose_connector (ve connector'ları gören diagnose_topic / diagnose_cluster): görevi FAILED olan sink
- * (yazılamayan /proc dosyası), sağlıklı sink'in consumer group lag'i, eksik topic ve kaynak connector yazma aktivitesi.
+ * diagnose_connector (and diagnose_topic / diagnose_cluster, which see connectors): a sink with a FAILED task (an
+ * unwritable /proc file), the consumer group lag of a healthy sink, a missing topic and source connector writes.
  */
 class DiagnoseConnectorTest extends ConnectIntegrationTest {
 
@@ -82,11 +82,11 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 				}
 			}
 			catch (RuntimeException e) {
-				// tekrar dene
+				// retry
 			}
 			Thread.sleep(500);
 		}
-		throw new AssertionError("Beklenen durum oluşmadı: " + what + " (son: " + last + ")");
+		throw new AssertionError("Expected state not reached: " + what + " (last: " + last + ")");
 	}
 
 	private static JsonNode status(String name) {
@@ -132,7 +132,7 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 		assertThat(DiagnoseTestBase.codes(r)).doesNotContain("PLUGIN_MISSING", "CONVERTER_MISSING", "CONVERTER_DEFAULT",
 				"TOPIC_MISSING");
 
-		// topic ve cluster teşhisi de bu connector'ı görür
+		// the topic and cluster diagnoses see this connector too
 		JsonNode t = ok("diagnose_topic", args("topic", topic, "intervalSeconds", 1));
 		assertThat(t.at("/facts/connectors/referencing/0/name").asText()).isEqualTo(name);
 		assertThat(DiagnoseTestBase.finding(t, "CONNECTOR_FAILED").at("/evidence/connectors/0/name").asText())
@@ -173,7 +173,7 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 			.isEqualTo("key.converter");
 		assertThat(DiagnoseTestBase.codes(r)).doesNotContain("TASKS_FAILED", "SINK_STUCK", "CONFIG_INVALID");
 
-		// regex hiçbir topic'le eşleşmiyor (regex aboneliği topic oluşturmaz); DLQ'yu görev başlarken Connect oluşturur
+		// the regex matches no topic (a regex subscription does not create topics); Connect creates the DLQ when the task starts
 		String regexName = "diag-regex-" + token;
 		Map<String, String> regex = sink(topic, "/tmp/" + token + "-r.txt");
 		regex.remove("topics");
@@ -208,7 +208,7 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 		src.put("file", "/etc/passwd");
 		create(source, src);
 		await(source + " RUNNING", () -> status(source), st -> "RUNNING".equals(taskState(st)));
-		await(source + " aktif topic", () -> {
+		await(source + " active topic", () -> {
 			try {
 				return connectRest("GET", "/connectors/" + source + "/topics", null);
 			}
@@ -225,8 +225,8 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 	}
 
 	/**
-	 * connector.class ve converter Connect takma adlarıyla (FileStreamSink, StringConverter) verilse de plugin/converter
-	 * eksik denmez; connector RUNNING değilken (PAUSED) de takma ad çözülür.
+	 * connector.class and converters given as Connect aliases (FileStreamSink, StringConverter) are not reported as
+	 * missing plugins/converters; the alias is resolved while the connector is not RUNNING (PAUSED) too.
 	 */
 	@Test
 	void aliasedConnectorClassAndConverterAreRecognized() throws Exception {
@@ -253,7 +253,7 @@ class DiagnoseConnectorTest extends ConnectIntegrationTest {
 
 	@Test
 	void unknownConnectorIsAnError() {
-		assertThat(error("diagnose_connector", args("name", unique("diag-nope")))).contains("Connector bulunamadı");
+		assertThat(error("diagnose_connector", args("name", unique("diag-nope")))).contains("Connector not found");
 	}
 
 }

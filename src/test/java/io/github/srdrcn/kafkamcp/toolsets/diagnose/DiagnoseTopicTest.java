@@ -19,7 +19,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** diagnose_topic: KRaft ve ZooKeeper cluster'larında gerçek sorunların tespiti. */
+/** diagnose_topic: detection of real problems on KRaft and ZooKeeper clusters. */
 class DiagnoseTopicTest extends DiagnoseTestBase {
 
 	@Test
@@ -38,7 +38,7 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 			assertThat(f.at("/evidence/minInsyncReplicas").asInt()).isEqualTo(2);
 			assertThat(f.at("/evidence/replicationFactor").asInt()).isEqualTo(1);
 			assertThat(f.get("recommendation").asText()).contains("topics_config_update", "min.insync.replicas=1");
-			// ISR'ı tam olan partition'lar replika kaybı (UNDER_MIN_ISR) diye ayrıca raporlanmaz
+			// partitions with a full ISR are not also reported as replica loss (UNDER_MIN_ISR)
 			assertThat(codes(r)).doesNotContain("UNDER_MIN_ISR", "OFFLINE_PARTITIONS");
 
 			JsonNode facts = r.get("facts");
@@ -72,7 +72,7 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 
 			JsonNode r = ok("diagnose_topic", on(cluster, "topic", topic, "intervalSeconds", 2));
 			JsonNode stuck = finding(r, "CONSUMER_STUCK");
-			assertThat(stuck.get("severity").asText()).as("üyesiz grup: uyarı").isEqualTo("warning");
+			assertThat(stuck.get("severity").asText()).as("group without members: warning").isEqualTo("warning");
 			JsonNode g = stuck.at("/evidence/groups/0");
 			assertThat(g.get("groupId").asText()).isEqualTo(group);
 			assertThat(g.get("members").asInt()).isZero();
@@ -114,8 +114,8 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 				catch (Exception e) {
 					return false;
 				}
-			}, "ACL görünmedi");
-			// salt okunur cluster'da da okuma araçları çalışır
+			}, "ACL not visible");
+			// read tools work on a read-only cluster too
 			JsonNode r = ok("diagnose_topic", args("cluster", TestConfigs.READ_ONLY_CLUSTER, "topic", topic,
 					"intervalSeconds", 1));
 			assertThat(r.get("cluster").asText()).isEqualTo(TestConfigs.READ_ONLY_CLUSTER);
@@ -136,8 +136,8 @@ class DiagnoseTopicTest extends DiagnoseTestBase {
 
 	@Test
 	void unknownTopicIsAnError() {
-		assertThat(error("diagnose_topic", args("topic", unique("diag-none")))).contains("Topic bulunamadı");
-		assertThat(error("diagnose_topic", zkArgs("topic", unique("diag-none")))).contains("Topic bulunamadı");
+		assertThat(error("diagnose_topic", args("topic", unique("diag-none")))).contains("Topic not found");
+		assertThat(error("diagnose_topic", zkArgs("topic", unique("diag-none")))).contains("Topic not found");
 	}
 
 }

@@ -1,21 +1,21 @@
 [ {
   "name" : "diagnose_topic",
-  "description" : "Topic sağlık teşhisi: partition/ISR, config, boyut/dağılım, yazma, consumer lag/takılma, transaction, connector, ACL",
+  "description" : "Diagnose topic health: partitions/ISR, config, size/skew, writes, consumer lag/stuck, transactions, connectors, ACLs",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki offset örneği arası bekleme, sn (varsayılan 3, 1-10; süre sınırına göre kısaltılabilir)",
+        "description" : "Wait between two offset samples in seconds (default 3, 1-10; may be shortened to fit the time limit)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 3
@@ -29,22 +29,22 @@
   }
 }, {
   "name" : "diagnose_consumer_group",
-  "description" : "Consumer group teşhisi: durum/tip, üyeler ve atama, lag ve eğilimi, takılı partition'lar, eksik topic'ler, coordinator, ACL",
+  "description" : "Diagnose a consumer group: state/type, members and assignment, lag and trend, stuck partitions, missing topics, coordinator, ACLs",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki offset örneği arası bekleme, sn (varsayılan 5, 1-10; süre sınırına göre kısaltılabilir)",
+        "description" : "Wait between two offset samples in seconds (default 5, 1-10; may be shortened to fit the time limit)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 5
@@ -58,22 +58,22 @@
   }
 }, {
   "name" : "diagnose_connector",
-  "description" : "Connector teşhisi: connector/görev durumu ve hata özetleri, config/plugin/converter, topic'ler, sink lag, kaynak yazma, worker dağılımı",
+  "description" : "Diagnose a connector: connector/task state and error summaries, config/plugin/converters, topics, sink lag, source writes, workers",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki offset örneği arası bekleme, sn (varsayılan 5, 1-10; süre sınırına göre kısaltılabilir)",
+        "description" : "Wait between two offset samples in seconds (default 5, 1-10; may be shortened to fit the time limit)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 5
@@ -87,13 +87,13 @@
   }
 }, {
   "name" : "diagnose_cluster",
-  "description" : "Cluster teşhisi: mod/sürüm, controller/quorum, broker'lar, URP/offline/min ISR, disk, dağılım, config farkı, lag, connector",
+  "description" : "Diagnose the cluster: mode/version, controller/quorum, brokers, URP/offline/min ISR, disks, balance, config drift, lag, connectors",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },
@@ -105,39 +105,39 @@
   }
 }, {
   "name" : "diagnose_access",
-  "description" : "Principal bir amaç (produce/consume/transactional-produce/admin-topic) için yetkili mi; eksik ACL'leri acls_create biçiminde önerir",
+  "description" : "Check whether a principal is authorized for an intent (produce/consume/transactional-produce/admin-topic); suggests missing ACLs for acls_create",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
         "type" : "string",
-        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
       },
       "intent" : {
         "type" : "string",
-        "description" : "Amaç",
+        "description" : "Intent",
         "enum" : [ "produce", "consume", "transactional-produce", "admin-topic" ]
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group (consume için zorunlu; transactional-produce'ta offset commit için)"
+        "description" : "Consumer group (required for consume; for offset commits with transactional-produce)"
       },
       "transactionalId" : {
         "type" : "string",
-        "description" : "transactional.id (transactional-produce için zorunlu)"
+        "description" : "transactional.id (required for transactional-produce)"
       },
       "host" : {
         "type" : "string",
-        "description" : "İstemci IP'si (varsayılan *: sadece host'u * olan ACL'ler eşleşir)"
+        "description" : "Client IP (default *: only ACLs with host * match)"
       }
     },
     "required" : [ "cluster", "principal", "intent", "topic" ]
@@ -148,13 +148,13 @@
   }
 }, {
   "name" : "diagnose_connectivity",
-  "description" : "Bağlantı teşhisi (adım adım, süreli): DNS, TCP, güvenlik/Kerberos, yeni client ile Kafka, advertised adresler, Connect/SR",
+  "description" : "Diagnose connectivity step by step with timings: DNS, TCP, security/Kerberos, Kafka with a new client, advertised addresses, Connect/SR",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },

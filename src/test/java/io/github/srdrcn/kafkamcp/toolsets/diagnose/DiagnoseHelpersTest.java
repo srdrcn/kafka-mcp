@@ -28,7 +28,7 @@ import io.github.srdrcn.kafkamcp.toolsets.diagnose.Checks.Check;
 import io.github.srdrcn.kafkamcp.toolsets.diagnose.OffsetWindow.GroupProgress;
 import io.github.srdrcn.kafkamcp.toolsets.diagnose.OffsetWindow.PartitionProgress;
 
-/** diagnose yardımcılarının birim testleri (Kafka gerekmez). */
+/** Unit tests of the diagnose helpers (no Kafka needed). */
 class DiagnoseHelpersTest {
 
 	private static ToolCall call(long deadlineMs) {
@@ -39,14 +39,15 @@ class DiagnoseHelpersTest {
 	void diagnosisSortsFindingsAndDerivesStatus() {
 		Diagnosis d = new Diagnosis();
 		assertThat(d.status()).isEqualTo("ok");
-		assertThat(d.summary()).isEqualTo("Sorun bulunmadı");
-		d.info("B_INFO", "bilgi", null, null);
+		assertThat(d.summary()).isEqualTo("No issues found");
+		d.info("B_INFO", "info", null, null);
+		assertThat(d.summary()).isEqualTo("No issues found (1 info note)");
 		assertThat(d.status()).isEqualTo("ok");
-		d.warning("Z_WARN", "uyarı", Diagnosis.evidence("a", 1, "b", null), "öneri");
-		d.critical("A_CRIT", "kritik", null, "düzelt");
+		d.warning("Z_WARN", "warning", Diagnosis.evidence("a", 1, "b", null), "advice");
+		d.critical("A_CRIT", "critical", null, "fix");
 		assertThat(d.status()).isEqualTo("critical");
 		assertThat(d.findings()).extracting(Finding::code).containsExactly("A_CRIT", "Z_WARN", "B_INFO");
-		assertThat(d.summary()).isEqualTo("1 kritik, 1 uyarı, 1 bilgi bulgusu");
+		assertThat(d.summary()).isEqualTo("Findings: 1 critical, 1 warning, 1 info");
 		Map<String, Object> r = d.result(Map.of("topic", "t"), Map.of("x", 1));
 		assertThat(r).containsEntry("topic", "t").containsEntry("status", "critical").doesNotContainKey("partial");
 		@SuppressWarnings("unchecked")
@@ -61,12 +62,12 @@ class DiagnoseHelpersTest {
 	void failingCheckBecomesFindingAndDoesNotFailTool() {
 		Diagnosis d = new Diagnosis();
 		try (Checks checks = new Checks(call(10_000), d)) {
-			Check<String> bad = checks.start("bozuk kontrol", () -> {
-				throw new ToolException("Topic yetkisi yok (ACL)");
+			Check<String> bad = checks.start("broken check", () -> {
+				throw new ToolException("Not authorized for the topic (ACL)");
 			});
-			Check<String> good = checks.start("iyi kontrol", () -> "ok");
+			Check<String> good = checks.start("good check", () -> "ok");
 			assertThat(bad.get()).isNull();
-			assertThat(bad.get()).as("ikinci get bulguyu tekrarlamaz").isNull();
+			assertThat(bad.get()).as("a second get does not repeat the finding").isNull();
 			assertThat(bad.ok()).isFalse();
 			assertThat(good.get()).isEqualTo("ok");
 			assertThat(good.ok()).isTrue();
@@ -75,8 +76,8 @@ class DiagnoseHelpersTest {
 		Finding f = d.findings().get(0);
 		assertThat(f.code()).isEqualTo(Checks.CHECK_FAILED);
 		assertThat(f.severity()).isEqualTo(Severity.WARNING);
-		assertThat(f.message()).contains("bozuk kontrol");
-		assertThat(f.evidence()).containsEntry("error", "Topic yetkisi yok (ACL)");
+		assertThat(f.message()).contains("broken check");
+		assertThat(f.evidence()).containsEntry("error", "Not authorized for the topic (ACL)");
 		assertThat(d.partial()).isTrue();
 	}
 
@@ -85,13 +86,13 @@ class DiagnoseHelpersTest {
 		Diagnosis d = new Diagnosis();
 		long start = System.nanoTime();
 		try (Checks checks = new Checks(call(2_500), d)) {
-			Check<String> slow = checks.start("yavaş kontrol", () -> {
+			Check<String> slow = checks.start("slow check", () -> {
 				Thread.sleep(60_000);
-				return "geç";
+				return "late";
 			});
 			assertThat(slow.get()).isNull();
 		}
-		// paylaşılan makinede GC/CPU gecikmesi: sadece araç sınırı (15 sn) kadar sıkı
+		// GC/CPU delays on a shared machine: only as strict as the tool limit (15 s)
 		long elapsed = (System.nanoTime() - start) / 1_000_000;
 		assertThat(elapsed).isLessThan(15_000);
 		assertThat(d.findings()).extracting(Finding::code).containsExactly(Checks.CHECK_TIMEOUT);
@@ -99,22 +100,22 @@ class DiagnoseHelpersTest {
 	}
 
 	/**
-	 * Birbirini bekleyen çok sayıda kontrol (bağımlılıklar) sanal thread taşıyıcılarını bağlamamalı: hepsi
-	 * temel kontrol bitince hemen biter (kilitli beklemede taşıyıcılar tükenip araç süre sınırına takılıyordu).
+	 * Many checks waiting for each other (dependencies) must not pin the virtual thread carriers: all of them finish
+	 * right after the base check (with lock-based waits the carriers ran out and the tool hit its time limit).
 	 */
 	@Test
 	void manyDependentChecksDoNotStarveCarrierThreads() {
 		Diagnosis d = new Diagnosis();
 		long start = System.nanoTime();
 		try (Checks checks = new Checks(call(14_000), d)) {
-			Check<Integer> base = checks.start("temel", () -> {
+			Check<Integer> base = checks.start("base", () -> {
 				Thread.sleep(300);
 				return 1;
 			});
 			List<Check<Integer>> dependents = new ArrayList<>();
 			for (int i = 0; i < 32; i++) {
 				int n = i;
-				dependents.add(checks.start("bağımlı-" + i, () -> {
+				dependents.add(checks.start("dependent-" + i, () -> {
 					Integer b = base.await(10_000);
 					return b == null ? null : b + n;
 				}));
@@ -128,43 +129,43 @@ class DiagnoseHelpersTest {
 		assertThat(d.findings()).isEmpty();
 	}
 
-	/** Zorunlu bağımlılığı zamanında bitmeyen kontrol sessizce boş kalmaz: CHECK_TIMEOUT ve kısmi sonuç. */
+	/** A check whose required dependency is late is not silently empty: CHECK_TIMEOUT and a partial result. */
 	@Test
 	void dependentCheckWhoseDependencyIsLateIsReported() {
 		Diagnosis d = new Diagnosis();
 		try (Checks checks = new Checks(call(14_000), d)) {
-			Check<Integer> slow = checks.start("topic'ler", () -> {
+			Check<Integer> slow = checks.start("topics", () -> {
 				Thread.sleep(1_500);
 				return 7;
 			});
-			Check<Integer> failing = checks.start("bozuk", () -> {
-				throw new ToolException("yetki yok");
+			Check<Integer> failing = checks.start("broken", () -> {
+				throw new ToolException("not authorized");
 			});
-			Check<Integer> dependent = checks.start("topic config'leri", () -> {
+			Check<Integer> dependent = checks.start("topic configs", () -> {
 				Integer v = slow.require(100);
 				return v == null ? null : v + 1;
 			});
-			Check<Integer> onFailed = checks.start("bozuğa bağlı", () -> {
+			Check<Integer> onFailed = checks.start("depends on broken", () -> {
 				Integer v = failing.require(5_000);
 				return v == null ? -1 : v;
 			});
 			assertThat(dependent.get()).isNull();
-			assertThat(slow.get()).as("bağımlılık sonradan bitse de kendi sonucu gelir").isEqualTo(7);
-			assertThat(onFailed.get()).as("hata veren bağımlılık null döner, bulgusunu kendisi verir").isEqualTo(-1);
+			assertThat(slow.get()).as("the dependency still delivers its own result when it finishes later").isEqualTo(7);
+			assertThat(onFailed.get()).as("a failing dependency returns null and reports its own finding").isEqualTo(-1);
 			assertThat(failing.get()).isNull();
 		}
 		List<Finding> timeouts = d.findings().stream().filter(f -> f.code().equals(Checks.CHECK_TIMEOUT)).toList();
 		assertThat(timeouts).hasSize(1);
-		assertThat(timeouts.get(0).message()).contains("topic config'leri");
-		assertThat(String.valueOf(timeouts.get(0).evidence().get("reason"))).contains("bağımlı", "topic'ler");
+		assertThat(timeouts.get(0).message()).contains("topic configs");
+		assertThat(String.valueOf(timeouts.get(0).evidence().get("reason"))).contains("dependency check", "'topics'");
 		assertThat(d.findings()).extracting(Finding::code).containsOnly(Checks.CHECK_TIMEOUT, Checks.CHECK_FAILED);
 		assertThat(d.partial()).isTrue();
 	}
 
 	/**
-	 * Commit'i pencerede ilerlemeyen partition: bekleyen en eski kayıt yeni ise periyodik commit (bulgu kritik
-	 * değil), commit payını aşmışsa şüpheli, kayıt yaşıyla 5+ dk ise takılmış; lag/hız tahmini tek başına kritik
-	 * olmaz.
+	 * Partition whose commit did not advance in the window: periodic commit if the oldest pending record is recent
+	 * (not a critical finding), suspect if it exceeds the commit allowance, stuck if the record age is 5+ min; a
+	 * lag/rate estimate alone is never critical.
 	 */
 	@Test
 	void stuckCheckSeparatesPeriodicCommitFromRealStall() {
@@ -188,12 +189,12 @@ class DiagnoseHelpersTest {
 		assertThat(v.maxBehindSeconds(StuckCheck.Level.STUCK)).isEqualTo(1_800);
 		StuckCheck.Assessed estimated = v.suspect().stream().filter(a -> a.partition().equals(p3)).findFirst().get();
 		assertThat(estimated.basis()).isEqualTo(StuckCheck.ESTIMATE);
-		assertThat(estimated.behindSeconds()).as("50000 lag / 10 msg/sn").isEqualTo(5_000);
+		assertThat(estimated.behindSeconds()).as("50000 lag / 10 msg/s").isEqualTo(5_000);
 		assertThat(v.evidence(StuckCheck.Level.STUCK, 10).get(0)).containsEntry("oldestPendingAgeSeconds", 1_800L)
 			.containsEntry("ageBasis", StuckCheck.RECORD_AGE);
 		assertThat(v.window()).containsEntry("windowSeconds", 5.0).containsEntry("commitAllowanceSeconds", 90L);
 
-		// periyodik commit eden sağlıklı grup: lag 20 sn'lik üretim kadar, büyüyor görünse de pay içinde
+		// healthy group committing periodically: lag equals 20 s of production, within the allowance even if it looks like growing
 		OffsetWindow.GroupProgress healthy = new OffsetWindow.GroupProgress("g",
 				List.of(new PartitionProgress(p0, 800L, 800L, 1_000L, 1_050L)), true, 5.0);
 		assertThat(healthy.trend()).isEqualTo("growing");
@@ -203,7 +204,7 @@ class DiagnoseHelpersTest {
 		assertThat(behind.lagBeyondCommitAllowance()).isTrue();
 	}
 
-	/** Connect sink'i varsayılan offset.flush.interval.ms (60 sn) ile commit ederken kritik SINK_STUCK verilmez. */
+	/** No critical SINK_STUCK while a Connect sink commits with the default offset.flush.interval.ms (60 s). */
 	@Test
 	void sinkCommittingEverySixtySecondsIsNotReportedAsStuck() {
 		TopicPartition tp = new TopicPartition("in", 0);
@@ -236,12 +237,12 @@ class DiagnoseHelpersTest {
 		}
 	}
 
-	/** Commit'li offset'leri alınamayan gruplar varken "commit eden grup yok" denmez. */
+	/** While some groups' committed offsets could not be read, "no group commits" is not reported. */
 	@Test
 	void groupsWithFailedOffsetFetchAreNotReportedAsAbsent() {
 		TopicPartition tp = new TopicPartition("t", 0);
 		OffsetWindow w = OffsetWindow.of(Map.of(tp, 10L), Map.of(tp, 10L), Map.of(), Map.of(),
-				Map.of("slow-group", "zaman aşımı"), 3.0);
+				Map.of("slow-group", "No response (timeout)"), 3.0);
 		DiagnoseTopicTools.GroupScan gs = new DiagnoseTopicTools.GroupScan(4, List.of(), w, Map.of(),
 				StuckCheck.of(w, Map.of(), System.currentTimeMillis()));
 		DiagnoseTopicTools.OffsetsInfo oi = new DiagnoseTopicTools.OffsetsInfo(Map.of(tp, new Offsets.Range(0, 10)),
@@ -261,7 +262,7 @@ class DiagnoseHelpersTest {
 		assertThat(d2.findings()).extracting(Finding::code).containsExactly("NO_CONSUMER_GROUPS");
 	}
 
-	/** Connect &lt; 3.2 connectorsOnly'yi yok sayar: converter listesi yoksa converter kontrolü yapılmaz. */
+	/** Connect &lt; 3.2 ignores connectorsOnly: without a converter list, converters are not checked. */
 	@Test
 	void pluginListingAndAliases() throws Exception {
 		ObjectMapper m = new ObjectMapper();
@@ -290,7 +291,7 @@ class DiagnoseHelpersTest {
 		assertThat(DiagnoseConnectorTools.pluginPresent(all.converters(), "AvroConverter", "Converter")).isFalse();
 	}
 
-	/** REST adımının süresi istek görevinde ölçülür; sonucun okunduğu ana kadar geçen süre (önceki adımlar) eklenmez. */
+	/** The REST step duration is measured in the request task; time until the result is read (earlier steps) is not added. */
 	@Test
 	void restStepDurationIsMeasuredInsideTheRequest() throws Exception {
 		Diagnosis d = new Diagnosis();
@@ -353,13 +354,13 @@ class DiagnoseHelpersTest {
 	}
 
 	@Test
-	void networkErrorsAreExplainedInTurkish() {
+	void networkErrorsAreExplained() {
 		Net.Resolution dns = Net.resolve("nonexistent.invalid", 3_000);
 		assertThat(dns.ok()).isFalse();
 		assertThat(dns.error()).contains("DNS");
 		Net.Probe refused = Net.resolveAndConnect(new Net.Endpoint("127.0.0.1", 1), 1_000, 2_000);
 		assertThat(refused.errorType()).isEqualTo(Net.REFUSED);
-		assertThat(refused.error()).contains("Bağlantı reddedildi", "127.0.0.1:1");
+		assertThat(refused.error()).contains("Connection refused", "127.0.0.1:1");
 		assertThat(Net.explain(Net.TIMEOUT, "h:1", 2_000, null)).contains("NetworkPolicy", "egress");
 	}
 

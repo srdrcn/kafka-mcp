@@ -15,9 +15,10 @@ import org.apache.kafka.common.TopicPartitionInfo;
 import io.github.srdrcn.kafkamcp.kafka.Topics;
 
 /**
- * Partition sağlığı sayımı (tek describeTopics sonucundan): offline, URP (reassignment'ta eklenen replikalar
- * hariç), replika kaybı yüzünden min.insync.replicas altı, ISR'ı tam olsa da min ISR > replika sayısı olanlar,
- * tercih edilmeyen lider, ELR'si dolu (KRaft) partition'lar ve replika listelerinde olup canlı olmayan broker'lar.
+ * Partition health counts (from a single describeTopics result): offline, URP (excluding replicas being added by a
+ * reassignment), below min.insync.replicas due to replica loss, min ISR > replica count even with a full ISR,
+ * non-preferred leader, partitions with a non-empty ELR (KRaft) and brokers listed in replica lists that are not
+ * alive.
  */
 public final class PartitionHealth {
 
@@ -45,8 +46,8 @@ public final class PartitionHealth {
 	}
 
 	/**
-	 * @param minIsrByTopic topic → min.insync.replicas (bilinmeyen topic'ler min ISR kontrolüne girmez)
-	 * @param liveBrokers canlı broker id'leri (null: kontrol edilmez)
+	 * @param minIsrByTopic topic → min.insync.replicas (unknown topics are skipped by the min ISR check)
+	 * @param liveBrokers live broker ids (null: not checked)
 	 */
 	public static PartitionHealth of(Collection<TopicDescription> topics, Topics.Reassignments reassignments,
 			Map<String, Integer> minIsrByTopic, Collection<Integer> liveBrokers) {
@@ -106,12 +107,12 @@ public final class PartitionHealth {
 		return underReplicated;
 	}
 
-	/** ISR, replika kaybı yüzünden min.insync.replicas altında (acks=all yazmalar reddedilir). */
+	/** ISR is below min.insync.replicas due to replica loss (acks=all writes are rejected). */
 	public List<TopicPartition> underMinIsr() {
 		return underMinIsr;
 	}
 
-	/** ISR tam ama min.insync.replicas replika sayısından büyük (config hatası; acks=all hiç yazamaz). */
+	/** ISR is full but min.insync.replicas is greater than the replica count (config error; acks=all can never write). */
 	public List<TopicPartition> minIsrAboveReplicas() {
 		return minIsrAboveReplicas;
 	}
@@ -120,22 +121,22 @@ public final class PartitionHealth {
 		return nonPreferredLeader;
 	}
 
-	/** ELR'si dolu partition'lar (KRaft, KIP-966). */
+	/** Partitions with a non-empty ELR (KRaft, KIP-966). */
 	public List<TopicPartition> withElr() {
 		return withElr;
 	}
 
-	/** Offline olup lastKnownElr'si dolu partition'lar (temiz kurtarma adayı var). */
+	/** Offline partitions with a non-empty lastKnownElr (a clean recovery candidate exists). */
 	public List<TopicPartition> offlineWithLastKnownElr() {
 		return offlineWithLastKnownElr;
 	}
 
-	/** Replika listelerinde geçen broker'lar. */
+	/** Brokers that appear in replica lists. */
 	public Set<Integer> referencedBrokers() {
 		return referencedBrokers;
 	}
 
-	/** Replika listelerinde olup canlı olmayan broker'lar. */
+	/** Brokers in replica lists that are not alive. */
 	public Set<Integer> missingBrokers() {
 		return missingBrokers;
 	}

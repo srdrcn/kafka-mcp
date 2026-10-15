@@ -33,10 +33,10 @@ import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 /**
- * diagnose_connectivity'nin en sık OpenShift hatası: bootstrap adresi erişilebilir ama broker'ın advertised adresi bu
- * istemciden çözülemiyor. Ayrı, kısa ömürlü bir broker'ın dış listener'ı çözülemeyen bir adla ilan edilir;
- * describeCluster zaman aşımına uğrar, advertised adresler sadece bootstrap bağlantısıyla alınan metadata'dan okunup
- * yoklanır ve ADVERTISED_UNREACHABLE olarak raporlanır.
+ * The most common OpenShift failure for diagnose_connectivity: the bootstrap address is reachable but the broker's
+ * advertised address cannot be resolved from this client. A separate, short-lived broker advertises its external
+ * listener with an unresolvable name; describeCluster times out, the advertised addresses are read from metadata
+ * fetched over the bootstrap connection only, probed and reported as ADVERTISED_UNREACHABLE.
  */
 class DiagnoseConnectivityAdvertisedTest {
 
@@ -64,7 +64,7 @@ class DiagnoseConnectivityAdvertisedTest {
 					catch (Exception e) {
 						return false;
 					}
-				}, "topic lideri seçilmedi");
+				}, "no topic leader elected");
 			}
 
 			KafkaMcpConfig config = new KafkaMcpConfig();
@@ -76,7 +76,7 @@ class DiagnoseConnectivityAdvertisedTest {
 
 				@Override
 				public Admin admin(String name) {
-					throw new AssertionError("diagnose_connectivity önbellekteki AdminClient'ı kullanmamalı");
+					throw new AssertionError("diagnose_connectivity must not use the cached AdminClient");
 				}
 
 			};
@@ -101,7 +101,7 @@ class DiagnoseConnectivityAdvertisedTest {
 				JsonNode f = DiagnoseTestBase.finding(r, "ADVERTISED_UNREACHABLE");
 				assertThat(f.get("severity").asText()).isEqualTo("critical");
 				assertThat(f.at("/evidence/brokers/0/advertised").asText()).isEqualTo(ADVERTISED_HOST + ":" + external);
-				assertThat(f.at("/evidence/brokers/0/error").asText()).contains("DNS çözümlenemedi");
+				assertThat(f.at("/evidence/brokers/0/error").asText()).contains("DNS resolution failed");
 				assertThat(f.get("recommendation").asText()).contains("advertised.listeners", "OpenShift");
 				assertThat(r.at("/facts/brokers/0/reachable").asBoolean()).isFalse();
 				assertThat(r.get("status").asText()).isEqualTo("critical");
@@ -118,10 +118,10 @@ class DiagnoseConnectivityAdvertisedTest {
 				return s;
 			}
 		}
-		throw new AssertionError(name + " adımı yok: " + r.get("steps"));
+		throw new AssertionError("No " + name + " step: " + r.get("steps"));
 	}
 
-	/** Dış listener'ı (EXT) çözülemeyen adla ilan eden, hazırlık için ayrıca localhost'tan erişilen tek düğüm. */
+	/** Single node that advertises its external listener (EXT) with an unresolvable name and is also reachable via localhost for setup. */
 	@SuppressWarnings("resource")
 	private static GenericContainer<?> broker(int external, int good) {
 		return new GenericContainer<>(DockerImageName.parse(KafkaTestCluster.IMAGE))

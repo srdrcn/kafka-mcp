@@ -21,8 +21,9 @@ import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
 /**
- * diagnose_connectivity hata yolları (ayrı test config'i): çözümlenemeyen host, kapalı port, yanlış SASL
- * parolası, erişilemeyen Connect/Schema Registry. Her biri Türkçe açıklama ve öneriyle döner, araç hata vermez.
+ * diagnose_connectivity failure paths (separate test config): unresolvable host, closed port, wrong SASL password,
+ * unreachable Connect/Schema Registry. Each comes back with an explanation and a recommendation; the tool does not
+ * fail.
  */
 @SpringBootTest(classes = { KafkaMcpApplication.class, DiagnoseConnectivityFailureTest.FailureConfig.class },
 		webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -64,7 +65,7 @@ class DiagnoseConnectivityFailureTest extends KafkaIntegrationTest {
 				return s;
 			}
 		}
-		throw new AssertionError(name + " adımı yok: " + r.get("steps"));
+		throw new AssertionError("No " + name + " step: " + r.get("steps"));
 	}
 
 	@Test
@@ -88,7 +89,7 @@ class DiagnoseConnectivityFailureTest extends KafkaIntegrationTest {
 		JsonNode r = ok("diagnose_connectivity", args("cluster", "port-closed"));
 		assertThat(r.get("status").asText()).isEqualTo("critical");
 		JsonNode f = DiagnoseTestBase.finding(r, "CONNECTION_REFUSED");
-		assertThat(f.get("message").asText()).contains("Bağlantı reddedildi", "127.0.0.1:1");
+		assertThat(f.get("message").asText()).contains("Connection refused", "127.0.0.1:1");
 		assertThat(f.get("recommendation").asText()).contains("listeners");
 		assertThat(step(r, "dns").get("status").asText()).isEqualTo("ok");
 		assertThat(step(r, "tcp").get("status").asText()).isEqualTo("error");
@@ -100,7 +101,7 @@ class DiagnoseConnectivityFailureTest extends KafkaIntegrationTest {
 		JsonNode r = ok("diagnose_connectivity", args("cluster", "bad-auth"));
 		assertThat(r.get("status").asText()).isEqualTo("critical");
 		JsonNode f = DiagnoseTestBase.finding(r, "SASL_AUTH_FAILED");
-		assertThat(f.get("message").asText()).contains("SASL kimlik doğrulaması başarısız");
+		assertThat(f.get("message").asText()).contains("SASL authentication failed");
 		assertThat(f.get("recommendation").asText()).contains("sasl.jaas.config");
 		assertThat(step(r, "tcp").get("status").asText()).isEqualTo("ok");
 		assertThat(step(r, "kafka").get("status").asText()).isEqualTo("error");
@@ -115,7 +116,7 @@ class DiagnoseConnectivityFailureTest extends KafkaIntegrationTest {
 		assertThat(step(r, "connect").get("status").asText()).isEqualTo("error");
 		assertThat(step(r, "schemaRegistry").get("status").asText()).isEqualTo("error");
 		assertThat(DiagnoseTestBase.finding(r, "CONNECT_UNREACHABLE").get("message").asText())
-			.contains("Bağlantı reddedildi");
+			.contains("Connection refused");
 		assertThat(DiagnoseTestBase.finding(r, "SCHEMA_REGISTRY_UNREACHABLE").get("severity").asText())
 			.isEqualTo("warning");
 	}

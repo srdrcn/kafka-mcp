@@ -44,7 +44,7 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.ConsumerGroups;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 import io.github.srdrcn.kafkamcp.toolsets.diagnose.Checks.Check;
 
-/** diagnose_consumer_group: tek çağrıda consumer group sağlık teşhisi. */
+/** diagnose_consumer_group: single-call consumer group health diagnosis. */
 @Component
 public class DiagnoseGroupTools {
 
@@ -56,7 +56,7 @@ public class DiagnoseGroupTools {
 
 	static final int MAX_TOPICS = 20;
 
-	/** ACL kontrolünde en fazla bu kadar topic değerlendirilir (kalanı sayılır ve raporlanır). */
+	/** At most this many topics are evaluated by the ACL check (the rest are counted and reported). */
 	static final int MAX_ACL_TOPICS = 20;
 
 	static final int MAX_GROUP_READERS = 20;
@@ -68,7 +68,7 @@ public class DiagnoseGroupTools {
 
 	private static final long COMMITTED_MAX_MS = 3_000;
 
-	/** İkinci örnekten sonra kayıt yaşı okuması ve son describe için bırakılan süre. */
+	/** Time left after the second sample for reading record ages and the final describe. */
 	private static final long WINDOW_RESERVE_MS = 4_000;
 
 	private static final long FINAL_DESCRIBE_RESERVE_MS = 1_500;
@@ -76,8 +76,8 @@ public class DiagnoseGroupTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("diagnose_consumer_group",
-					"Consumer group teşhisi: durum/tip, üyeler ve atama, lag ve eğilimi, takılı partition'lar, eksik topic'ler, coordinator, ACL")
-			.required("group", P.string("Consumer group adı (groupId)"))
+					"Diagnose a consumer group: state/type, members and assignment, lag and trend, stuck partitions, missing topics, coordinator, ACLs")
+			.required("group", P.string("Consumer group id"))
 			.param("intervalSeconds", DiagnoseParams.interval(DiagnoseParams.DEFAULT_INTERVAL_SECONDS))
 			.handler(this::diagnose));
 	}
@@ -85,7 +85,7 @@ public class DiagnoseGroupTools {
 	record Window(OffsetWindow window, Settled<ConsumerGroupDescription> after, StuckCheck stuck) {
 	}
 
-	/** ACL görünümü ve TOPIC ACL'leri gerçekten okunan topic'ler (sadece bunlar değerlendirilir). */
+	/** ACL view and the topics whose TOPIC ACLs were actually read (only these are evaluated). */
 	record GroupAcl(AclView view, List<String> topics, boolean topicScanReady) {
 	}
 
@@ -109,9 +109,9 @@ public class DiagnoseGroupTools {
 		String mode;
 		try (Checks checks = new Checks(call, dx)) {
 			Check<ClusterMeta.Info> meta = checks.start("cluster metadata", () -> ClusterMeta.describe(call, true));
-			Check<TopicScan> topics = checks.start("topic'ler ve offset aralıkları",
+			Check<TopicScan> topics = checks.start("topics and offset ranges",
 					() -> topicScan(call, group, assigned));
-			Check<Window> window = checks.start("lag ve eğilim", () -> {
+			Check<Window> window = checks.start("lag and trend", () -> {
 				OffsetWindow w = OffsetWindow.measure(call, assigned, List.of(group), false, intervalMs,
 						WINDOW_RESERVE_MS);
 				StuckCheck stuck = StuckCheck.of(call, w, List.of(group),
@@ -131,8 +131,8 @@ public class DiagnoseGroupTools {
 			});
 
 			if (d0 == null) {
-				dx.warning("GROUP_DESCRIBE_FAILED", "Grup describe edilemedi: " + s0.errorMessage(),
-						evidence("group", group), "Grup koordinatörüne erişimi ve GROUP DESCRIBE yetkisini kontrol edin");
+				dx.warning("GROUP_DESCRIBE_FAILED", "Could not describe the group: " + s0.errorMessage(),
+						evidence("group", group), "Check access to the group coordinator and the GROUP DESCRIBE permission");
 				dx.markPartial();
 			}
 			ClusterMeta.Info info = meta.get();
@@ -154,7 +154,7 @@ public class DiagnoseGroupTools {
 		return dx.result(head, facts);
 	}
 
-	// ---- alt kontroller ----
+	// ---- sub-checks ----
 
 	private static TopicScan topicScan(ToolCall call, String group, Set<TopicPartition> assigned) {
 		Futures.Each<String, Map<TopicPartition, Long>> c = io.github.srdrcn.kafkamcp.kafka.ConsumerGroups
@@ -170,7 +170,7 @@ public class DiagnoseGroupTools {
 		Set<String> missing = new TreeSet<>();
 		Map<String, String> errors = new TreeMap<>();
 		described.errors().forEach((t, e) -> {
-			if (e.contains(UnknownTopicOrPartitionException.class.getSimpleName()) || e.contains("bulunamadı")) {
+			if (e.contains(UnknownTopicOrPartitionException.class.getSimpleName()) || e.contains("not found")) {
 				missing.add(t);
 			}
 			else {
@@ -191,7 +191,7 @@ public class DiagnoseGroupTools {
 		return new TopicScan(committed, new TreeMap<>(described.values()), missing, errors, earliest);
 	}
 
-	// ---- değerlendirme ----
+	// ---- evaluation ----
 
 	private static void describeFacts(Diagnosis dx, Map<String, Object> facts, ConsumerGroupDescription d0,
 			ConsumerGroupDescription d1, ClusterMeta.Info info) {
@@ -215,25 +215,25 @@ public class DiagnoseGroupTools {
 			facts.put("coordinator", coord);
 		}
 		if (coordinator == null || coordinator.isEmpty()) {
-			dx.critical("COORDINATOR_UNAVAILABLE", "Grubun coordinator broker'ı belirlenemedi",
-					null, "__consumer_offsets partition'larının sağlığını kontrol edin (diagnose_topic topic=__consumer_offsets)");
+			dx.critical("COORDINATOR_UNAVAILABLE", "Could not determine the group's coordinator broker",
+					null, "Check the health of the __consumer_offsets partitions (diagnose_topic topic=__consumer_offsets)");
 		}
 		else if (info != null && !info.brokerIds().contains(coordinator.id())) {
 			dx.critical("COORDINATOR_UNAVAILABLE",
-					"Coordinator broker " + coordinator.id() + " canlı broker listesinde yok",
+					"Coordinator broker " + coordinator.id() + " is not in the live broker list",
 					evidence("coordinator", coordinator.id(), "liveBrokers", info.brokerIds()),
-					"Broker'ı ayağa kaldırın; __consumer_offsets liderliği başka broker'a geçmeli (diagnose_cluster)");
+					"Bring the broker up; __consumer_offsets leadership should move to another broker (diagnose_cluster)");
 		}
 		GroupState s0 = d0.groupState();
 		GroupState s1 = d1 == null ? null : d1.groupState();
 		if (REBALANCING.contains(s0) || s1 != null && REBALANCING.contains(s1)) {
 			dx.warning("REBALANCING",
-					"Grup rebalance/uzlaşma durumunda (" + ConsumerGroups.state(s0)
-							+ (s1 != null && s1 != s0 ? " → " + ConsumerGroups.state(s1) : "") + "): tüketim duraklayabilir",
+					"Group is rebalancing/reconciling (" + ConsumerGroups.state(s0)
+							+ (s1 != null && s1 != s0 ? " → " + ConsumerGroups.state(s1) : "") + "): consumption may pause",
 					evidence("stateAtStart", ConsumerGroups.state(s0), "stateAtEnd", ConsumerGroups.state(s1)),
-					"Sık tekrarlıyorsa üyelerin session.timeout.ms/max.poll.interval.ms aşımlarını ve pod yeniden "
-							+ "başlatmalarını kontrol edin; static membership (group.instance.id) ya da consumer protokolü "
-							+ "(KIP-848) rebalance etkisini azaltır");
+					"If it happens often, check the members for session.timeout.ms/max.poll.interval.ms overruns and pod "
+							+ "restarts; static membership (group.instance.id) or the consumer protocol (KIP-848) reduces "
+							+ "the impact of rebalances");
 		}
 		if (d1 != null) {
 			Set<String> m0 = memberIds(d0);
@@ -243,10 +243,10 @@ public class DiagnoseGroupTools {
 				joined.removeAll(m0);
 				Set<String> left = new TreeSet<>(m0);
 				left.removeAll(m1);
-				dx.info("MEMBERSHIP_CHANGED", "Ölçüm sırasında üyeler değişti (katılan " + joined.size() + ", ayrılan "
+				dx.info("MEMBERSHIP_CHANGED", "Members changed during the measurement (joined " + joined.size() + ", left "
 						+ left.size() + ")", evidence("joined", first(joined, MAX_EVIDENCE), "joinedOmitted",
 								omitted(joined), "left", first(left, MAX_EVIDENCE), "leftOmitted", omitted(left)),
-						"Sürekli değişiyorsa consumer'lar yeniden başlıyor ya da gruptan düşüyor olabilir");
+						"If it keeps changing, consumers may be restarting or dropping out of the group");
 			}
 		}
 	}
@@ -291,13 +291,13 @@ public class DiagnoseGroupTools {
 		boolean stable = d.groupState() == GroupState.STABLE;
 		if (stable && !idle.isEmpty()) {
 			dx.info("IDLE_MEMBERS",
-					idle.size() + " üyeye partition atanmamış (üye sayısı partition sayısından fazla olabilir)",
+					idle.size() + " member(s) have no partitions assigned (there may be more members than partitions)",
 					evidence("members", first(idle, MAX_EVIDENCE), "omitted", omitted(idle)),
-					"Fazla consumer boşta bekler; ölçek için partition sayısını artırın (topics_partitions_increase) ya da üye sayısını azaltın");
+					"Extra consumers stay idle; to scale, increase the partition count (topics_partitions_increase) or reduce the members");
 		}
 		if (reconciling > 0) {
-			dx.info("ASSIGNMENT_RECONCILING", reconciling + " üyenin mevcut ataması hedef atamadan farklı (consumer protokolü uzlaşması sürüyor)",
-					null, "Kısa sürede kapanmalı; uzun sürüyorsa üyelerin loglarını kontrol edin");
+			dx.info("ASSIGNMENT_RECONCILING", reconciling + " member(s) have a current assignment that differs from the target (consumer protocol reconciliation in progress)",
+					null, "This should settle shortly; if it takes long, check the members' logs");
 		}
 		if (!stable || ts == null) {
 			return;
@@ -319,10 +319,10 @@ public class DiagnoseGroupTools {
 		}
 		if (!unassigned.isEmpty()) {
 			dx.warning("UNASSIGNED_PARTITIONS",
-					unassigned.size() + " partition grup Stable olduğu halde hiçbir üyeye atanmamış: bu partition'lar tüketilmiyor",
+					unassigned.size() + " partition(s) are not assigned to any member although the group is Stable: they are not consumed",
 					evidence("partitions", partitionNames(unassigned), "omitted", omitted(unassigned)),
-					"Partition sayısı yeni artırılmışsa metadata yenilenince atanır (metadata.max.age.ms); değilse "
-							+ "assignor/abonelik (regex) ayarlarını ve consumer loglarını kontrol edin");
+					"If the partition count was just increased, they are assigned after a metadata refresh (metadata.max.age.ms); "
+							+ "otherwise check the assignor/subscription (regex) settings and the consumer logs");
 		}
 	}
 
@@ -358,8 +358,8 @@ public class DiagnoseGroupTools {
 			facts.put("lagByTopicOmitted", p.byTopic().size() - MAX_TOPICS);
 		}
 		if (!w.groupErrors().isEmpty()) {
-			dx.warning("OFFSETS_UNAVAILABLE", "Grubun commit'li offset'leri alınamadı",
-					evidence("errors", w.groupErrors()), "GROUP DESCRIBE yetkisini ve coordinator erişimini kontrol edin");
+			dx.warning("OFFSETS_UNAVAILABLE", "Could not read the group's committed offsets",
+					evidence("errors", w.groupErrors()), "Check the GROUP DESCRIBE permission and access to the coordinator");
 			dx.markPartial();
 		}
 		if (!w.endErrors().isEmpty()) {
@@ -377,20 +377,20 @@ public class DiagnoseGroupTools {
 			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.STUCK, MAX_EVIDENCE), "omitted",
 					omitted(stuck), "members", members);
 			ev.putAll(window);
-			String age = " ve bekleyen en eski kayıt " + v.maxBehindSeconds(StuckCheck.Level.STUCK) / 60 + " dk önce yazılmış";
+			String age = " and the oldest pending record was written " + v.maxBehindSeconds(StuckCheck.Level.STUCK) / 60 + " min ago";
 			if (members > 0) {
 				dx.critical("STUCK_PARTITIONS",
-						stuck.size() + " partition'da commit ilerlemiyor, yeni mesaj geliyor" + age
-								+ " (üyeler var): tüketim takılmış",
-						ev, "Bu partition'ların sahibi üyelerin loglarını inceleyin (poison pill, uzun işleme, "
-								+ "max.poll.interval.ms aşımı, commit hatası); gerekirse ilgili consumer'ı yeniden başlatın");
+						stuck.size() + " partition(s) have a commit that does not advance while new messages arrive" + age
+								+ " (members present): consumption is stuck",
+						ev, "Inspect the logs of the members owning these partitions (poison pill, long processing, "
+								+ "max.poll.interval.ms overrun, commit errors); restart the consumer if needed");
 			}
 			else {
 				dx.warning("STUCK_PARTITIONS",
-						stuck.size() + " partition'da commit ilerlemiyor, yeni mesaj geliyor" + age
-								+ ": grupta aktif üye yok" + (empty ? " (EMPTY), lag " + p.lag() : ""),
-						ev, "Consumer uygulamasını başlatın. Backlog atlanacaksa grup EMPTY iken consumer_groups_offsets_reset "
-								+ "(to=latest ya da timestamp); grup terk edildiyse consumer_groups_delete");
+						stuck.size() + " partition(s) have a commit that does not advance while new messages arrive" + age
+								+ ": the group has no active members" + (empty ? " (EMPTY), lag " + p.lag() : ""),
+						ev, "Start the consumer application. To skip the backlog, use consumer_groups_offsets_reset while the group "
+								+ "is EMPTY (to=latest or timestamp); if the group is abandoned, consumer_groups_delete");
 			}
 		}
 		if (!suspect.isEmpty()) {
@@ -398,62 +398,64 @@ public class DiagnoseGroupTools {
 					"omitted", omitted(suspect), "members", members);
 			ev.putAll(window);
 			dx.warning("STUCK_SUSPECT",
-					suspect.size() + " partition'da " + Math.round(v.windowSeconds()) + " sn'lik pencerede commit ilerlemedi "
-							+ "ve bekleyen en eski kayıt yaklaşık " + v.maxBehindSeconds(StuckCheck.Level.SUSPECT)
-							+ " sn önce yazılmış (periyodik commit payı " + StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn aşıldı)"
-							+ (members == 0 ? "; grupta aktif üye yok" : ""),
-					ev, "Birkaç dakika sonra diagnose_consumer_group ya da consumer_groups_lag_trend ile tekrar bakın; "
-							+ "ilerlemiyorsa sahibi üyelerin loglarını inceleyin (poison pill, uzun işleme, max.poll.interval.ms, "
-							+ "commit hatası)");
+					suspect.size() + " partition(s) did not advance their commit in a " + Math.round(v.windowSeconds())
+							+ " s window and the oldest pending record was written about "
+							+ v.maxBehindSeconds(StuckCheck.Level.SUSPECT) + " s ago (periodic commit allowance of "
+							+ StuckCheck.COMMIT_ALLOWANCE_SECONDS + " s exceeded)"
+							+ (members == 0 ? "; the group has no active members" : ""),
+					ev, "Check again in a few minutes with diagnose_consumer_group or consumer_groups_lag_trend; if it does not "
+							+ "progress, inspect the logs of the owning members (poison pill, long processing, "
+							+ "max.poll.interval.ms, commit errors)");
 		}
 		if (!periodic.isEmpty()) {
 			Map<String, Object> ev = evidence("partitions", v.evidence(StuckCheck.Level.PERIODIC, MAX_EVIDENCE),
 					"omitted", omitted(periodic));
 			ev.putAll(window);
 			dx.info("COMMIT_NOT_ADVANCED",
-					periodic.size() + " partition'da " + Math.round(v.windowSeconds()) + " sn'lik pencerede commit ilerlemedi "
-							+ "ama bekleyen en eski kayıt yaklaşık " + v.maxBehindSeconds(StuckCheck.Level.PERIODIC)
-							+ " sn önce yazılmış: periyodik commit (auto commit 5 sn, Streams 30 sn, Connect 60 sn) olası, "
-							+ "takılma kanıtı yok",
-					ev, "Emin olmak için intervalSeconds=10 ile ya da birkaç dakika sonra tekrar çalıştırın");
+					periodic.size() + " partition(s) did not advance their commit in a " + Math.round(v.windowSeconds())
+							+ " s window but the oldest pending record was written about "
+							+ v.maxBehindSeconds(StuckCheck.Level.PERIODIC)
+							+ " s ago: periodic commit (auto commit 5 s, Streams 30 s, Connect 60 s) likely, "
+							+ "no evidence of being stuck",
+					ev, "To be sure, run again with intervalSeconds=10 or in a few minutes");
 		}
 		boolean stalled = !stuck.isEmpty() || !suspect.isEmpty();
 		if (empty && p.lag() > 0 && !stalled) {
-			dx.warning("NO_ACTIVE_MEMBERS", "Grup EMPTY (aktif consumer yok) ve " + p.lag() + " mesaj lag var",
+			dx.warning("NO_ACTIVE_MEMBERS", "Group is EMPTY (no active consumers) with a lag of " + p.lag() + " messages",
 					evidence("lag", p.lag()),
-					"Consumer'ları başlatın. Backlog'u atlamak gerekiyorsa grup EMPTY iken consumer_groups_offsets_reset "
-							+ "(to=latest ya da timestamp) kullanılabilir; grup terk edildiyse consumer_groups_delete");
+					"Start the consumers. To skip the backlog, use consumer_groups_offsets_reset while the group is EMPTY "
+							+ "(to=latest or timestamp); if the group is abandoned, consumer_groups_delete");
 		}
 		boolean growing = "growing".equals(p.trend()) && p.lag() >= GROWING_LAG_MIN && !stalled
 				&& p.lagBeyondCommitAllowance();
 		if (growing) {
 			String scale = partitions > 0 && members < partitions
-					? "Üye sayısını (" + members + ") partition sayısına (" + partitions + ") kadar artırın"
-					: "Üye sayısı partition sayısına ulaşmış: partition sayısını artırın (topics_partitions_increase) ya da "
-							+ "işleme hızını iyileştirin (batch, async işlem)";
+					? "Increase the members (" + members + ") up to the partition count (" + partitions + ")"
+					: "Members already match the partition count: increase the partitions (topics_partitions_increase) or "
+							+ "speed up processing (batching, async processing)";
 			dx.warning("LAG_GROWING",
-					"Lag büyüyor: tüketim " + p.consumeRate() + " msg/sn, üretim " + p.produceRate() + " msg/sn; lag "
-							+ StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn'lik üretimden fazla",
+					"Lag is growing: consuming " + p.consumeRate() + " msg/s, producing " + p.produceRate() + " msg/s; lag exceeds "
+							+ StuckCheck.COMMIT_ALLOWANCE_SECONDS + " s of production",
 					evidence("lagAtStart", p.lag0(), "lag", p.lag(), "members", members, "partitions",
 							partitions > 0 ? partitions : null, "windowSeconds", window.get("windowSeconds")),
-					scale + (empty ? "" : ". Offset reset için önce consumer'ları durdurun (grup EMPTY olmalı)"));
+					scale + (empty ? "" : ". To reset offsets, stop the consumers first (the group must be EMPTY)"));
 		}
 		else if (p.lag() >= HIGH_LAG && !stalled) {
-			dx.info("HIGH_LAG", "Toplam lag " + p.lag() + (p.etaSeconds() != null
-					? " (azalıyor, tahmini yetişme " + p.etaSeconds() + " sn)" : ""), evidence("lag", p.lag()),
-					"consumer_groups_lag_trend ile izleyin");
+			dx.info("HIGH_LAG", "Total lag " + p.lag() + (p.etaSeconds() != null
+					? " (shrinking, estimated catch-up in " + p.etaSeconds() + " s)" : ""), evidence("lag", p.lag()),
+					"Follow it with consumer_groups_lag_trend");
 		}
 		if (p.resetDetected()) {
-			dx.info("OFFSET_RESET_DETECTED", "Ölçüm sırasında commit geri gitti (offset reset ya da yeniden işleme)", null,
+			dx.info("OFFSET_RESET_DETECTED", "The commit went backwards during the measurement (offset reset or reprocessing)", null,
 					null);
 		}
 		Set<TopicPartition> committed = ts == null ? Set.of() : ts.committed().keySet();
 		List<TopicPartition> noCommit = assigned.stream().filter(tp -> !committed.contains(tp)).toList();
 		if (ts != null && !noCommit.isEmpty()) {
 			dx.info("PARTITIONS_WITHOUT_COMMIT",
-					noCommit.size() + " atanmış partition'da commit yok (lag hesaplanamaz; auto.offset.reset uygulanır)",
+					noCommit.size() + " assigned partition(s) have no commit (lag cannot be computed; auto.offset.reset applies)",
 					evidence("partitions", partitionNames(noCommit), "omitted", omitted(noCommit)),
-					"Consumer commit ediyor mu kontrol edin (enable.auto.commit ya da commitSync/commitAsync)");
+					"Check that the consumer commits (enable.auto.commit or commitSync/commitAsync)");
 		}
 	}
 
@@ -469,9 +471,9 @@ public class DiagnoseGroupTools {
 		if (!ts.missing().isEmpty()) {
 			List<String> missing = List.copyOf(ts.missing());
 			dx.warning("MISSING_TOPICS",
-					missing.size() + " silinmiş topic'te hâlâ commit'li offset var",
+					missing.size() + " deleted topic(s) still have committed offsets",
 					evidence("topics", first(missing, MAX_EVIDENCE), "omitted", omitted(missing)),
-					"Gereksizse consumer_groups_offsets_delete ile bu topic'lerin offset'lerini silin (lag/izleme gürültüsünü azaltır)");
+					"If not needed, delete the offsets of these topics with consumer_groups_offsets_delete (reduces lag/monitoring noise)");
 		}
 		if (!ts.topicErrors().isEmpty()) {
 			dx.markPartial();
@@ -491,18 +493,18 @@ public class DiagnoseGroupTools {
 		boolean empty = d != null && d.groupState() == GroupState.EMPTY;
 		if (!beforeStart.isEmpty()) {
 			dx.warning("COMMITTED_BEFORE_LOG_START",
-					beforeStart.size() + " partition'da commit log başlangıcından eski: okunmadan silinmiş mesajlar var",
+					beforeStart.size() + " partition(s) have a commit older than the log start: messages were deleted before being read",
 					evidence("partitions", first(new TreeSet<>(beforeStart), MAX_EVIDENCE), "omitted", omitted(beforeStart)),
-					"Consumer çalışınca auto.offset.reset uygulanır" + (empty
-							? "; şimdi (grup EMPTY) consumer_groups_offsets_reset to=earliest ile düzeltilebilir"
-							: "; retention.ms'i artırmayı ya da tüketimi hızlandırmayı değerlendirin"));
+					"auto.offset.reset applies when the consumer runs" + (empty
+							? "; it can be fixed now (group is EMPTY) with consumer_groups_offsets_reset to=earliest"
+							: "; consider increasing retention.ms or speeding up consumption"));
 		}
 		if (!afterEnd.isEmpty()) {
 			dx.warning("COMMITTED_AFTER_LOG_END",
-					afterEnd.size() + " partition'da commit log sonundan ileride (topic yeniden oluşturulmuş ya da kesilmiş olabilir)",
+					afterEnd.size() + " partition(s) have a commit beyond the log end (the topic may have been recreated or truncated)",
 					evidence("partitions", first(new TreeSet<>(afterEnd), MAX_EVIDENCE), "omitted", omitted(afterEnd)),
-					empty ? "Grup EMPTY: consumer_groups_offsets_reset ile geçerli bir offset'e alın"
-							: "Consumer'ları durdurup (grup EMPTY) consumer_groups_offsets_reset ile düzeltin");
+					empty ? "Group is EMPTY: move it to a valid offset with consumer_groups_offsets_reset"
+							: "Stop the consumers (group EMPTY) and fix it with consumer_groups_offsets_reset");
 		}
 	}
 
@@ -517,7 +519,7 @@ public class DiagnoseGroupTools {
 			return;
 		}
 		List<String> groupReaders = v.allowedPrincipals(AclOperation.READ, ResourceType.GROUP, group);
-		// sadece TOPIC ACL'leri gerçekten okunan topic'ler değerlendirilir (okunmayanlar "yetki yok" sayılmaz)
+		// only topics whose TOPIC ACLs were actually read are evaluated (unread ones do not count as "not authorized")
 		List<String> topics = acl.topics();
 		List<String> unchecked = ts == null ? List.of()
 				: ts.topics().keySet().stream().filter(t -> !topics.contains(t)).toList();
@@ -548,31 +550,30 @@ public class DiagnoseGroupTools {
 		facts.put("access", Results.map("authorizer", true, "groupReaders", first(readers, MAX_GROUP_READERS),
 				"groupReadersOmitted", omitted(readers, MAX_GROUP_READERS), "topicsEvaluated", topics.size(),
 				"topicsNotEvaluated", unchecked.isEmpty() ? null : unchecked.size(), "note",
-				"Kafka üyelerin principal'ını göstermez; değerlendirme bu grupta GROUP READ ACL'i olan principal'lar için"));
+				"Kafka does not expose the members' principals; the evaluation covers principals with GROUP READ ACLs on this group"));
 		if (!unchecked.isEmpty()) {
 			boolean capped = acl.topicScanReady();
 			dx.info("ACL_TOPICS_NOT_EVALUATED",
-					unchecked.size() + " topic için TOPIC READ ACL'i değerlendirilmedi"
-							+ (capped ? " (en fazla " + MAX_ACL_TOPICS + " topic kontrol edilir)"
-									: " (topic taraması ACL kontrolüne yetişmedi)"),
+					unchecked.size() + " topic(s) were not evaluated for TOPIC READ ACLs"
+							+ (capped ? " (at most " + MAX_ACL_TOPICS + " topics are checked)"
+									: " (the topic scan did not finish in time for the ACL check)"),
 					evidence("topics", first(unchecked, MAX_EVIDENCE), "omitted", omitted(unchecked)),
-					"Bu topic'ler için diagnose_access intent=consume ya da acls_list ile kontrol edin");
+					"Check these topics with diagnose_access intent=consume or acls_list");
 			if (!capped) {
 				dx.markPartial();
 			}
 		}
 		if (groupReaders.isEmpty()) {
 			dx.info("NO_GROUP_ACLS",
-					"Bu gruba GROUP READ veren ACL yok: grup sadece süper kullanıcılarca"
-							+ (v.allowEveryone().value() ? " (ya da allow.everyone.if.no.acl.found=true ile herkesçe)" : "")
-							+ " kullanılabilir",
-					null, "Uygulama principal'ı için acls_create preset=consumer (topic, group) kullanın");
+					"No ACL grants GROUP READ on this group: it can only be used by super users"
+							+ (v.allowEveryone().value() ? " (or by everyone, since allow.everyone.if.no.acl.found=true)" : ""),
+					null, "Use acls_create preset=consumer (topic, group) for the application principal");
 		}
 		if (!missing.isEmpty()) {
 			dx.warning("ACL_TOPIC_READ_MISSING",
-					missing.size() + " principal grubu kullanabiliyor ama tükettiği topic'lerde TOPIC READ yetkisine sahip değil",
+					missing.size() + " principal(s) can use the group but lack TOPIC READ on the topics it consumes",
 					evidence("principals", first(missing, MAX_EVIDENCE), "omitted", omitted(missing)),
-					"Eksik izni acls_create ile verin (resourceType=TOPIC, operation=READ) ya da diagnose_access intent=consume ile doğrulayın");
+					"Grant the missing permission with acls_create (resourceType=TOPIC, operation=READ) or verify with diagnose_access intent=consume");
 		}
 	}
 

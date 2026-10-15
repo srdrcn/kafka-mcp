@@ -15,19 +15,22 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Birbirinden bağımsız alt kontrolleri sanal thread'lerde eşzamanlı çalıştırır. Her sonuç araç deadline'ına
- * (pay bırakılarak) kadar beklenir: hata veren kontrol {@code CHECK_FAILED}, yetişmeyen {@code CHECK_TIMEOUT}
- * bulgusu olur ve sonuç kısmi işaretlenir; araç düşmez. Kapatılınca bitmemiş kontroller iptal edilir
- * (beklenmez). Kilit kullanılmaz: beklemeler sanal thread'lerin taşıyıcı thread'ini bağlamaz (pinning).
+ * Runs independent sub-checks concurrently on virtual threads. Each result is awaited until the tool deadline
+ * (minus a margin): a failing check becomes a {@code CHECK_FAILED} finding, one that does not finish in time a
+ * {@code CHECK_TIMEOUT} finding, and the result is marked partial; the tool does not fail. On close, unfinished
+ * checks are cancelled (not awaited). No locks are used: waits do not pin the carrier thread of virtual threads.
  */
 public final class Checks implements AutoCloseable {
 
-	/** get(): sonuçları birleştirip yanıtı döndürmek için deadline'dan ayrılan varsayılan pay. */
+	/** get(): default margin kept before the deadline to merge the results and return the response. */
 	public static final long DEFAULT_RESERVE_MS = 1_200;
 
 	public static final String CHECK_FAILED = "CHECK_FAILED";
 
 	public static final String CHECK_TIMEOUT = "CHECK_TIMEOUT";
+
+	/** Start of the {@link DependencyTimeout} message (shown as the reason of the CHECK_TIMEOUT finding). */
+	private static final String DEPENDENCY_PREFIX = "dependency check ";
 
 	private final ToolCall call;
 
@@ -42,15 +45,15 @@ public final class Checks implements AutoCloseable {
 	}
 
 	/**
-	 * Bir kontrolün bağımlı olduğu kontrol zamanında bitmedi ({@link Check#require(long)}): bağımlı kontrol
-	 * {@code CHECK_TIMEOUT} bulgusu olur, sonuç kısmi işaretlenir.
+	 * A check that another check depends on did not finish in time ({@link Check#require(long)}): the dependent
+	 * check becomes a {@code CHECK_TIMEOUT} finding and the result is marked partial.
 	 */
 	public static final class DependencyTimeout extends ToolException {
 
 		private final long waitedMillis;
 
 		public DependencyTimeout(String dependency, long waitedMillis) {
-			super("bağımlı olduğu '" + dependency + "' kontrolü " + waitedMillis + " ms içinde bitmedi");
+			super(DEPENDENCY_PREFIX + "'" + dependency + "' did not finish within " + waitedMillis + " ms");
 			this.waitedMillis = waitedMillis;
 		}
 
@@ -60,12 +63,12 @@ public final class Checks implements AutoCloseable {
 
 	}
 
-	/** Kontrolü hemen başlatır; sonucu {@link Check#get()} ile alın. name kısa Türkçe ad (bulgularda görünür). */
+	/** Starts the check immediately; get the result with {@link Check#get()}. name is a short name (shown in findings). */
 	public <T> Check<T> start(String name, Callable<T> task) {
 		return new Check<>(name, pool.submit(task));
 	}
 
-	/** Başlatılmış bir alt kontrol. */
+	/** A started sub-check. */
 	public final class Check<T> {
 
 		private final String name;
@@ -85,14 +88,14 @@ public final class Checks implements AutoCloseable {
 			return name;
 		}
 
-		/** Sonuç; hata ya da zaman aşımında null (bulgu bir kez eklenir). */
+		/** Result; null on error or timeout (the finding is added once). */
 		public T get() {
 			return get(DEFAULT_RESERVE_MS);
 		}
 
 		/**
-		 * Sonucu en geç (kalan süre - reserveMillis) bekler; hata ya da zaman aşımında null döner, bulgu bir kez
-		 * eklenir ve zaman aşımında kontrol iptal edilir. Ana akış için.
+		 * Waits for the result for at most (remaining time - reserveMillis); returns null on error or timeout, adds the
+		 * finding once and cancels the check on timeout. For the main flow.
 		 */
 		public T get(long reserveMillis) {
 			long wait = Math.max(1, call.remainingMillis() - reserveMillis);
@@ -101,10 +104,10 @@ public final class Checks implements AutoCloseable {
 			}
 			catch (TimeoutException e) {
 				future.cancel(true);
-				report(Checks.CHECK_TIMEOUT, "süre sınırında bitmedi", wait);
+				report(Checks.CHECK_TIMEOUT, "did not finish within the time limit", wait);
 			}
 			catch (CancellationException e) {
-				report(Checks.CHECK_TIMEOUT, "iptal edildi", wait);
+				report(Checks.CHECK_TIMEOUT, "was cancelled", wait);
 			}
 			catch (ExecutionException e) {
 				Throwable cause = KafkaErrors.unwrap(e.getCause());
@@ -118,14 +121,14 @@ public final class Checks implements AutoCloseable {
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-				throw new ToolException("Araç iptal edildi");
+				throw new ToolException("Tool was cancelled");
 			}
 			return null;
 		}
 
 		/**
-		 * Başka bir kontrolün içinden bağımlılık olarak bekler: en fazla maxWaitMillis (ve kalan süre); hazır
-		 * değilse ya da hata verdiyse null döner. Bulgu eklemez, iptal etmez (ana akış get() ile raporlar).
+		 * Waits as a dependency from inside another check: at most maxWaitMillis (and the remaining time); returns null
+		 * if it is not ready or failed. Adds no finding and does not cancel (the main flow reports via get()).
 		 */
 		public T await(long maxWaitMillis) {
 			long wait = Math.max(1, Math.min(maxWaitMillis, call.remainingMillis() - DEFAULT_RESERVE_MS));
@@ -137,15 +140,15 @@ public final class Checks implements AutoCloseable {
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-				throw new ToolException("Araç iptal edildi");
+				throw new ToolException("Tool was cancelled");
 			}
 		}
 
 		/**
-		 * Başka bir kontrolün içinden ZORUNLU bağımlılık olarak bekler (en fazla maxWaitMillis ve kalan süre).
-		 * Bağımlılık hata verdiyse null döner (kendi bulgusunu ana akış raporlar); zamanında bitmediyse
-		 * {@link DependencyTimeout} fırlatır, böylece bağımlı kontrol sessizce boş kalmaz: CHECK_TIMEOUT bulgusu
-		 * ve kısmi sonuç.
+		 * Waits as a REQUIRED dependency from inside another check (at most maxWaitMillis and the remaining time).
+		 * Returns null if the dependency failed (the main flow reports its own finding); throws
+		 * {@link DependencyTimeout} if it did not finish in time, so the dependent check is not silently empty: a
+		 * CHECK_TIMEOUT finding and a partial result.
 		 */
 		public T require(long maxWaitMillis) {
 			long wait = Math.max(1, Math.min(maxWaitMillis, call.remainingMillis() - DEFAULT_RESERVE_MS));
@@ -160,16 +163,16 @@ public final class Checks implements AutoCloseable {
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-				throw new ToolException("Araç iptal edildi");
+				throw new ToolException("Tool was cancelled");
 			}
 		}
 
-		/** get() sonrası: başarılı mı? */
+		/** After get(): did it succeed? */
 		public boolean ok() {
 			return future.isDone() && !future.isCancelled() && error == null && future.state() == Future.State.SUCCESS;
 		}
 
-		/** get() sonrası: hata mesajı ya da null. */
+		/** After get(): error message or null. */
 		public String error() {
 			return error;
 		}
@@ -180,15 +183,15 @@ public final class Checks implements AutoCloseable {
 				return;
 			}
 			if (CHECK_TIMEOUT.equals(code)) {
-				diagnosis.warning(CHECK_TIMEOUT, "Alt kontrol süre sınırında bitmedi: " + name,
+				diagnosis.warning(CHECK_TIMEOUT, "Sub-check did not finish within the time limit: " + name,
 						Diagnosis.evidence("check", name, "waitedMs", waited, "reason",
-								message.startsWith("bağımlı") ? message : null),
-						"Sonuç eksik; aracı tekrar çalıştırın ya da bu konuya özel aracı kullanın");
+								message.startsWith(DEPENDENCY_PREFIX) ? message : null),
+						"Result is incomplete; run the tool again or use the tool dedicated to this topic");
 			}
 			else {
-				diagnosis.warning(CHECK_FAILED, "Alt kontrol yapılamadı: " + name,
+				diagnosis.warning(CHECK_FAILED, "Sub-check could not run: " + name,
 						Diagnosis.evidence("check", name, "error", message),
-						"Hata yetki (ACL), erişim ya da sürüm kaynaklı olabilir; bu kontrolün sonucu değerlendirilmedi");
+						"The error may be caused by authorization (ACL), access or version; this check's result was not evaluated");
 			}
 			diagnosis.markPartial();
 		}

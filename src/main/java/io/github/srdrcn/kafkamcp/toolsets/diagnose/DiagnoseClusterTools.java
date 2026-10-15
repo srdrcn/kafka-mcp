@@ -56,11 +56,11 @@ import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectorOverview;
 import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectorStatus;
 import io.github.srdrcn.kafkamcp.toolsets.diagnose.Checks.Check;
 
-/** diagnose_cluster: tek çağrıda cluster sağlık teşhisi (KRaft ve ZooKeeper). */
+/** diagnose_cluster: single-call cluster health diagnosis (KRaft and ZooKeeper). */
 @Component
 public class DiagnoseClusterTools {
 
-	/** Broker'a özgü ya da moda özgü olduğu için config farkı sayılmayan anahtarlar. */
+	/** Keys that are broker-specific or mode-specific and therefore do not count as config drift. */
 	public static final List<String> PER_BROKER_KEYS = List.of("broker.id", "node.id", "broker.rack", "listeners",
 			"advertised.listeners", "advertised.host.name", "advertised.port", "host.name", "port", "log.dir",
 			"log.dirs", "metadata.log.dir", "process.roles", "controller.quorum.voters",
@@ -72,7 +72,7 @@ public class DiagnoseClusterTools {
 
 	static final long LARGE_LAG = 10_000;
 
-	/** Lag taramasında en fazla bu kadar grup (aktifler önce); fazlası atlanır ve raporlanır. */
+	/** At most this many groups in the lag scan (active ones first); the rest are skipped and reported. */
 	static final int MAX_GROUPS = 500;
 
 	static final int TOP_GROUPS = 5;
@@ -91,7 +91,7 @@ public class DiagnoseClusterTools {
 
 	private static final long GROUP_STEP_MAX_MS = 4_000;
 
-	/** Bağımlı kontrollerin (config, log dir) kendi işi için deadline'dan ayrılan süre. */
+	/** Time kept before the deadline for the dependent checks' own work (config, log dirs). */
 	private static final long DEPENDENT_WORK_MS = 3_500;
 
 	private final ConnectApi connect;
@@ -103,7 +103,7 @@ public class DiagnoseClusterTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("diagnose_cluster",
-					"Cluster teşhisi: mod/sürüm, controller/quorum, broker'lar, URP/offline/min ISR, disk, dağılım, config farkı, lag, connector")
+					"Diagnose the cluster: mode/version, controller/quorum, brokers, URP/offline/min ISR, disks, balance, config drift, lag, connectors")
 			.handler(this::diagnose));
 	}
 
@@ -119,27 +119,27 @@ public class DiagnoseClusterTools {
 		String mode;
 		try (Checks checks = new Checks(call, dx)) {
 			Check<ClusterMeta.Info> meta = checks.start("cluster metadata", () -> ClusterMeta.describe(call, true));
-			Check<FeatureMetadata> features = checks.start("feature'lar",
+			Check<FeatureMetadata> features = checks.start("features",
 					() -> Futures.awaitAtMost(call, call.admin().describeFeatures().featureMetadata(), 4_000));
-			Check<Map<String, TopicDescription>> topics = checks.start("topic'ler",
+			Check<Map<String, TopicDescription>> topics = checks.start("topics",
 					() -> Topics.describeAll(call, true));
-			Check<Topics.Reassignments> reassign = checks.start("reassignment'lar",
+			Check<Topics.Reassignments> reassign = checks.start("reassignments",
 					() -> Topics.reassignments(call, Topics.submitReassignments(call)));
-			Check<ConfigScan> topicConfigs = checks.start("topic config'leri", () -> {
+			Check<ConfigScan> topicConfigs = checks.start("topic configs", () -> {
 				Map<String, TopicDescription> t = topics.require(call.remainingMillis() - DEPENDENT_WORK_MS);
 				return t == null ? null : topicConfigs(call, t.keySet());
 			});
-			Check<Futures.Each<ConfigResource, Config>> brokerConfigs = checks.start("broker config'leri", () -> {
+			Check<Futures.Each<ConfigResource, Config>> brokerConfigs = checks.start("broker configs", () -> {
 				ClusterMeta.Info i = meta.require(call.remainingMillis() - DEPENDENT_WORK_MS);
 				return i == null ? null : Configs.describe(call, i.brokerIds().stream().map(Configs::broker).toList());
 			});
-			Check<Futures.Each<Integer, Map<String, LogDirDescription>>> dirs = checks.start("log dizinleri", () -> {
+			Check<Futures.Each<Integer, Map<String, LogDirDescription>>> dirs = checks.start("log dirs", () -> {
 				ClusterMeta.Info i = meta.require(call.remainingMillis() - DEPENDENT_WORK_MS);
 				return i == null ? null : LogDirs.describe(call, i.brokerIds(), i.brokerIds());
 			});
-			Check<GroupLagScan> groups = checks.start("consumer group lag'i", () -> groupLag(call));
+			Check<GroupLagScan> groups = checks.start("consumer group lag", () -> groupLag(call));
 			Check<List<ConnectorOverview>> connectors = call.clusterConfig().hasConnect()
-					? checks.start("connector'lar", () -> connect.overview(call.cluster())) : null;
+					? checks.start("connectors", () -> connect.overview(call.cluster())) : null;
 
 			ClusterMeta.Info info = meta.get();
 			FeatureMetadata fm = features.get();
@@ -164,7 +164,7 @@ public class DiagnoseClusterTools {
 		return dx.result(Results.map("cluster", call.cluster(), "mode", mode), facts);
 	}
 
-	// ---- alt kontroller ----
+	// ---- sub-checks ----
 
 	private static ConfigScan topicConfigs(ToolCall call, Collection<String> names) {
 		List<ConfigResource> resources = names.stream().map(Configs::topic).toList();
@@ -178,7 +178,7 @@ public class DiagnoseClusterTools {
 					minIsr.put(res.name(), Integer.parseInt(m.value().trim()));
 				}
 				catch (NumberFormatException ignored) {
-					// geçersiz değer: atlanır
+					// invalid value: skipped
 				}
 			}
 			ConfigEntry u = cfg.get("unclean.leader.election.enable");
@@ -193,7 +193,7 @@ public class DiagnoseClusterTools {
 	private static GroupLagScan groupLag(ToolCall call) {
 		Groups.Listing listing = Groups.list(call, 3_000);
 		List<GroupListing> ordered = new ArrayList<>(listing.groups().values());
-		// aktif gruplar (Empty olmayanlar) önce taranır
+		// active groups (not Empty) are scanned first
 		ordered.sort(Comparator
 			.comparingInt((GroupListing g) -> g.groupState().orElse(GroupState.UNKNOWN) == GroupState.EMPTY ? 1 : 0)
 			.thenComparing(GroupListing::groupId));
@@ -234,7 +234,7 @@ public class DiagnoseClusterTools {
 				listing.errors());
 	}
 
-	// ---- değerlendirme ----
+	// ---- evaluation ----
 
 	private static void controller(Diagnosis dx, Map<String, Object> facts, ClusterMeta.Info info, FeatureMetadata fm,
 			String mode, Futures.Each<ConfigResource, Config> brokerConfigs) {
@@ -267,14 +267,14 @@ public class DiagnoseClusterTools {
 			facts.put("brokersOmitted", info.brokers().size() - 50);
 		}
 		if (info.brokers().size() == 1) {
-			dx.info("SINGLE_BROKER", "Cluster'da tek broker var: yedeklilik yok", null, null);
+			dx.info("SINGLE_BROKER", "Cluster has a single broker: no redundancy", null, null);
 		}
 		if (ClusterMeta.KRAFT.equals(mode)) {
 			QuorumInfo q = info.quorum();
 			if (q == null) {
-				dx.warning("QUORUM_UNKNOWN", "Metadata quorum'u sorgulanamadı" + (info.quorumError() == null ? ""
+				dx.warning("QUORUM_UNKNOWN", "Could not query the metadata quorum" + (info.quorumError() == null ? ""
 						: ": " + info.quorumError()), null,
-						"CLUSTER DESCRIBE yetkisini ve controller'ların erişilebilirliğini kontrol edin");
+						"Check the CLUSTER DESCRIBE permission and that the controllers are reachable");
 				dx.markPartial();
 				return;
 			}
@@ -282,15 +282,15 @@ public class DiagnoseClusterTools {
 		}
 		else if (ClusterMeta.ZOOKEEPER.equals(mode)) {
 			if (info.controllerId() == null) {
-				dx.critical("NO_ACTIVE_CONTROLLER", "ZooKeeper modunda aktif controller yok", null,
-						"ZooKeeper bağlantısını ve broker loglarını kontrol edin; controller seçimi yapılamıyor olabilir");
+				dx.critical("NO_ACTIVE_CONTROLLER", "No active controller in ZooKeeper mode", null,
+						"Check the ZooKeeper connection and the broker logs; controller election may be failing");
 			}
-			dx.info("ZOOKEEPER_MODE", "Cluster ZooKeeper modunda: ZooKeeper Kafka 4.0'da kaldırıldı", null,
-					"KRaft'a geçişi planlayın (3.9 köprü sürümü üzerinden migration)");
+			dx.info("ZOOKEEPER_MODE", "Cluster runs in ZooKeeper mode: ZooKeeper was removed in Kafka 4.0", null,
+					"Plan the move to KRaft (migration via the 3.9 bridge release)");
 		}
 		else if (info.quorumError() != null) {
-			dx.warning("QUORUM_UNKNOWN", "Mod/quorum belirlenemedi: " + info.quorumError(), null,
-					"CLUSTER DESCRIBE yetkisini kontrol edin");
+			dx.warning("QUORUM_UNKNOWN", "Could not determine the mode/quorum: " + info.quorumError(), null,
+					"Check the CLUSTER DESCRIBE permission");
 			dx.markPartial();
 		}
 	}
@@ -323,28 +323,28 @@ public class DiagnoseClusterTools {
 				laggingObservers.isEmpty() ? null : first(laggingObservers, MAX_EVIDENCE), "laggingObserversOmitted",
 				omitted(laggingObservers)));
 		if (q.leaderId() < 0) {
-			dx.critical("NO_ACTIVE_CONTROLLER", "KRaft metadata quorum'unun lideri yok: metadata değişiklikleri yapılamaz",
+			dx.critical("NO_ACTIVE_CONTROLLER", "The KRaft metadata quorum has no leader: metadata changes are not possible",
 					evidence("voters", q.voters().size()),
-					"Controller düğümlerinin çoğunluğunun ayakta ve birbirine erişebilir olduğunu kontrol edin");
+					"Check that a majority of the controller nodes are up and can reach each other");
 		}
 		if (!laggingVoters.isEmpty()) {
-			dx.warning("QUORUM_VOTER_LAGGING", laggingVoters.size() + " controller voter'ı quorum liderinin gerisinde",
+			dx.warning("QUORUM_VOTER_LAGGING", laggingVoters.size() + " controller voter(s) are behind the quorum leader",
 					evidence("voters", laggingVoters),
-					"Geride kalan controller'ın disk/ağ durumunu ve loglarını kontrol edin; çoğunluk kaybı metadata yazmalarını durdurur");
+					"Check the disk/network and logs of the lagging controller; losing the majority stops metadata writes");
 		}
 		if (!laggingObservers.isEmpty()) {
 			dx.warning("QUORUM_OBSERVER_LAGGING",
-					laggingObservers.size() + " broker (observer) metadata log'unda " + VOTER_LAG_RECORDS + "+ kayıt geride",
+					laggingObservers.size() + " broker(s) (observers) are " + VOTER_LAG_RECORDS + "+ records behind in the metadata log",
 					evidence("brokers", first(laggingObservers, MAX_EVIDENCE), "omitted", omitted(laggingObservers)),
-					"Bu broker'lar güncel olmayan metadata ile çalışıyor olabilir; ağ ve broker loglarını kontrol edin");
+					"These brokers may be running with stale metadata; check the network and the broker logs");
 		}
 		if (q.voters().size() == 1) {
-			dx.info("SINGLE_CONTROLLER", "Metadata quorum'unda tek voter var: controller yedekliliği yok", null,
-					"Üretim için 3 (ya da 5) controller önerilir");
+			dx.info("SINGLE_CONTROLLER", "The metadata quorum has a single voter: no controller redundancy", null,
+					"3 (or 5) controllers are recommended for production");
 		}
 		else if (q.voters().size() % 2 == 0) {
-			dx.info("EVEN_VOTERS", "Voter sayısı çift (" + q.voters().size() + "): ek voter dayanıklılığı artırmaz", null,
-					"Tek sayıda (3 ya da 5) voter kullanın");
+			dx.info("EVEN_VOTERS", "Even number of voters (" + q.voters().size() + "): the extra voter does not improve fault tolerance", null,
+					"Use an odd number of voters (3 or 5)");
 		}
 	}
 
@@ -366,50 +366,50 @@ public class DiagnoseClusterTools {
 		facts.put("partitionHealth", pf);
 		if (!h.missingBrokers().isEmpty()) {
 			dx.critical("BROKERS_DOWN",
-					"Replika listelerinde olup canlı olmayan broker'lar: " + h.missingBrokers(),
+					"Brokers in replica lists that are not alive: " + h.missingBrokers(),
 					evidence("missingBrokers", List.copyOf(h.missingBrokers()), "liveBrokers",
 							info == null ? null : info.brokerIds()),
-					"Bu broker'ları ayağa kaldırın; kalıcı olarak kaldırıldılarsa partition'larını partition_reassignments_alter ile taşıyın");
+					"Bring these brokers up; if they were removed permanently, move their partitions with partition_reassignments_alter");
 		}
 		if (!h.offline().isEmpty()) {
-			dx.critical("OFFLINE_PARTITIONS", h.offline().size() + " partition offline (lider yok)",
+			dx.critical("OFFLINE_PARTITIONS", h.offline().size() + " partition(s) offline (no leader)",
 					evidence("byTopic", byTopic(h.offline())),
-					"Replika broker'larını ayağa kaldırın; topic bazında diagnose_topic ile inceleyin");
+					"Bring up the replica brokers; inspect per topic with diagnose_topic");
 		}
 		if (!h.underMinIsr().isEmpty()) {
 			dx.critical("UNDER_MIN_ISR",
-					h.underMinIsr().size() + " partition'da ISR min.insync.replicas altında: acks=all yazmalar reddedilir",
+					h.underMinIsr().size() + " partition(s) have ISR below min.insync.replicas: acks=all writes are rejected",
 					evidence("byTopic", byTopic(h.underMinIsr())),
-					"Geride kalan replikaların broker'larını kontrol edin (brokers_logdirs, brokers_list)");
+					"Check the brokers of the lagging replicas (brokers_logdirs, brokers_list)");
 		}
 		List<TopicPartition> urpOnly = h.underReplicated().stream().filter(tp -> !h.underMinIsr().contains(tp)).toList();
 		if (!urpOnly.isEmpty()) {
-			dx.warning("UNDER_REPLICATED", urpOnly.size() + " partition under-replicated",
+			dx.warning("UNDER_REPLICATED", urpOnly.size() + " partition(s) under-replicated",
 					evidence("byTopic", byTopic(urpOnly)),
-					"Broker sağlığını, disk/ağ durumunu ve süren reassignment'ları (partition_reassignments_list) kontrol edin");
+					"Check broker health, disks/network and ongoing reassignments (partition_reassignments_list)");
 		}
 		Set<String> minIsrTopics = new java.util.TreeSet<>();
 		h.minIsrAboveReplicas().forEach(tp -> minIsrTopics.add(tp.topic()));
 		if (!minIsrTopics.isEmpty()) {
 			dx.critical("MIN_ISR_EXCEEDS_RF",
-					minIsrTopics.size() + " topic'te min.insync.replicas replication factor'dan büyük: acks=all yazmalar hiç kabul edilmez",
+					minIsrTopics.size() + " topic(s) have min.insync.replicas greater than the replication factor: no acks=all write is ever accepted",
 					evidence("topics", first(minIsrTopics, MAX_EVIDENCE), "omitted", omitted(minIsrTopics)),
-					"topics_config_update ile min.insync.replicas'ı RF-1'e düşürün ya da RF'yi artırın");
+					"Lower min.insync.replicas to RF-1 with topics_config_update or increase the RF");
 		}
 		if (cs != null && !cs.uncleanTopics().isEmpty()) {
 			dx.warning("UNCLEAN_LEADER_ELECTION",
-					cs.uncleanTopics().size() + " topic'te unclean.leader.election.enable=true (veri kaybı riski)",
+					cs.uncleanTopics().size() + " topic(s) have unclean.leader.election.enable=true (risk of data loss)",
 					evidence("topics", first(cs.uncleanTopics(), MAX_EVIDENCE), "omitted", omitted(cs.uncleanTopics())),
-					"Veri kaybı kabul edilemiyorsa topics_config_update ile false yapın");
+					"If data loss is unacceptable, set it to false with topics_config_update");
 		}
 		int online = h.partitions() - h.offline().size();
 		if (online > 0 && !h.nonPreferredLeader().isEmpty()) {
 			double pct = 100.0 * h.nonPreferredLeader().size() / online;
-			String msg = h.nonPreferredLeader().size() + " partition'ın lideri tercih edilen replika değil (%"
-					+ Format.round(pct, 1) + ")";
+			String msg = h.nonPreferredLeader().size() + " partition(s) are not led by their preferred replica ("
+					+ Format.round(pct, 1) + "%)";
 			if (pct > PREFERRED_IMBALANCE_PCT) {
 				dx.warning("PREFERRED_LEADER_IMBALANCE", msg, evidence("byTopic", byTopic(h.nonPreferredLeader())),
-						"brokers_elect_preferred_leaders ile tercih edilen liderlere dönün");
+						"Move back to the preferred leaders with brokers_elect_preferred_leaders");
 			}
 			else {
 				dx.info("PREFERRED_LEADER_IMBALANCE", msg, null, "brokers_elect_preferred_leaders");
@@ -417,7 +417,7 @@ public class DiagnoseClusterTools {
 		}
 	}
 
-	/** topic → partition sayısı (en çok etkilenen ilk 10 topic). */
+	/** topic → partition count (the 10 most affected topics). */
 	private static Map<String, Object> byTopic(Collection<TopicPartition> tps) {
 		Map<String, Integer> counts = new HashMap<>();
 		tps.forEach(tp -> counts.merge(tp.topic(), 1, Integer::sum));
@@ -426,7 +426,7 @@ public class DiagnoseClusterTools {
 		Map<String, Object> out = new LinkedHashMap<>();
 		sorted.stream().limit(MAX_EVIDENCE).forEach(e -> out.put(e.getKey(), e.getValue()));
 		if (sorted.size() > MAX_EVIDENCE) {
-			out.put("(diğer topic'ler)", sorted.size() - MAX_EVIDENCE);
+			out.put("(other topics)", sorted.size() - MAX_EVIDENCE);
 		}
 		return out;
 	}
@@ -456,7 +456,7 @@ public class DiagnoseClusterTools {
 					long usable = desc.usableBytes().getAsLong();
 					double pct = Format.round(100.0 * (total - usable) / total, 1);
 					row.put("usedPct", pct);
-					row.put("disk", Format.bytes(usable) + " boş / " + Format.bytes(total));
+					row.put("disk", Format.bytes(usable) + " free / " + Format.bytes(total));
 					Map<String, Object> ev = Results.map("brokerId", b.getKey(), "path", d.getKey(), "usedPct", pct);
 					if (pct >= DISK_CRITICAL_PCT) {
 						full.add(ev);
@@ -472,19 +472,19 @@ public class DiagnoseClusterTools {
 				"failedBrokers", dirs.errors().isEmpty() ? null : dirs.errors());
 		facts.put("disk", disk);
 		if (!errors.isEmpty()) {
-			dx.critical("LOG_DIR_ERROR", errors.size() + " log dizini hata durumunda (offline dizin)",
+			dx.critical("LOG_DIR_ERROR", errors.size() + " log dir(s) in an error state (offline dir)",
 					evidence("dirs", first(errors, MAX_EVIDENCE)),
-					"Broker loglarında disk/IO hatasını inceleyin; dizindeki replikalar offline olabilir");
+					"Look for disk/IO errors in the broker logs; the replicas in the dir may be offline");
 		}
 		if (!full.isEmpty()) {
-			dx.critical("DISK_FULL", full.size() + " log dizini %" + (int) DISK_CRITICAL_PCT + "+ dolu",
+			dx.critical("DISK_FULL", full.size() + " log dir(s) are " + (int) DISK_CRITICAL_PCT + "%+ full",
 					evidence("dirs", first(full, MAX_EVIDENCE)),
-					"Hemen yer açın: retention'ı düşürün (topics_config_update), büyük topic'leri inceleyin (topics_size) ya da disk ekleyin");
+					"Free up space now: lower retention (topics_config_update), inspect large topics (topics_size) or add disk");
 		}
 		if (!high.isEmpty()) {
-			dx.warning("DISK_HIGH", high.size() + " log dizini %" + (int) DISK_WARN_PCT + "+ dolu",
+			dx.warning("DISK_HIGH", high.size() + " log dir(s) are " + (int) DISK_WARN_PCT + "%+ full",
 					evidence("dirs", first(high, MAX_EVIDENCE)),
-					"En büyük topic'leri (topics_size, brokers_logdirs) ve retention ayarlarını gözden geçirin");
+					"Review the largest topics (topics_size, brokers_logdirs) and the retention settings");
 		}
 		if (!dirs.errors().isEmpty()) {
 			dx.markPartial();
@@ -536,14 +536,14 @@ public class DiagnoseClusterTools {
 				"maxReplicaDeviationPct", Format.round(maxReplicaDev, 1), "brokers", first(rows, 50), "brokersOmitted",
 				omitted50(rows)));
 		if (maxReplicaDev > SKEW_PCT && replicas >= 10L * counts.size()) {
-			dx.warning("REPLICA_SKEW", "Replika dağılımı dengesiz: en büyük sapma %" + Format.round(maxReplicaDev, 1),
+			dx.warning("REPLICA_SKEW", "Replica distribution is unbalanced: max deviation " + Format.round(maxReplicaDev, 1) + "%",
 					evidence("brokers", first(rows, MAX_EVIDENCE)),
-					"partition_reassignments_alter ile replikaları dengeleyin (yeni eklenen broker boş kalmış olabilir)");
+					"Rebalance the replicas with partition_reassignments_alter (a newly added broker may have been left empty)");
 		}
 		if (maxLeaderDev > SKEW_PCT && leaders >= 10L * counts.size()) {
-			dx.warning("LEADER_SKEW", "Lider dağılımı dengesiz: en büyük sapma %" + Format.round(maxLeaderDev, 1),
+			dx.warning("LEADER_SKEW", "Leader distribution is unbalanced: max deviation " + Format.round(maxLeaderDev, 1) + "%",
 					evidence("brokers", first(rows, MAX_EVIDENCE)),
-					"brokers_elect_preferred_leaders; tercih edilen liderler de dengesizse partition_reassignments_alter");
+					"brokers_elect_preferred_leaders; if the preferred leaders are unbalanced too, partition_reassignments_alter");
 		}
 	}
 
@@ -555,7 +555,7 @@ public class DiagnoseClusterTools {
 		configs.values().forEach((r, c) -> byBroker.put(Integer.parseInt(r.name()), c));
 		if (byBroker.size() < 2) {
 			facts.put("configDrift", Results.map("brokersCompared", byBroker.size(), "note",
-					"Karşılaştırma için en az 2 broker gerekli"));
+					"At least 2 brokers are needed for a comparison"));
 			return;
 		}
 		Map<String, Map<Integer, String>> values = new TreeMap<>();
@@ -571,12 +571,12 @@ public class DiagnoseClusterTools {
 		values.forEach((key, perBroker) -> {
 			Set<String> distinct = new LinkedHashSet<>();
 			for (Integer id : byBroker.keySet()) {
-				distinct.add(Objects.toString(perBroker.get(id), "(yok)"));
+				distinct.add(Objects.toString(perBroker.get(id), "(none)"));
 			}
 			if (distinct.size() > 1) {
 				Map<String, List<Integer>> groups = new LinkedHashMap<>();
 				for (Integer id : byBroker.keySet()) {
-					groups.computeIfAbsent(Objects.toString(perBroker.get(id), "(yok)"), k -> new ArrayList<>()).add(id);
+					groups.computeIfAbsent(Objects.toString(perBroker.get(id), "(none)"), k -> new ArrayList<>()).add(id);
 				}
 				diffs.add(Results.map("name", key, "values", groups));
 			}
@@ -584,9 +584,9 @@ public class DiagnoseClusterTools {
 		facts.put("configDrift", Results.map("brokersCompared", byBroker.size(), "differingKeys", diffs.size(),
 				"failedBrokers", configs.errors().isEmpty() ? null : configs.errors().size()));
 		if (!diffs.isEmpty()) {
-			dx.warning("CONFIG_DRIFT", diffs.size() + " broker config'i broker'lar arasında farklı",
+			dx.warning("CONFIG_DRIFT", diffs.size() + " broker config(s) differ between brokers",
 					evidence("keys", first(diffs, MAX_EVIDENCE), "omitted", omitted(diffs)),
-					"Bilinçli değilse eşitleyin (brokers_config_update ya da deployment); ayrıntı için brokers_config_drift");
+					"If not intended, align them (brokers_config_update or the deployment); see brokers_config_drift for details");
 		}
 	}
 
@@ -596,7 +596,7 @@ public class DiagnoseClusterTools {
 		}
 		facts.put("consumerGroups", Results.map("total", g.total(), "scanned", g.scanned(), "skipped",
 				g.total() > g.scanned() ? g.total() - g.scanned() : null, "sampling",
-				g.total() > g.scanned() ? "aktif gruplar önce, ilk " + MAX_GROUPS + " grup tarandı" : null,
+				g.total() > g.scanned() ? "active groups first, the first " + MAX_GROUPS + " groups were scanned" : null,
 				"failedGroups", g.failed() > 0 ? g.failed() : null, "topLag", g.top(), "listErrors",
 				g.listErrors().isEmpty() ? null : g.listErrors()));
 		if (g.failed() > 0 || !g.listErrors().isEmpty() || g.total() > g.scanned()) {
@@ -611,14 +611,14 @@ public class DiagnoseClusterTools {
 			(GroupState.EMPTY.toString().equals(row.get("state")) ? idle : active).add(row);
 		}
 		if (!active.isEmpty()) {
-			dx.warning("LARGE_CONSUMER_LAG", active.size() + " aktif consumer group'un lag'i " + LARGE_LAG + "+",
+			dx.warning("LARGE_CONSUMER_LAG", active.size() + " active consumer group(s) have a lag of " + LARGE_LAG + "+",
 					evidence("groups", active),
-					"diagnose_consumer_group ile eğilimi ve takılı partition'ları inceleyin");
+					"Inspect the trend and stuck partitions with diagnose_consumer_group");
 		}
 		if (!idle.isEmpty()) {
-			dx.info("LARGE_LAG_EMPTY_GROUPS", idle.size() + " üyesiz (EMPTY) grubun lag'i " + LARGE_LAG + "+",
+			dx.info("LARGE_LAG_EMPTY_GROUPS", idle.size() + " group(s) without members (EMPTY) have a lag of " + LARGE_LAG + "+",
 					evidence("groups", idle),
-					"Terk edilmiş gruplarsa consumer_groups_delete ile temizleyin; değilse consumer'ları başlatın");
+					"If the groups are abandoned, clean them up with consumer_groups_delete; otherwise start the consumers");
 		}
 	}
 
@@ -638,9 +638,9 @@ public class DiagnoseClusterTools {
 		}
 		facts.put("connectors", Results.map("total", all.size(), "failed", failed.size(), "failedTasks", failedTasks));
 		if (!failed.isEmpty()) {
-			dx.warning("CONNECTORS_FAILED", failed.size() + " connector'da (ya da görevinde) hata var",
+			dx.warning("CONNECTORS_FAILED", failed.size() + " connector(s) (or their tasks) have failed",
 					evidence("connectors", first(failed, MAX_EVIDENCE), "omitted", omitted(failed)),
-					"connectors_restart includeTasks=true onlyFailed=true; tekrar düşerse diagnose_connector ile nedenini inceleyin");
+					"connectors_restart includeTasks=true onlyFailed=true; if it fails again, find the cause with diagnose_connector");
 		}
 	}
 

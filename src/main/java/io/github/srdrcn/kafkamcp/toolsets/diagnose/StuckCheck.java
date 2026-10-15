@@ -28,43 +28,44 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Commit'i ölçüm penceresinde ilerlemeyen partition'ları gerçek takılmadan ayırır. Periyodik commit eden istemciler
- * (auto commit 5 sn, Kafka Streams 30 sn, Connect sink offset.flush.interval.ms 60 sn) birkaç saniyelik pencerede
- * hiç commit etmeyebilir; bu yüzden karar commit'li offset'teki (bekleyen en eski) kaydın yaşına göre verilir
- * (assign-only consumer ile partition başına tek okuma). Kayıt okunamazsa yaş "lag / partition yazma hızı" ile
- * tahmin edilir; tahmin tek başına kritik karar için yeterli sayılmaz.
+ * Tells partitions whose commit did not advance in the measurement window apart from really stuck ones. Clients that
+ * commit periodically (auto commit 5 s, Kafka Streams 30 s, Connect sink offset.flush.interval.ms 60 s) may not
+ * commit at all within a window of a few seconds; so the verdict is based on the age of the record at the committed
+ * offset (the oldest pending one), read with an assign-only consumer (one read per partition). If the record cannot
+ * be read, the age is estimated as "lag / partition produce rate"; an estimate alone is not enough for a critical
+ * verdict.
  */
 public final class StuckCheck {
 
-	/** Periyodik commit için tanınan pay (sn): bekleyen en eski kayıt bundan gençse takılma kanıtı yok. */
+	/** Allowance for periodic commits (s): if the oldest pending record is younger, there is no evidence of being stuck. */
 	public static final long COMMIT_ALLOWANCE_SECONDS = 90;
 
-	/** Bekleyen en eski kayıt bundan eskiyse (sn) ve commit pencerede ilerlemediyse tüketim takılmış sayılır. */
+	/** Consumption counts as stuck if the oldest pending record is older than this (s) and the commit did not advance in the window. */
 	public static final long STUCK_SECONDS = 300;
 
-	/** Kayıt yaşı en fazla bu kadar (partition, offset) için okunur; kalanlar tahminle değerlendirilir. */
+	/** The record age is read for at most this many (partition, offset) pairs; the rest are estimated. */
 	public static final int MAX_AGE_READS = 50;
 
-	/** Kayıt yaşı okumasına ayrılan en fazla süre (ms). */
+	/** Maximum time spent reading record ages (ms). */
 	public static final long READ_BUDGET_MS = 2_000;
 
-	/** Yaşın kaynağı: okunan kaydın zaman damgası ya da lag / yazma hızı tahmini. */
+	/** Source of the age: the timestamp of the record read, or the lag / produce rate estimate. */
 	public static final String RECORD_AGE = "recordAge";
 
 	public static final String ESTIMATE = "lagRateEstimate";
 
-	/** Değerlendirme düzeyi: periyodik commit olası, şüpheli (uyarı), takılmış (kanıtlı). */
+	/** Assessment level: periodic commit likely, suspect (warning), stuck (proven). */
 	public enum Level {
 
 		PERIODIC, SUSPECT, STUCK
 
 	}
 
-	/** (partition, offset) çifti. */
+	/** (partition, offset) pair. */
 	public record Position(TopicPartition partition, long offset) {
 	}
 
-	/** Bir partition'ın değerlendirmesi: ilerleme, bekleyen en eski kaydın yaşı (sn), kaynağı ve düzey. */
+	/** Assessment of one partition: progress, age of the oldest pending record (s), its source and the level. */
 	public record Assessed(OffsetWindow.PartitionProgress progress, long behindSeconds, String basis, Level level) {
 
 		public TopicPartition partition() {
@@ -80,24 +81,24 @@ public final class StuckCheck {
 
 	}
 
-	/** Bir grubun commit'i ilerlemeyen partition'larının değerlendirmesi. */
+	/** Assessment of a group's partitions whose commit did not advance. */
 	public record Verdict(List<Assessed> partitions, double windowSeconds) {
 
 		public List<Assessed> at(Level level) {
 			return partitions.stream().filter(a -> a.level() == level).toList();
 		}
 
-		/** Kanıtlı takılma (bekleyen en eski kayıt {@link #STUCK_SECONDS}+ sn ve yaşı okundu). */
+		/** Proven stuck (the oldest pending record is {@link #STUCK_SECONDS}+ s old and its age was read). */
 		public List<Assessed> stuck() {
 			return at(Level.STUCK);
 		}
 
-		/** Şüpheli: periyodik commit payını aşmış ama kanıtlı takılma değil. */
+		/** Suspect: beyond the periodic commit allowance but not proven stuck. */
 		public List<Assessed> suspect() {
 			return at(Level.SUSPECT);
 		}
 
-		/** Pencerede commit görülmedi ama bekleyen kayıtlar genç: periyodik commit olası. */
+		/** No commit seen in the window but the pending records are young: periodic commit likely. */
 		public List<Assessed> periodic() {
 			return at(Level.PERIODIC);
 		}
@@ -106,17 +107,17 @@ public final class StuckCheck {
 			return partitions.isEmpty();
 		}
 
-		/** En yüksek düzey (boşsa null). */
+		/** Highest level (null if empty). */
 		public Level worst() {
 			return partitions.stream().map(Assessed::level).max(Comparator.naturalOrder()).orElse(null);
 		}
 
-		/** Düzeydeki en yaşlı bekleyen kaydın yaşı (sn; yoksa 0). */
+		/** Age of the oldest pending record at the level (s; 0 if none). */
 		public long maxBehindSeconds(Level level) {
 			return at(level).stream().mapToLong(Assessed::behindSeconds).max().orElse(0);
 		}
 
-		/** Düzeydeki partition'ların kanıt satırları (en yaşlı önce, ilk n). */
+		/** Evidence rows of the partitions at the level (oldest first, first n). */
 		public List<Map<String, Object>> evidence(Level level, int n) {
 			return at(level).stream()
 				.sorted(Comparator.comparingLong(Assessed::behindSeconds).reversed())
@@ -125,7 +126,7 @@ public final class StuckCheck {
 				.toList();
 		}
 
-		/** Bulgu kanıtına eklenen pencere ve eşik bilgisi. */
+		/** Window and threshold info added to the finding evidence. */
 		public Map<String, Object> window() {
 			return Results.map("windowSeconds", Math.round(windowSeconds * 10) / 10.0, "commitAllowanceSeconds",
 					COMMIT_ALLOWANCE_SECONDS, "stuckAfterSeconds", STUCK_SECONDS);
@@ -149,8 +150,9 @@ public final class StuckCheck {
 	}
 
 	/**
-	 * Gruplarda commit'i ilerlemeyen partition'ları toplar ve en fazla {@link #MAX_AGE_READS} (partition, offset)
-	 * için commit'li offset'teki kaydın zaman damgasını okur (lag'i büyük olanlar önce; en fazla budgetMs).
+	 * Collects the groups' partitions whose commit did not advance and reads the timestamp of the record at the
+	 * committed offset for at most {@link #MAX_AGE_READS} (partition, offset) pairs (largest lag first; at most
+	 * budgetMs).
 	 */
 	public static StuckCheck of(ToolCall call, OffsetWindow window, Collection<String> groups, long budgetMs) {
 		Map<Position, Long> lagByPosition = new HashMap<>();
@@ -168,17 +170,17 @@ public final class StuckCheck {
 		return new StuckCheck(window, ts, ordered.size() - toRead.size(), System.currentTimeMillis());
 	}
 
-	/** Testler için: okunmuş zaman damgalarıyla (konum → kayıt zamanı, ms) değerlendirici. */
+	/** For tests: an assessor with given timestamps (position → record time, ms). */
 	static StuckCheck of(OffsetWindow window, Map<Position, Long> timestamps, long nowMs) {
 		return new StuckCheck(window, timestamps, 0, nowMs);
 	}
 
-	/** Yaşı okuma sınırı yüzünden okunmayan (tahminle değerlendirilen) konum sayısı. */
+	/** Number of positions whose age was not read due to the read limit (assessed by estimate). */
 	public int ageNotRead() {
 		return ageNotRead;
 	}
 
-	/** Grubun commit'i pencerede ilerlemeyen partition'larının değerlendirmesi. */
+	/** Assessment of the group's partitions whose commit did not advance in the window. */
 	public Verdict verdict(String group) {
 		List<Assessed> out = new ArrayList<>();
 		for (OffsetWindow.PartitionProgress p : window.progress(group).stuck()) {
@@ -202,8 +204,8 @@ public final class StuckCheck {
 	}
 
 	/**
-	 * Verilen konumlardaki (ya da sonrasındaki ilk) kaydın zaman damgası: assign-only consumer, partition başına
-	 * tur başına bir konum. Okunamayanlar (süre, log başı geçilmiş, yetki) sonuçta yoktur.
+	 * Timestamp of the record at the given positions (or the first one after them): assign-only consumer, one position
+	 * per partition per round. Positions that cannot be read (time, log start passed, authorization) are absent.
 	 */
 	static Map<Position, Long> readTimestamps(ToolCall call, Collection<Position> positions,
 			Map<TopicPartition, Long> endHints, long budgetMs) {
@@ -247,7 +249,7 @@ public final class StuckCheck {
 							consumer.pause(List.of(tp));
 						}
 					}
-					// konumdan log sonuna kadar sadece kontrol kaydı varsa beklemeyi bırak
+					// stop waiting if there are only control records from the position to the log end
 					for (TopicPartition tp : List.copyOf(waiting)) {
 						Long hint = endHints.get(tp);
 						if (hint != null && position(consumer, tp) >= hint) {
@@ -266,7 +268,7 @@ public final class StuckCheck {
 			}
 		}
 		catch (KafkaException | ToolException e) {
-			// kısmi sonuç: okunabilenler döner; kalanlar tahminle değerlendirilir
+			// partial result: what could be read is returned; the rest is estimated
 		}
 		return out;
 	}

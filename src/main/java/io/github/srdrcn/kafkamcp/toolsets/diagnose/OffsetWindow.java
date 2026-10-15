@@ -25,22 +25,23 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
- * Aynı araç çağrısında iki örnekli offset ölçümü: partition'ların end offset'leri ve grupların commit'li offset'leri
- * t0 ve t1'de okunur (her örnek tek listOffsets + tek listConsumerGroupOffsets). Yazma hızı, lag eğilimi ve takılma
- * adayı (commit'i pencerede ilerlemeyen, end offset'i artan) partition tespiti için; periyodik commit eden
- * istemciler kısa pencerede commit etmeyebileceğinden takılma kararı {@link StuckCheck} ile verilir. Yanıt
- * vermeyen grup/partition hatalarda döner; bekleme kalan süreye göre kısaltılır, ikinci örneğe süre kalmazsa
- * {@link #complete()} false olur.
+ * Two-sample offset measurement within one tool call: the end offsets of the partitions and the committed offsets of
+ * the groups are read at t0 and t1 (each sample is one listOffsets + one listConsumerGroupOffsets). Used to detect
+ * the produce rate, the lag trend and stuck candidates (partitions whose commit did not advance in the window while
+ * the end offset grew); since clients that commit periodically may not commit within a short window, the stuck
+ * verdict is made by {@link StuckCheck}. Groups/partitions that do not respond are returned in the errors; the wait
+ * is shortened to fit the remaining time, and {@link #complete()} is false if there is no time left for the second
+ * sample.
  */
 public final class OffsetWindow {
 
-	/** İlk örneğin her adımı için en fazla bekleme. */
+	/** Maximum wait for each step of the first sample. */
 	public static final long FIRST_SAMPLE_MAX_MS = 4_000;
 
-	/** İkinci örneğin her adımı için en fazla bekleme (bekleme süresi buna göre kısaltılır). */
+	/** Maximum wait for each step of the second sample (the pause is shortened accordingly). */
 	public static final long SECOND_SAMPLE_MAX_MS = 3_000;
 
-	/** Bundan kısa bekleme anlamsız: ikinci örnek alınmaz. */
+	/** A shorter pause is meaningless: no second sample is taken. */
 	public static final long MIN_PAUSE_MS = 500;
 
 	private final Map<TopicPartition, Long> end0;
@@ -77,13 +78,13 @@ public final class OffsetWindow {
 	}
 
 	/**
-	 * İki örnek alır.
-	 * @param partitions end offset'i izlenecek partition'lar
-	 * @param groups commit'li offset'leri izlenecek gruplar
-	 * @param onlyGivenPartitions true: grupların sadece {@code partitions} içindeki commit'leri sorulur (topic
-	 * odaklı); false: grupların tüm commit'leri sorulur ve bu partition'ların end offset'leri de izlenir
-	 * @param intervalMs istenen bekleme (kalan süreye göre kısaltılabilir)
-	 * @param reserveMs ikinci örnekten sonra araca bırakılacak süre
+	 * Takes two samples.
+	 * @param partitions partitions whose end offsets are tracked
+	 * @param groups groups whose committed offsets are tracked
+	 * @param onlyGivenPartitions true: only the groups' commits within {@code partitions} are queried (topic
+	 * focused); false: all commits of the groups are queried and the end offsets of those partitions are tracked too
+	 * @param intervalMs requested pause (may be shortened to fit the remaining time)
+	 * @param reserveMs time left for the tool after the second sample
 	 */
 	public static OffsetWindow measure(ToolCall call, Collection<TopicPartition> partitions, Collection<String> groups,
 			boolean onlyGivenPartitions, long intervalMs, long reserveMs) {
@@ -135,7 +136,7 @@ public final class OffsetWindow {
 			Futures.Each<String, Map<TopicPartition, Long>> each = ConsumerGroups.committed(call, withCommits,
 					onlyGivenPartitions ? given : List.of(), SECOND_SAMPLE_MAX_MS);
 			c1.putAll(each.values());
-			each.errors().forEach((g, e) -> groupErrors.putIfAbsent(g, "ikinci örnek: " + e));
+			each.errors().forEach((g, e) -> groupErrors.putIfAbsent(g, "second sample: " + e));
 		}
 		Map<TopicPartition, Long> e1 = new HashMap<>();
 		if (late != null) {
@@ -148,7 +149,7 @@ public final class OffsetWindow {
 		return new OffsetWindow(e0, e1, c0, c1, groupErrors, endErrors, intervalMs, pause, elapsed);
 	}
 
-	/** Testler için: hazır iki örnekten (ikinci örnek alınmış) pencere. */
+	/** For tests: a window from two given samples (second sample taken). */
 	static OffsetWindow of(Map<TopicPartition, Long> end0, Map<TopicPartition, Long> end1,
 			Map<String, Map<TopicPartition, Long>> committed0, Map<String, Map<TopicPartition, Long>> committed1,
 			Map<String, String> groupErrors, double elapsedSeconds) {
@@ -168,17 +169,17 @@ public final class OffsetWindow {
 		errors.putAll(each.errors());
 	}
 
-	/** İkinci örnek alındı mı? */
+	/** Was the second sample taken? */
 	public boolean complete() {
 		return pausedMs >= 0;
 	}
 
-	/** İki örneğin orta noktaları arası saniye (ikinci örnek yoksa 0). */
+	/** Seconds between the midpoints of the two samples (0 without a second sample). */
 	public double elapsedSeconds() {
 		return elapsedSeconds;
 	}
 
-	/** Bekleme istenenden kısa tutuldu mu (süre sınırı)? */
+	/** Was the pause shorter than requested (time limit)? */
 	public boolean intervalReduced() {
 		return complete() && pausedMs < requestedMs;
 	}
@@ -191,22 +192,22 @@ public final class OffsetWindow {
 		return end1;
 	}
 
-	/** Grup → t0'daki commit'li offset'ler (commit'i olmayan partition'lar yok). */
+	/** Group → committed offsets at t0 (partitions without a commit are absent). */
 	public Map<String, Map<TopicPartition, Long>> committed0() {
 		return committed0;
 	}
 
-	/** Offset'leri alınamayan gruplar (grup → Türkçe hata). */
+	/** Groups whose offsets could not be read (group → error). */
 	public Map<String, String> groupErrors() {
 		return groupErrors;
 	}
 
-	/** End offset'i alınamayan partition'lar. */
+	/** Partitions whose end offset could not be read. */
 	public Map<TopicPartition, String> endErrors() {
 		return endErrors;
 	}
 
-	/** t0'da commit'i olan gruplar. */
+	/** Groups with commits at t0. */
 	public List<String> groupsWithCommits() {
 		List<String> out = new ArrayList<>();
 		committed0.forEach((g, m) -> {
@@ -217,7 +218,7 @@ public final class OffsetWindow {
 		return out;
 	}
 
-	/** İki örnekte de end offset'i bilinen partition'ların artışı. */
+	/** Growth of the partitions whose end offset is known in both samples. */
 	public Map<TopicPartition, Long> endDelta() {
 		Map<TopicPartition, Long> out = new LinkedHashMap<>();
 		end0.forEach((tp, a) -> {
@@ -229,18 +230,18 @@ public final class OffsetWindow {
 		return out;
 	}
 
-	/** delta / geçen süre, 2 ondalık (ikinci örnek yoksa null). */
+	/** delta / elapsed time, 2 decimals (null without a second sample). */
 	public Double rate(long delta) {
 		return complete() && elapsedSeconds > 0 ? Format.round(delta / elapsedSeconds, 2) : null;
 	}
 
-	/** Pencere bilgisi: {intervalSeconds, intervalReduced, secondSample}. */
+	/** Window info: {intervalSeconds, intervalReduced, secondSample}. */
 	public Map<String, Object> describe() {
 		return Results.map("intervalSeconds", complete() ? Format.round(elapsedSeconds, 2) : null, "intervalReduced",
 				intervalReduced() ? true : null, "secondSample", complete() ? null : false);
 	}
 
-	/** Grubun t0..t1 ilerlemesi (sadece t0'da commit'i olan partition'lar). */
+	/** Progress of the group from t0 to t1 (only partitions with a commit at t0). */
 	public GroupProgress progress(String group) {
 		Map<TopicPartition, Long> a = committed0.getOrDefault(group, Map.of());
 		Map<TopicPartition, Long> b = committed1.getOrDefault(group, Map.of());
@@ -255,7 +256,7 @@ public final class OffsetWindow {
 		return new GroupProgress(group, rows, complete(), elapsedSeconds);
 	}
 
-	/** Tek partition'ın iki örneği (bilinmeyenler null). */
+	/** Both samples of one partition (unknown values are null). */
 	public record PartitionProgress(TopicPartition partition, Long committed0, Long committed1, Long end0, Long end1) {
 
 		public Long lag0() {
@@ -266,20 +267,20 @@ public final class OffsetWindow {
 			return committed1 != null && end1 != null ? Math.max(0, end1 - committed1) : null;
 		}
 
-		/** İki örnek de tam mı (commit ve end offset her iki anda biliniyor)? */
+		/** Are both samples complete (commit and end offset known at both times)? */
 		public boolean measured() {
 			return committed0 != null && committed1 != null && end0 != null && end1 != null;
 		}
 
 		/**
-		 * Pencerede commit ilerlemedi, end offset arttı ve lag var: takılma ADAYI (periyodik commit de olabilir;
-		 * karar için {@link StuckCheck}).
+		 * The commit did not advance in the window, the end offset grew and there is lag: a stuck CANDIDATE (it may be
+		 * a periodic commit too; see {@link StuckCheck} for the verdict).
 		 */
 		public boolean stuck() {
 			return measured() && committed1.equals(committed0) && end1 > end0 && lag1() > 0;
 		}
 
-		/** Commit geri gitti (offset reset). */
+		/** The commit went backwards (offset reset). */
 		public boolean reset() {
 			return measured() && committed1 < committed0;
 		}
@@ -292,22 +293,22 @@ public final class OffsetWindow {
 
 	}
 
-	/** Bir topic'in (grup içinde) toplamları. */
+	/** Totals of one topic (within the group). */
 	public record TopicProgress(String topic, long lag0, long lag1, long consumed, long produced, int partitions,
 			int stuck) {
 	}
 
-	/** Grubun iki örnek arası ilerlemesi. */
+	/** Progress of the group between the two samples. */
 	public record GroupProgress(String groupId, List<PartitionProgress> partitions, boolean complete,
 			double elapsedSeconds) {
 
-		/** t0 toplam lag'i (end offset'i bilinen partition'lar). */
+		/** Total lag at t0 (partitions with a known end offset). */
 		public long lag0() {
 			return partitions.stream().map(PartitionProgress::lag0).filter(l -> l != null).mapToLong(Long::longValue)
 				.sum();
 		}
 
-		/** Son bilinen toplam lag (t1, yoksa t0). */
+		/** Last known total lag (t1, otherwise t0). */
 		public long lag() {
 			if (!complete) {
 				return lag0();
@@ -320,12 +321,12 @@ public final class OffsetWindow {
 			return sum;
 		}
 
-		/** Commit'i pencerede ilerlemeyen partition'lar (takılma adayları; karar için {@link StuckCheck}). */
+		/** Partitions whose commit did not advance in the window (stuck candidates; see {@link StuckCheck} for the verdict). */
 		public List<PartitionProgress> stuck() {
 			return partitions.stream().filter(PartitionProgress::stuck).toList();
 		}
 
-		/** End offset'i bilinmeyen (lag'i hesaplanamayan) partition sayısı. */
+		/** Number of partitions with an unknown end offset (lag cannot be computed). */
 		public int unknown() {
 			return (int) partitions.stream().filter(p -> p.end0() == null).count();
 		}
@@ -334,7 +335,7 @@ public final class OffsetWindow {
 			return partitions.stream().anyMatch(PartitionProgress::reset);
 		}
 
-		/** [lag0, lag1, consumed, produced] sadece iki örneği tam partition'larda. */
+		/** [lag0, lag1, consumed, produced] only over partitions with both samples complete. */
 		private long[] measured(List<PartitionProgress> rows) {
 			long[] s = new long[4];
 			for (PartitionProgress p : rows) {
@@ -348,7 +349,7 @@ public final class OffsetWindow {
 			return s;
 		}
 
-		/** growing | shrinking | stable; ikinci örnek yoksa null. */
+		/** growing | shrinking | stable; null without a second sample. */
 		public String trend() {
 			if (!complete) {
 				return null;
@@ -365,7 +366,7 @@ public final class OffsetWindow {
 			return complete && elapsedSeconds > 0 ? Format.round(measured(partitions)[3] / elapsedSeconds, 2) : null;
 		}
 
-		/** Lag azalıyorsa tahmini yetişme süresi (sn). */
+		/** Estimated time to catch up (s) if the lag is shrinking. */
 		public Long etaSeconds() {
 			if (!complete || elapsedSeconds <= 0) {
 				return null;
@@ -378,7 +379,7 @@ public final class OffsetWindow {
 			return Math.round(s[1] / perSecond);
 		}
 
-		/** Topic → toplamlar (lag'e göre azalan). */
+		/** Topic → totals (by lag, descending). */
 		public List<TopicProgress> byTopic() {
 			Map<String, List<PartitionProgress>> grouped = new TreeMap<>();
 			partitions.forEach(p -> grouped.computeIfAbsent(p.partition().topic(), k -> new ArrayList<>()).add(p));
@@ -400,15 +401,15 @@ public final class OffsetWindow {
 		}
 
 		/**
-		 * Lag t0'da, ölçülen yazma hızıyla periyodik commit payından ({@link StuckCheck#COMMIT_ALLOWANCE_SECONDS})
-		 * fazla mı? Değilse büyüyen lag commit aralığıyla açıklanabilir.
+		 * Is the lag at t0 larger than the periodic commit allowance ({@link StuckCheck#COMMIT_ALLOWANCE_SECONDS}) at the
+		 * measured produce rate? If not, a growing lag can be explained by the commit interval.
 		 */
 		public boolean lagBeyondCommitAllowance() {
 			Double rate = produceRate();
 			return rate != null && rate > 0 && lag0() > rate * StuckCheck.COMMIT_ALLOWANCE_SECONDS;
 		}
 
-		/** Özet: lag, trend, hızlar, eta, commit'i pencerede ilerlemeyen partition sayısı. */
+		/** Summary: lag, trend, rates, eta, number of partitions whose commit did not advance in the window. */
 		public Map<String, Object> summary() {
 			return Results.map("lag", lag(), "lagAtStart", complete ? lag0() : null, "trend", trend(), "consumeRate",
 					consumeRate(), "produceRate", produceRate(), "etaSeconds", etaSeconds(),
