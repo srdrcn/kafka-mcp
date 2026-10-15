@@ -197,7 +197,7 @@ public final class KerberosCheck {
 		if (s.configuredKrb5Conf() != null && !s.configuredKrb5Conf().isBlank()
 				&& !s.configuredKrb5Conf().equals(krb5Path)) {
 			notes.add("The JVM uses " + krb5Path + " instead of krb5Conf from the config (" + s.configuredKrb5Conf()
-					+ ") (-D" + KRB5_CONF_PROPERTY + " was already set)");
+					+ ") because -D" + KRB5_CONF_PROPERTY + " was already set");
 		}
 		if (!krb5.exists()) {
 			problems.add("krb5.conf not found: " + krb5Path);
@@ -224,7 +224,7 @@ public final class KerberosCheck {
 		}
 		else if (Boolean.FALSE.equals(realmMatches)) {
 			problems.add("principal realm (" + realm + ") differs from default_realm (" + krb5.defaultRealm()
-					+ "); unless this is cross-realm, the realm is wrong (case included)");
+					+ "); unless this is cross-realm, the realm is wrong (realm names are case-sensitive)");
 		}
 		if (krb5.readable() && effectiveRealm != null && krb5.kdcs(effectiveRealm).isEmpty()) {
 			if (krb5.dnsLookupKdc()) {

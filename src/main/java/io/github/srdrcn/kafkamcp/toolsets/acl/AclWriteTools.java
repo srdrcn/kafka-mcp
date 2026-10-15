@@ -30,8 +30,8 @@ public class AclWriteTools {
 
 	public static final List<String> PRESETS = List.of("producer", "consumer", "streams");
 
-	private static final String PROPAGATION_NOTE = "Operation completed but the broker ACL cache is not updated yet; "
-			+ "it shows up in acls_list within a few seconds";
+	private static final String PROPAGATION_NOTE = "Operation completed but the broker ACL cache has not been updated yet; "
+			+ "the change will be visible in acls_list within a few seconds";
 
 	/** acls_delete patterns: no MATCH (it would also delete wildcard/prefix ACLs covering the resource); ANY only this name. */
 	private static final List<String> DELETE_PATTERN_TYPES = List.of("LITERAL", "PREFIXED", "ANY");

@@ -47,7 +47,7 @@ public class AclAccessTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("acls_explain",
-					"Explain whether a principal may perform an operation on a resource under Kafka authorizer rules (ALLOW/DENY and why)")
+					"Explain whether a principal may perform an operation on a resource under the built-in Kafka authorizer rules (ALLOW/DENY and why)")
 			.required("principal", P.string("Principal (e.g. User:alice; a bare name gets the User: prefix)"))
 			.required("operation", Acls.operationParam("Operation", false))
 			.required("resourceType", Acls.resourceTypeParam("Resource type", false))

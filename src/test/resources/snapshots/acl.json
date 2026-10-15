@@ -61,7 +61,7 @@
   }
 }, {
   "name" : "acls_explain",
-  "description" : "Explain whether a principal may perform an operation on a resource under Kafka authorizer rules (ALLOW/DENY and why)",
+  "description" : "Explain whether a principal may perform an operation on a resource under the built-in Kafka authorizer rules (ALLOW/DENY and why)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -303,7 +303,7 @@
   }
 }, {
   "name" : "kerberos_self_check",
-  "description" : "Check this server's Kerberos setup (krb5.conf, keytab, principal); tries a login and a Kafka connection",
+  "description" : "Check this server's Kerberos setup (krb5.conf, keytab, principal); try a login and a Kafka connection",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -321,7 +321,7 @@
   }
 }, {
   "name" : "security_summary",
-  "description" : "Security summary: metadata mode, listener/SASL/authorizer settings, ACL/SCRAM/quota/token counts, this server's connection",
+  "description" : "Security summary: metadata mode (KRaft/ZooKeeper), listener/SASL/authorizer settings, ACL/SCRAM/quota/token counts, this server's connection",
   "inputSchema" : {
     "type" : "object",
     "properties" : {

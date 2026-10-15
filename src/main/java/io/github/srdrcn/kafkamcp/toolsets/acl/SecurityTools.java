@@ -65,11 +65,11 @@ public class SecurityTools {
 					.handler(this::delegationTokens),
 				ToolSpec
 					.read("kerberos_self_check",
-							"Check this server's Kerberos setup (krb5.conf, keytab, principal); tries a login and a Kafka connection")
+							"Check this server's Kerberos setup (krb5.conf, keytab, principal); try a login and a Kafka connection")
 					.handler(this::kerberosSelfCheck),
 				ToolSpec
 					.read("security_summary",
-							"Security summary: metadata mode, listener/SASL/authorizer settings, ACL/SCRAM/quota/token counts, this server's connection")
+							"Security summary: metadata mode (KRaft/ZooKeeper), listener/SASL/authorizer settings, ACL/SCRAM/quota/token counts, this server's connection")
 					.handler(this::securitySummary));
 	}
 
