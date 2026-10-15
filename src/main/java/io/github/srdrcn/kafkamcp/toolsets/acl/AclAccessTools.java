@@ -21,6 +21,7 @@ import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.resource.PatternType;
+import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourcePatternFilter;
 import org.apache.kafka.common.resource.ResourceType;
 import org.springframework.stereotype.Component;
@@ -157,6 +158,7 @@ public class AclAccessTools {
 					}
 				}
 				List<String> allowedHosts = new ArrayList<>();
+				List<String> deniedHosts = new ArrayList<>();
 				Set<AclBinding> granting = new LinkedHashSet<>();
 				Set<AclBinding> denying = new LinkedHashSet<>();
 				for (String h : hosts) {
@@ -165,16 +167,24 @@ public class AclAccessTools {
 						allowedHosts.add(h);
 						granting.addAll(d.matchedAllow());
 					}
-					denying.addAll(d.matchedDeny());
+					else if (!d.matchedDeny().isEmpty()) {
+						deniedHosts.add(h);
+						denying.addAll(d.matchedDeny());
+					}
 				}
 				boolean superUser = superUsers.contains(p);
+				// Süper kullanıcıya DENY uygulanmaz; diğerlerinde host'a özel DENY'ler de gösterilir.
+				boolean hasDeny = !superUser && !denying.isEmpty();
 				if (!allowedHosts.isEmpty() || superUser) {
+					boolean everywhere = !hasDeny
+							&& (allowedHosts.isEmpty() || allowedHosts.equals(List.of(Acls.WILDCARD)));
 					allowed.add(Results.map("principal", p, "superUser", superUser ? true : null, "hosts",
-							allowedHosts.equals(List.of(Acls.WILDCARD)) || allowedHosts.isEmpty() ? null : allowedHosts,
-							"via", Acls.render(granting)));
+							everywhere ? null : allowedHosts, "deniedHosts", hasDeny ? deniedHosts : null, "via",
+							Acls.render(granting), "deniedVia", hasDeny ? Acls.render(denying) : null));
 				}
-				else if (!denying.isEmpty()) {
-					denied.add(Results.map("principal", p, "via", Acls.render(denying)));
+				if (hasDeny) {
+					denied.add(Results.map("principal", p, "hosts", allowedHosts.isEmpty() ? null : deniedHosts,
+							"via", Acls.render(denying)));
 				}
 			}
 			byOperation.put(op.name(), Results.map("allowed", allowed, "denied", denied));
@@ -233,8 +243,8 @@ public class AclAccessTools {
 		int denyCount = 0;
 		int wildcardCount = 0;
 		for (List<AclBinding> list : groups.values()) {
-			AclBinding first = list.get(0);
-			ResourceType type = first.pattern().resourceType();
+			ResourcePattern pattern = list.get(0).pattern();
+			ResourceType type = pattern.resourceType();
 			Set<AclOperation> allow = EnumSet.noneOf(AclOperation.class);
 			Set<AclOperation> deny = EnumSet.noneOf(AclOperation.class);
 			for (AclBinding b : list) {
@@ -250,10 +260,32 @@ public class AclAccessTools {
 					wildcardCount++;
 				}
 			}
+			// Bu deseni kapsayan diğer desenlerin (LITERAL "*", PREFIXED önek) ALLOW/DENY'leri de etkilidir.
+			Set<AclOperation> effectiveAllow = EnumSet.noneOf(AclOperation.class);
+			effectiveAllow.addAll(allow);
+			Set<AclOperation> effectiveDeny = EnumSet.noneOf(AclOperation.class);
+			effectiveDeny.addAll(deny);
+			Set<String> alsoAllowedBy = new TreeSet<>();
+			List<AclBinding> deniedBy = new ArrayList<>();
+			for (AclBinding b : bindings) {
+				if (b.pattern().equals(pattern) || !AclEvaluator.covers(b.pattern(), pattern)) {
+					continue;
+				}
+				if (b.entry().permissionType() == AclPermissionType.DENY) {
+					effectiveDeny.add(b.entry().operation());
+					deniedBy.add(b);
+				}
+				else if (b.entry().permissionType() == AclPermissionType.ALLOW) {
+					effectiveAllow.add(b.entry().operation());
+					alsoAllowedBy.add(b.pattern().patternType() + ":" + b.pattern().name());
+				}
+			}
 			byType.merge(type.name(), 1, Integer::sum);
-			rows.add(Results.map("resourceType", type.name(), "patternType", first.pattern().patternType().name(),
-					"resourceName", first.pattern().name(), "allow", names(allow), "deny", names(deny), "effectiveAllow",
-					AclEvaluator.effectiveAllow(type, allow, deny), "bindings",
+			rows.add(Results.map("resourceType", type.name(), "patternType", pattern.patternType().name(),
+					"resourceName", pattern.name(), "allow", names(allow), "deny", names(deny), "effectiveAllow",
+					AclEvaluator.effectiveAllow(type, effectiveAllow, effectiveDeny), "alsoAllowedBy",
+					alsoAllowedBy.isEmpty() ? null : List.copyOf(alsoAllowedBy), "deniedBy",
+					deniedBy.isEmpty() ? null : Acls.render(deniedBy), "bindings",
 					list.stream().sorted(Acls.ORDER).map(Acls::renderEntry).toList()));
 		}
 

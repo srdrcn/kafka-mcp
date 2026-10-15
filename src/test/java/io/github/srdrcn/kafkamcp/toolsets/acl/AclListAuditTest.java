@@ -10,6 +10,10 @@ import static io.github.srdrcn.kafkamcp.toolsets.acl.AclTestSupport.denyTopic;
 import static io.github.srdrcn.kafkamcp.toolsets.acl.AclTestSupport.field;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
@@ -19,7 +23,13 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import io.github.srdrcn.kafkamcp.config.ClusterConfig;
+import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
+import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
+import io.github.srdrcn.kafkamcp.mcp.ToolCall;
+import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
+import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 /** acls_list ve acls_audit. */
 class AclListAuditTest extends KafkaIntegrationTest {
@@ -109,6 +119,9 @@ class AclListAuditTest extends KafkaIntegrationTest {
 			// super.users gizli → not düşülür
 			assertThat(r.get("notes").toString()).contains("super.users");
 
+			assertThat(c.at("/unverifiedTopicAcls/count").asInt()).isZero();
+			assertThat(r.get("notes").toString()).contains("DESCRIBE yetkisiyle sınırlı");
+
 			JsonNode limited = ok("acls_audit", args("filter", tag, "limit", 1));
 			assertThat(limited.at("/categories/orphanTopicAcls/count").asInt()).isEqualTo(2);
 			assertThat(limited.at("/categories/orphanTopicAcls/samples")).hasSize(1);
@@ -117,6 +130,47 @@ class AclListAuditTest extends KafkaIntegrationTest {
 		finally {
 			deleteAllFor(testAdmin(), user);
 			delete(testAdmin(), everyone);
+		}
+	}
+
+	/**
+	 * Sunucunun Kafka kullanıcısı (bob) sadece bazı topic'leri görebiliyor: göremediği var olan topic'in ACL'i
+	 * sahipsiz sayılmaz (doğrulanamadı), görebildiği ama olmayan topic'inki sahipsiz kalır.
+	 */
+	@Test
+	void auditDoesNotReportTopicsInvisibleToServerAsOrphans() throws Exception {
+		String tag = unique("audlp");
+		String user = "User:" + tag + "-u";
+		String hidden = tag + "-hidden";
+		String visibleGone = tag + "-vis-gone";
+		createTopic(testAdmin(), hidden);
+		AclBinding bobCluster = binding(ResourceType.CLUSTER, "kafka-cluster", PatternType.LITERAL, "User:bob",
+				AclOperation.DESCRIBE, AclPermissionType.ALLOW);
+		AclBinding bobTopics = binding(ResourceType.TOPIC, tag + "-vis-", PatternType.PREFIXED, "User:bob",
+				AclOperation.DESCRIBE, AclPermissionType.ALLOW);
+		AclBinding onHidden = allowTopic(hidden, user, AclOperation.READ);
+		AclBinding onGone = allowTopic(visibleGone, user, AclOperation.READ);
+		create(testAdmin(), bobCluster, bobTopics, onHidden, onGone);
+		KafkaMcpConfig config = new KafkaMcpConfig();
+		ClusterConfig cluster = new ClusterConfig();
+		cluster.setName("as-bob");
+		cluster.setBootstrapServers(KafkaTestCluster.bootstrap());
+		cluster.setProperties(KafkaTestCluster.saslProperties("bob"));
+		config.setClusters(List.of(cluster));
+		KafkaClients clients = new KafkaClients(config);
+		try {
+			ToolCall call = new ToolCall("acls_audit", Map.of("cluster", "as-bob", "filter", tag), clients,
+					Instant.now().plusMillis(KafkaClients.TIMEOUT_MS));
+			JsonNode r = ToolRegistry.resultMapper().valueToTree(new AclListTools().audit(call));
+			JsonNode c = r.get("categories");
+			assertThat(field(c.at("/orphanTopicAcls/samples"), "resourceName")).containsExactly(visibleGone);
+			assertThat(field(c.at("/unverifiedTopicAcls/samples"), "resourceName")).containsExactly(hidden);
+			assertThat(c.at("/unverifiedTopicAcls/description").asText()).contains("DESCRIBE");
+		}
+		finally {
+			clients.destroy();
+			delete(testAdmin(), bobCluster, bobTopics);
+			deleteAllFor(testAdmin(), user);
 		}
 	}
 

@@ -198,6 +198,34 @@ class AclWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(aclsOf(testAdmin(), p)).hasSize(1);
 	}
 
+	/** MATCH kaynağı kapsayan "*" ve PREFIXED ACL'leri de silerdi: reddedilir; ANY sadece bu adı siler. */
+	@Test
+	void deleteRefusesMatchAndAnyKeepsWildcardAndPrefixed() throws Exception {
+		String p = "User:" + unique("delm");
+		String topic = unique("delm-topic");
+		AclBinding literal = allowTopic(topic, p, AclOperation.READ);
+		AclBinding prefixed = AclTestSupport.binding(ResourceType.TOPIC, topic.substring(0, topic.length() - 2),
+				PatternType.PREFIXED, p, AclOperation.READ, AclPermissionType.ALLOW);
+		AclBinding wildcard = AclTestSupport.binding(ResourceType.TOPIC, "*", PatternType.LITERAL, p,
+				AclOperation.DESCRIBE, AclPermissionType.ALLOW);
+		create(testAdmin(), literal, prefixed, wildcard);
+		try {
+			assertThat(error("acls_delete", args("principal", p, "resourceType", "TOPIC", "resourceName", topic,
+					"patternType", "MATCH")))
+				.contains("MATCH");
+			assertThat(aclsOf(testAdmin(), p)).hasSize(3);
+
+			JsonNode any = ok("acls_delete", args("principal", p, "resourceType", "TOPIC", "resourceName", topic,
+					"patternType", "ANY"));
+			assertThat(any.get("deleted").asInt()).isEqualTo(1);
+			assertThat(any.at("/bindings/0/patternType").asText()).isEqualTo("LITERAL");
+			assertThat(aclsOf(testAdmin(), p)).containsExactlyInAnyOrder(prefixed, wildcard);
+		}
+		finally {
+			deleteAllFor(testAdmin(), p);
+		}
+	}
+
 	@Test
 	void deleteRefusesWideFilters() {
 		assertThat(error("acls_delete", args("principal", "User:x", "resourceType", "TOPIC"))).contains("resourceName");

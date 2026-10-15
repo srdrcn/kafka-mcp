@@ -33,6 +33,9 @@ public class AclWriteTools {
 	private static final String PROPAGATION_NOTE = "İşlem tamamlandı ama broker ACL önbelleği henüz güncellenmedi; "
 			+ "birkaç saniye içinde acls_list ile görünür";
 
+	/** acls_delete desenleri: MATCH yok (kaynağı kapsayan wildcard/prefix ACL'leri de silerdi); ANY sadece bu adı. */
+	private static final List<String> DELETE_PATTERN_TYPES = List.of("LITERAL", "PREFIXED", "ANY");
+
 	private static final List<String> SINGLE_PARAMS = List.of("resourceType", "resourceName", "patternType",
 			"operation");
 
@@ -63,7 +66,8 @@ public class AclWriteTools {
 					.required("principal", P.string("Principal (ör. User:alice; sadece ad verilirse User: eklenir)"))
 					.required("resourceType", Acls.resourceTypeParam("Kaynak tipi", false))
 					.required("resourceName", P.string("Kaynak adı (CLUSTER için kafka-cluster)"))
-					.param("patternType", P.enumOf("Desen tipi (varsayılan LITERAL)", Acls.PATTERN_TYPES))
+					.param("patternType", P.enumOf("Desen tipi (varsayılan LITERAL; ANY: bu addaki tüm desenler)",
+							DELETE_PATTERN_TYPES))
 					.param("operation", Acls.operationParam("İşlem (varsayılan ANY)", true))
 					.param("permission", P.enumOf("İzin (varsayılan ANY)", Acls.PERMISSIONS))
 					.param("host", P.string("Host (varsayılan tümü)"))
@@ -210,7 +214,12 @@ public class AclWriteTools {
 		ResourceType type = Acls.parse("resourceType", typeValue, ResourceType.class,
 				Acls.withoutAny(Acls.RESOURCE_TYPES));
 		String name = call.str("resourceName");
-		PatternType pattern = Acls.patternType(call, "patternType", PatternType.LITERAL);
+		String patternValue = call.str("patternType", "LITERAL");
+		if ("MATCH".equalsIgnoreCase(patternValue.trim())) {
+			throw new ToolException("patternType=MATCH silmede kullanılamaz: bu kaynağı kapsayan \"*\" ve PREFIXED "
+					+ "ACL'leri de siler. LITERAL, PREFIXED ya da ANY verin");
+		}
+		PatternType pattern = Acls.parse("patternType", patternValue, PatternType.class, DELETE_PATTERN_TYPES);
 		AclOperation op = Acls.operation(call, "operation", AclOperation.ANY);
 		AclPermissionType permission = Acls.permission(call, "permission", AclPermissionType.ANY);
 		String host = call.str("host", null);

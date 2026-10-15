@@ -161,6 +161,19 @@ class AclExplainTest extends KafkaIntegrationTest {
 		assertThat(field(describe.at("/operations/DESCRIBE/allowed"), "principal")).contains(reader, writer, blocked);
 		assertThat(describe.get("superUsers").toString()).contains("User:admin");
 
+		// host'a özel DENY, host * ALLOW'u olan principal'da da görünür
+		String hostDenied = "User:" + unique("hostdeny");
+		create(testAdmin(), allowTopic(topic, hostDenied, AclOperation.READ), binding(ResourceType.TOPIC, topic,
+				PatternType.LITERAL, hostDenied, "10.0.0.1", AclOperation.READ, AclPermissionType.DENY));
+		JsonNode hostRead = ok("acls_who_can_access_topic", args("topic", topic, "operation", "READ"));
+		JsonNode partly = find(hostRead.at("/operations/READ/allowed"), "principal", hostDenied);
+		assertThat(partly.get("hosts").toString()).isEqualTo("[\"*\"]");
+		assertThat(partly.get("deniedHosts").toString()).isEqualTo("[\"10.0.0.1\"]");
+		assertThat(partly.at("/deniedVia/0/permission").asText()).isEqualTo("DENY");
+		JsonNode deniedEntry = find(hostRead.at("/operations/READ/denied"), "principal", hostDenied);
+		assertThat(deniedEntry.get("hosts").toString()).isEqualTo("[\"10.0.0.1\"]");
+		assertThat(find(hostRead.at("/operations/READ/allowed"), "principal", reader).has("deniedHosts")).isFalse();
+
 		JsonNode missing = ok("acls_who_can_access_topic", args("topic", unique("no-such-topic")));
 		assertThat(missing.get("topicExists").asBoolean()).isFalse();
 		assertThat(missing.get("aclCount").asInt()).isZero();
@@ -196,6 +209,28 @@ class AclExplainTest extends KafkaIntegrationTest {
 		assertThat(withWildcard.get("includeWildcardPrincipal").asBoolean()).isTrue();
 		assertThat(withWildcard.get("total").asInt()).isEqualTo(1);
 		assertThat(withWildcard.at("/resources/0/bindings/0/principal").asText()).isEqualTo("User:*");
+
+		// Başka desenden gelen DENY/ALLOW (PREFIXED) LITERAL satırın etkin izinlerine yansır; acls_explain ile aynı
+		String p2 = "User:" + unique("perm2");
+		String pfx = unique("perm-pay");
+		String payments = pfx + "ments";
+		create(testAdmin(), allowTopic(payments, p2, AclOperation.READ),
+				binding(ResourceType.TOPIC, pfx, PatternType.PREFIXED, p2, AclOperation.READ, AclPermissionType.DENY),
+				binding(ResourceType.TOPIC, pfx, PatternType.PREFIXED, p2, AclOperation.WRITE,
+						AclPermissionType.ALLOW));
+		JsonNode cross = ok("acls_principal_permissions", args("principal", p2, "includeWildcardPrincipal", false));
+		JsonNode paymentsRow = find(cross.get("resources"), "resourceName", payments);
+		assertThat(paymentsRow.get("allow").toString()).isEqualTo("[\"READ\"]");
+		assertThat(paymentsRow.get("effectiveAllow").toString()).isEqualTo("[\"WRITE\",\"DESCRIBE\"]");
+		assertThat(paymentsRow.at("/deniedBy/0/patternType").asText()).isEqualTo("PREFIXED");
+		assertThat(paymentsRow.at("/deniedBy/0/operation").asText()).isEqualTo("READ");
+		assertThat(paymentsRow.get("alsoAllowedBy").toString()).contains("PREFIXED:" + pfx);
+		assertThat(explain(p2, "READ", "TOPIC", payments).get("decision").asText()).isEqualTo("DENY");
+		assertThat(explain(p2, "WRITE", "TOPIC", payments).get("decision").asText()).isEqualTo("ALLOW");
+		assertThat(explain(p2, "DESCRIBE", "TOPIC", payments).get("decision").asText()).isEqualTo("ALLOW");
+		JsonNode pfxRow = find(cross.get("resources"), "resourceName", pfx);
+		assertThat(pfxRow.has("deniedBy")).isFalse();
+		assertThat(pfxRow.get("effectiveAllow").toString()).isEqualTo("[\"WRITE\",\"DESCRIBE\"]");
 
 		JsonNode none = ok("acls_principal_permissions",
 				args("principal", unique("ghost"), "includeWildcardPrincipal", false));

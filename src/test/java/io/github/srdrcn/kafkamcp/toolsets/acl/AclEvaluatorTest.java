@@ -177,4 +177,36 @@ class AclEvaluatorTest {
 				"User:ANONYMOUS");
 	}
 
+	/** Kafka JaasConfig tek tırnağı da kabul eder: maskeleme ve seçenek okuma ikisini de desteklemeli. */
+	@Test
+	void singleQuotedJaasValues() {
+		String masked = ClientSecurity.maskJaas(
+				"org.apache.kafka.common.security.plain.PlainLoginModule required username=\"svc\" password='p4ss;w0rd x';");
+		assertThat(masked).doesNotContain("p4ss").doesNotContain("w0rd").contains("password=\"****\";")
+			.contains("username=\"svc\"");
+		assertThat(ClientSecurity.maskJaas("X required secret='a\\'b' token=abc;")).doesNotContain("a\\'b", "abc");
+		String krb = "Krb5LoginModule required useKeyTab=true keyTab='/k/my svc.keytab' principal='svc@R';";
+		assertThat(ClientSecurity.jaasOption(krb, "keyTab")).isEqualTo("/k/my svc.keytab");
+		assertThat(ClientSecurity.jaasOption(krb, "principal")).isEqualTo("svc@R");
+		assertThat(ClientSecurity.jaasOption(krb, "useKeyTab")).isEqualTo("true");
+	}
+
+	@Test
+	void patternCoverage() {
+		ResourcePattern payments = new ResourcePattern(ResourceType.TOPIC, "payments", PatternType.LITERAL);
+		ResourcePattern pay = new ResourcePattern(ResourceType.TOPIC, "pay", PatternType.PREFIXED);
+		ResourcePattern all = new ResourcePattern(ResourceType.TOPIC, "*", PatternType.LITERAL);
+		assertThat(AclEvaluator.covers(pay, payments)).isTrue();
+		assertThat(AclEvaluator.covers(all, payments)).isTrue();
+		assertThat(AclEvaluator.covers(all, pay)).isTrue();
+		assertThat(AclEvaluator.covers(new ResourcePattern(ResourceType.TOPIC, "pa", PatternType.PREFIXED), pay))
+			.isTrue();
+		assertThat(AclEvaluator.covers(payments, pay)).isFalse();
+		assertThat(AclEvaluator.covers(pay, all)).isFalse();
+		assertThat(AclEvaluator.covers(new ResourcePattern(ResourceType.TOPIC, "payx", PatternType.PREFIXED), pay))
+			.isFalse();
+		assertThat(AclEvaluator.covers(new ResourcePattern(ResourceType.GROUP, "*", PatternType.LITERAL), payments))
+			.isFalse();
+	}
+
 }

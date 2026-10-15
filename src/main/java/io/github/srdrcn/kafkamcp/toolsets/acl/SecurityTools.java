@@ -7,7 +7,12 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.DescribeClusterOptions;
@@ -27,6 +32,7 @@ import org.springframework.stereotype.Component;
 
 import io.github.srdrcn.kafkamcp.config.ClusterConfig;
 import io.github.srdrcn.kafkamcp.config.KerberosConfig;
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
@@ -157,7 +163,17 @@ public class SecurityTools {
 			long budget = Math.min(10_000, Math.max(1_000, call.waitMillis() - 4_000));
 			out.putAll(KerberosCheck.check(settings, budget));
 		}
-		out.put("kafka", connectivity(call));
+		Object loginStatus = out.get("login") instanceof Map<?, ?> login ? login.get("status") : null;
+		if (settings != null && client.gssapi() && !"ok".equals(loginStatus)
+				&& Objects.equals(client.jaasOption("keyTab"), settings.keytab())) {
+			// Admin.create aynı Krb5 login'i senkron yapar; KDC'ye ulaşılamıyorsa dakikalarca bloklanabilir.
+			out.put("kafka", Results.map("status", "skipped", "reason",
+					"Kerberos login " + ("skipped".equals(loginStatus) ? "denenemedi" : "başarısız")
+							+ "; Kafka client'ı da aynı ayarlarla GSSAPI login olamayacağı için bağlantı denenmedi"));
+		}
+		else {
+			out.put("kafka", connectivity(call));
+		}
 		if (out.get("notes") instanceof List<?> checkNotes) {
 			checkNotes.forEach(n -> notes.add(String.valueOf(n)));
 		}
@@ -167,21 +183,42 @@ public class SecurityTools {
 		return out;
 	}
 
-	/** Kısa Kafka bağlantı kontrolü: describeCluster clusterId. */
+	/**
+	 * Kısa Kafka bağlantı kontrolü: describeCluster clusterId. Client oluşturma (Kerberos login dahil) ayrı
+	 * bir thread'de yapılır ve kalan süreyle sınırlıdır; süre dolarsa {status: timeout} döner.
+	 */
 	public static Map<String, Object> connectivity(ToolCall call) {
 		long timeout = Math.min(5_000, call.waitMillis());
 		if (timeout < 500) {
 			return Results.map("status", "skipped", "reason", "süre kalmadı");
 		}
 		long start = System.nanoTime();
+		FutureTask<String> task = new FutureTask<>(() -> call
+			.await(call.admin().describeCluster(new DescribeClusterOptions().timeoutMs((int) timeout)).clusterId()));
+		Thread.ofPlatform().daemon().name("kafka-mcp-connectivity").start(task);
 		try {
-			String id = call.await(
-					call.admin().describeCluster(new DescribeClusterOptions().timeoutMs((int) timeout)).clusterId());
-			return Results.map("status", "ok", "clusterId", id, "durationMs", (System.nanoTime() - start) / 1_000_000);
+			String id = task.get(Math.min(call.waitMillis(), timeout + 500), TimeUnit.MILLISECONDS);
+			return Results.map("status", "ok", "clusterId", id, "durationMs", elapsed(start));
 		}
-		catch (ToolException e) {
-			return Results.map("status", "error", "error", e.getMessage());
+		catch (TimeoutException e) {
+			task.cancel(true);
+			return Results.map("status", "timeout", "durationMs", elapsed(start), "error", "Kafka client'ı "
+					+ timeout + " ms içinde oluşturulamadı ya da yanıt vermedi (Kerberos login ya da ağ bekleniyor)");
 		}
+		catch (ExecutionException e) {
+			Throwable cause = e.getCause() == null ? e : e.getCause();
+			return Results.map("status", "error", "durationMs", elapsed(start), "error",
+					cause instanceof ToolException ? cause.getMessage() : KafkaErrors.explain(cause));
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			task.cancel(true);
+			return Results.map("status", "error", "error", "Kafka bağlantı kontrolü iptal edildi");
+		}
+	}
+
+	private static long elapsed(long startNanos) {
+		return (System.nanoTime() - startNanos) / 1_000_000;
 	}
 
 	Object securitySummary(ToolCall call) {

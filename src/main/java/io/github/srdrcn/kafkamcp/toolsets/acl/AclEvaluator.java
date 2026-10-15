@@ -160,6 +160,29 @@ public final class AclEvaluator {
 		return false;
 	}
 
+	/**
+	 * {@code outer} deseni {@code inner} desenin uygulandığı her kaynağa da uygulanır mı? Aynı tip; eşit desen,
+	 * LITERAL "*" her şeyi, PREFIXED p ise p ile başlayan LITERAL adları ve PREFIXED önekleri kapsar.
+	 */
+	public static boolean covers(ResourcePattern outer, ResourcePattern inner) {
+		if (outer.resourceType() != inner.resourceType()) {
+			return false;
+		}
+		if (outer.equals(inner)) {
+			return true;
+		}
+		if (outer.patternType() == PatternType.LITERAL) {
+			return outer.name().equals(Acls.WILDCARD);
+		}
+		if (outer.patternType() != PatternType.PREFIXED) {
+			return false;
+		}
+		if (inner.patternType() == PatternType.LITERAL) {
+			return !inner.name().equals(Acls.WILDCARD) && inner.name().startsWith(outer.name());
+		}
+		return inner.patternType() == PatternType.PREFIXED && inner.name().startsWith(outer.name());
+	}
+
 	/** Binding principal'ı birebir aynı ya da User:* mı? */
 	public static boolean principalMatches(String bindingPrincipal, String principal) {
 		return bindingPrincipal.equals(principal) || bindingPrincipal.equals(Acls.WILDCARD_PRINCIPAL);

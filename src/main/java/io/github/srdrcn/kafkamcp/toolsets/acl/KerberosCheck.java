@@ -44,7 +44,7 @@ public final class KerberosCheck {
 	public static final String KRB5_CONF_PROPERTY = "java.security.krb5.conf";
 
 	private static final Set<String> LIBDEFAULTS = Set.of("default_realm", "rdns", "dns_lookup_kdc",
-			"dns_lookup_realm", "dns_canonicalize_hostname", "kdc_timeout", "max_retries", "udp_preference_limit",
+			"dns_lookup_realm", "dns_fallback", "dns_canonicalize_hostname", "kdc_timeout", "max_retries", "udp_preference_limit",
 			"ticket_lifetime", "renew_lifetime", "forwardable", "default_tkt_enctypes", "default_tgs_enctypes",
 			"permitted_enctypes", "allow_weak_crypto");
 
@@ -74,8 +74,26 @@ public final class KerberosCheck {
 			return r == null ? List.of() : r.getOrDefault("kdc", List.of());
 		}
 
+		/**
+		 * JDK kuralı: dns_lookup_kdc, yoksa dns_fallback; ikisi de yoksa true (KDC'ler DNS SRV ile aranır).
+		 */
 		public boolean dnsLookupKdc() {
-			return "true".equalsIgnoreCase(libdefaults.get("dns_lookup_kdc"));
+			Boolean v = bool(libdefaults.get("dns_lookup_kdc"));
+			if (v == null) {
+				v = bool(libdefaults.get("dns_fallback"));
+			}
+			return v == null || v;
+		}
+
+		private static Boolean bool(String value) {
+			if (value == null) {
+				return null;
+			}
+			return switch (value.trim().toLowerCase(Locale.ROOT)) {
+				case "true", "yes" -> true;
+				case "false", "no" -> false;
+				default -> null;
+			};
 		}
 
 		public Map<String, Object> render() {
@@ -208,8 +226,15 @@ public final class KerberosCheck {
 			problems.add("principal realm'i (" + realm + ") default_realm (" + krb5.defaultRealm()
 					+ ") ile aynı değil; cross-realm değilse yanlış realm (büyük/küçük harf dahil)");
 		}
-		if (krb5.readable() && effectiveRealm != null && krb5.kdcs(effectiveRealm).isEmpty() && !krb5.dnsLookupKdc()) {
-			problems.add("krb5.conf [realms] altında " + effectiveRealm + " için kdc tanımı yok (dns_lookup_kdc da kapalı)");
+		if (krb5.readable() && effectiveRealm != null && krb5.kdcs(effectiveRealm).isEmpty()) {
+			if (krb5.dnsLookupKdc()) {
+				notes.add("krb5.conf'ta " + effectiveRealm + " için kdc tanımı yok; KDC'ler DNS SRV kayıtlarıyla "
+						+ "(_kerberos._udp/_tcp." + effectiveRealm + ") aranacak");
+			}
+			else {
+				problems.add("krb5.conf [realms] altında " + effectiveRealm
+						+ " için kdc tanımı yok (dns_lookup_kdc/dns_fallback = false)");
+			}
 		}
 		if ("true".equalsIgnoreCase(krb5.libdefaults().get("rdns"))) {
 			notes.add("rdns=true: broker adresleri ters DNS ile çözülür; servis principal uyuşmazlığında rdns = false deneyin");

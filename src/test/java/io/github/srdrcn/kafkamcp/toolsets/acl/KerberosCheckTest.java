@@ -115,6 +115,44 @@ class KerberosCheckTest {
 		assertThat(r.get("notes").toString()).contains("/etc/other-krb5.conf");
 	}
 
+	/** JDK: dns_lookup_kdc yoksa dns_fallback, o da yoksa true; kdc'siz realm DNS SRV ile bulunur. */
+	@Test
+	void realmWithoutKdcUsesDnsUnlessDisabled() throws IOException {
+		Path dnsOnly = dir.resolve("dns-krb5.conf");
+		Files.writeString(dnsOnly, """
+				[libdefaults]
+				  default_realm = CORP.TEST
+				""");
+		System.setProperty(KerberosCheck.KRB5_CONF_PROPERTY, dnsOnly.toString());
+		assertThat(KerberosCheck.parseKrb5Conf(dnsOnly.toString()).dnsLookupKdc()).isTrue();
+		Map<String, Object> r = KerberosCheck.check(new KerberosCheck.Settings("kerberos", null, null,
+				"svc@CORP.TEST", "kafka"), 1_000);
+		assertThat(problems(r)).noneMatch(p -> p.contains("kdc tanımı yok"));
+		assertThat(r.get("notes").toString()).contains("DNS SRV");
+
+		assertThat(dnsLookup("dns_lookup_kdc = false")).isFalse();
+		assertThat(dnsLookup("dns_fallback = no")).isFalse();
+		assertThat(dnsLookup("dns_lookup_kdc = true\n  dns_fallback = false")).isTrue();
+		assertThat(dnsLookup("dns_lookup_kdc = yes")).isTrue();
+
+		Path disabled = dir.resolve("nodns-krb5.conf");
+		Files.writeString(disabled, """
+				[libdefaults]
+				  default_realm = CORP.TEST
+				  dns_lookup_kdc = false
+				""");
+		System.setProperty(KerberosCheck.KRB5_CONF_PROPERTY, disabled.toString());
+		Map<String, Object> off = KerberosCheck.check(new KerberosCheck.Settings("kerberos", null, null,
+				"svc@CORP.TEST", "kafka"), 1_000);
+		assertThat(problems(off)).anyMatch(p -> p.contains("kdc tanımı yok") && p.contains("false"));
+	}
+
+	private boolean dnsLookup(String libdefaults) throws IOException {
+		Path conf = Files.createTempFile(dir, "krb5", ".conf");
+		Files.writeString(conf, "[libdefaults]\n  default_realm = CORP.TEST\n  " + libdefaults + "\n");
+		return KerberosCheck.parseKrb5Conf(conf.toString()).dnsLookupKdc();
+	}
+
 	@SuppressWarnings("unchecked")
 	private static List<String> problems(Map<String, Object> r) {
 		return (List<String>) r.get("problems");

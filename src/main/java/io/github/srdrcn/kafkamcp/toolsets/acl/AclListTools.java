@@ -13,12 +13,16 @@ import java.util.TreeSet;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.GroupListing;
 import org.apache.kafka.clients.admin.ListTopicsOptions;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.acl.AccessControlEntryFilter;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
+import org.apache.kafka.common.errors.InvalidTopicException;
+import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.ResourcePatternFilter;
 import org.apache.kafka.common.resource.ResourceType;
@@ -134,12 +138,13 @@ public class AclListTools {
 		categories.put("allowOperationAll", new Category("İşlemi ALL olan ALLOW ACL'ler (en geniş yetki)"));
 		categories.put("allowOnCluster", new Category("CLUSTER kaynağında ALLOW (süper kullanıcı olmayan principal'lar)"));
 		categories.put("orphanTopicAcls", new Category("Var olmayan topic'e LITERAL ACL (artık kullanılmıyor olabilir)"));
+		categories.put("unverifiedTopicAcls", new Category(
+				"Topic'i bu sunucunun Kafka kullanıcısının göremediği (DESCRIBE yetkisi yok) LITERAL ACL'ler; topic var olabilir"));
 		categories.put("orphanGroupAcls",
 				new Category("Var olmayan group'a LITERAL ACL (group ilk kullanımda oluşur; henüz başlamamış uygulama olabilir)"));
 		categories.put("unusedPrefixedTopicAcls", new Category("Hiçbir topic'le eşleşmeyen PREFIXED topic ACL'leri"));
 
 		int scanned = 0;
-		Set<AclBinding> flagged = new HashSet<>();
 		for (AclBinding b : acls) {
 			if (!call.matches(b.entry().principal()) && !call.matches(b.pattern().name())) {
 				continue;
@@ -152,29 +157,41 @@ public class AclListTools {
 			boolean literal = pattern == PatternType.LITERAL;
 			boolean wildcardName = literal && Acls.WILDCARD.equals(name);
 			if (allow && Acls.WILDCARD_PRINCIPAL.equals(b.entry().principal())) {
-				add(categories, "allowAllPrincipals", b, flagged);
+				categories.get("allowAllPrincipals").bindings().add(b);
 			}
 			if (allow && wildcardName) {
-				add(categories, "allowWildcardResource", b, flagged);
+				categories.get("allowWildcardResource").bindings().add(b);
 			}
 			if (allow && b.entry().operation() == AclOperation.ALL) {
-				add(categories, "allowOperationAll", b, flagged);
+				categories.get("allowOperationAll").bindings().add(b);
 			}
 			if (allow && type == ResourceType.CLUSTER && !superUsers.contains(b.entry().principal())) {
-				add(categories, "allowOnCluster", b, flagged);
+				categories.get("allowOnCluster").bindings().add(b);
 			}
 			if (type == ResourceType.TOPIC && literal && !wildcardName && topics != null && !topics.contains(name)) {
-				add(categories, "orphanTopicAcls", b, flagged);
+				categories.get("orphanTopicAcls").bindings().add(b);
 			}
 			if (type == ResourceType.GROUP && literal && !wildcardName && groups != null && !groups.contains(name)) {
-				add(categories, "orphanGroupAcls", b, flagged);
+				categories.get("orphanGroupAcls").bindings().add(b);
 			}
 			if (type == ResourceType.TOPIC && pattern == PatternType.PREFIXED && topics != null
 					&& !anyStartsWith(topics, name)) {
-				add(categories, "unusedPrefixedTopicAcls", b, flagged);
+				categories.get("unusedPrefixedTopicAcls").bindings().add(b);
 			}
 		}
 
+		List<AclBinding> orphanTopics = categories.get("orphanTopicAcls").bindings();
+		if (!orphanTopics.isEmpty()) {
+			verifyOrphanTopics(call, admin, orphanTopics, categories.get("unverifiedTopicAcls").bindings(), notes);
+		}
+		if (!categories.get("orphanGroupAcls").bindings().isEmpty()
+				|| !categories.get("unusedPrefixedTopicAcls").bindings().isEmpty()) {
+			notes.add("Topic/group listesi bu sunucunun Kafka kullanıcısının DESCRIBE yetkisiyle sınırlı: görülemeyen "
+					+ "group/topic'ler sahipsiz ya da eşleşmeyen görünebilir; silmeden önce doğrulayın");
+		}
+
+		Set<AclBinding> flagged = new HashSet<>();
+		categories.values().forEach(c -> flagged.addAll(c.bindings()));
 		int limit = call.limit(20);
 		Map<String, Object> out = new LinkedHashMap<>();
 		for (Map.Entry<String, Category> e : categories.entrySet()) {
@@ -189,9 +206,48 @@ public class AclListTools {
 				"samplesPerCategory", limit, "categories", out, "notes", notes.isEmpty() ? null : notes);
 	}
 
-	private static void add(Map<String, Category> categories, String key, AclBinding b, Set<AclBinding> flagged) {
-		categories.get(key).bindings().add(b);
-		flagged.add(b);
+	/**
+	 * listTopics sadece DESCRIBE yetkisi olan topic'leri döner. Sahipsiz adaylar tek describeTopics ile
+	 * doğrulanır: yok/geçersiz → sahipsiz kalır; var → çıkarılır; yetki ya da başka hata → doğrulanamadı.
+	 */
+	private static void verifyOrphanTopics(ToolCall call, Admin admin, List<AclBinding> orphans,
+			List<AclBinding> unverified, List<String> notes) {
+		if (call.nearDeadline(2_000)) {
+			notes.add("Süre azaldı: sahipsiz topic adayları describeTopics ile doğrulanmadı");
+			return;
+		}
+		Set<String> names = new TreeSet<>();
+		orphans.forEach(b -> names.add(b.pattern().name()));
+		Map<String, KafkaFuture<TopicDescription>> futures = admin.describeTopics(names).topicNameValues();
+		Set<String> existing = new HashSet<>();
+		Set<String> unknown = new HashSet<>();
+		String otherError = null;
+		for (String name : names) {
+			KafkaFuture<TopicDescription> f = futures.get(name);
+			if (f == null) {
+				unknown.add(name);
+				continue;
+			}
+			try {
+				call.await(f);
+				existing.add(name);
+			}
+			catch (ToolException e) {
+				if (Acls.causedBy(e, UnknownTopicOrPartitionException.class)
+						|| Acls.causedBy(e, InvalidTopicException.class)) {
+					continue;
+				}
+				unknown.add(name);
+				if (otherError == null && !Acls.causedBy(e, TopicAuthorizationException.class)) {
+					otherError = e.getMessage();
+				}
+			}
+		}
+		orphans.stream().filter(b -> unknown.contains(b.pattern().name())).forEach(unverified::add);
+		orphans.removeIf(b -> existing.contains(b.pattern().name()) || unknown.contains(b.pattern().name()));
+		if (otherError != null) {
+			notes.add("Bazı sahipsiz topic adayları doğrulanamadı: " + otherError);
+		}
 	}
 
 	/** Sıralı kümede önekle başlayan eleman var mı (ceiling ile O(log n)). */

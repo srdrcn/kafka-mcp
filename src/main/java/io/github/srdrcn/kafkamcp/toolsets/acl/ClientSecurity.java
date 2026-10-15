@@ -15,8 +15,11 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 /** Bu sunucunun bir cluster'a bağlanırken kullandığı efektif güvenlik ayarları (parolalar maskeli). */
 public final class ClientSecurity {
 
+	/** JAAS değeri: "çift tırnaklı", 'tek tırnaklı' (Kafka JaasConfig ikisini de kabul eder) ya da tırnaksız. */
+	private static final String JAAS_VALUE = "\"((?:[^\"\\\\]|\\\\.)*)\"|'((?:[^'\\\\]|\\\\.)*)'|[^\\s;]+";
+
 	private static final Pattern SECRET_OPTION = Pattern
-		.compile("(?i)(\\b[\\w.]*(?:password|secret|token)[\\w.]*\\s*=\\s*)(\"(?:[^\"\\\\]|\\\\.)*\"|[^\\s;]+)");
+		.compile("(?i)(\\b[\\w.]*(?:password|secret|token)[\\w.]*\\s*=\\s*)(?:" + JAAS_VALUE + ")");
 
 	private static final String MASK = "\"****\"";
 
@@ -72,12 +75,20 @@ public final class ClientSecurity {
 		if (jaas == null) {
 			return null;
 		}
-		Matcher m = Pattern.compile("(?:^|\\s)" + Pattern.quote(option) + "\\s*=\\s*(\"((?:[^\"\\\\]|\\\\.)*)\"|[^\\s;]+)")
-			.matcher(jaas);
+		Matcher m = Pattern.compile("(?:^|\\s)" + Pattern.quote(option) + "\\s*=\\s*(" + JAAS_VALUE + ")").matcher(jaas);
 		if (!m.find()) {
 			return null;
 		}
-		String v = m.group(2) != null ? m.group(2).replace("\\\"", "\"").replace("\\\\", "\\") : m.group(1);
+		String v;
+		if (m.group(2) != null) {
+			v = m.group(2).replace("\\\"", "\"").replace("\\\\", "\\");
+		}
+		else if (m.group(3) != null) {
+			v = m.group(3).replace("\\'", "'").replace("\\\\", "\\");
+		}
+		else {
+			v = m.group(1);
+		}
 		return v.isBlank() ? null : v;
 	}
 

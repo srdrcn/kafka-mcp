@@ -471,8 +471,8 @@
       },
       "patternType" : {
         "type" : "string",
-        "description" : "Desen tipi (varsayılan LITERAL)",
-        "enum" : [ "LITERAL", "PREFIXED", "MATCH", "ANY" ]
+        "description" : "Desen tipi (varsayılan LITERAL; ANY: bu addaki tüm desenler)",
+        "enum" : [ "LITERAL", "PREFIXED", "ANY" ]
       },
       "operation" : {
         "type" : "string",
