@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 
 /** schemas_register ve schemas_delete_version; readOnly cluster'da yazma reddi. */
@@ -72,6 +73,22 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(invalid).contains("422").contains("Geçersiz şema").doesNotContain("with refs");
 
 		assertThat(SrRest.versions(s, false)).containsExactly(1);
+	}
+
+	@Test
+	void registerOnReadOnlyModeSubjectReportsModeNotInvalidSchema() {
+		String s = unique("regmode") + "-value";
+		SrRest.register(s, SrRest.V1);
+		String modePath = "/mode/" + SchemaRegistryClient.enc(s);
+		SrRest.ok("PUT", modePath, Map.of("mode", "READONLY"));
+		try {
+			String err = error("schemas_register", args("subject", s, "schema", SrRest.V2));
+			assertThat(err).contains("422").contains("42205").contains("READONLY").doesNotContain("Geçersiz şema");
+			assertThat(SrRest.versions(s, false)).containsExactly(1);
+		}
+		finally {
+			SrRest.call("DELETE", modePath, null);
+		}
 	}
 
 	@Test

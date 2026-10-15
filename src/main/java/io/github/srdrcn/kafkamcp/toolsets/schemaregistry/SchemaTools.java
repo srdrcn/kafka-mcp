@@ -29,6 +29,9 @@ public class SchemaTools {
 
 	private static final int MAX_SR_MESSAGE = 1_500;
 
+	/** SR error_code: geçersiz şema. */
+	static final int INVALID_SCHEMA_CODE = 42201;
+
 	/** SR 409 mesajındaki eski şema dökümü (gürültü). */
 	private static final Pattern OLD_SCHEMA = Pattern.compile(",?\\s*\\{oldSchema: '.*?'\\}", Pattern.DOTALL);
 
@@ -255,9 +258,17 @@ public class SchemaTools {
 					+ level + ") yeni şemayı reddetti. SR: " + cleanSrMessage(e.srMessage())
 					+ " — ayrıntı için schemas_compatibility_check, fark için schemas_diff kullanın.", e);
 		}
-		if (e.status() == 422) {
-			return new ToolException("Geçersiz şema (422" + (e.errorCode() > 0 ? "/" + e.errorCode() : "") + "): "
-					+ cleanSrMessage(e.srMessage()), e);
+		return invalidSchemaError(e);
+	}
+
+	/**
+	 * SR 42201'i (geçersiz şema) sade mesaja çevirir. Diğer 422 kodları (42205 READONLY/IMPORT modu, 42207, 42208
+	 * geçersiz subject, 42209 vb.) şema hatası değildir: istemcinin Türkçe ipucuyla aynen döner.
+	 */
+	static ToolException invalidSchemaError(SchemaRegistryException e) {
+		if (e.status() == 422 && e.errorCode() == INVALID_SCHEMA_CODE) {
+			return new ToolException("Geçersiz şema (422/" + INVALID_SCHEMA_CODE + "): " + cleanSrMessage(e.srMessage()),
+					e);
 		}
 		return e;
 	}

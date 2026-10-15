@@ -52,10 +52,11 @@ public final class AvroSchemaDiff {
 
 	/**
 	 * Fark sonucu. backward: yeni şema (to) eski veriyi (from) okuyabilir; forward: eski şema yeni veriyi okuyabilir
-	 * (Avro {@link SchemaCompatibility}; hesaplanamadıysa null).
+	 * (Avro {@link SchemaCompatibility}; hesaplanamadıysa null). *Issues listeleri en fazla 10 kayıt tutar;
+	 * *IssueCount toplam uyumsuzluk sayısıdır.
 	 */
 	public record Result(List<Change> changes, int totalChanges, Boolean backward, Boolean forward,
-			List<String> backwardIssues, List<String> forwardIssues) {
+			List<String> backwardIssues, List<String> forwardIssues, int backwardIssueCount, int forwardIssueCount) {
 
 		public String hint() {
 			if (backward == null || forward == null) {
@@ -95,9 +96,16 @@ public final class AvroSchemaDiff {
 				m.put("changesTruncated", true);
 				m.put("omittedChanges", totalChanges - changes.size());
 			}
-			m.put("compatibility", Results.map("backward", backward, "forward", forward, "hint", hint(),
+			Map<String, Object> compat = Results.map("backward", backward, "forward", forward, "hint", hint(),
 					"backwardIssues", backwardIssues.isEmpty() ? null : backwardIssues, "forwardIssues",
-					forwardIssues.isEmpty() ? null : forwardIssues));
+					forwardIssues.isEmpty() ? null : forwardIssues);
+			if (backwardIssueCount > backwardIssues.size()) {
+				compat.put("backwardIssuesOmitted", backwardIssueCount - backwardIssues.size());
+			}
+			if (forwardIssueCount > forwardIssues.size()) {
+				compat.put("forwardIssuesOmitted", forwardIssueCount - forwardIssues.size());
+			}
+			m.put("compatibility", compat);
 			return m;
 		}
 
@@ -110,30 +118,36 @@ public final class AvroSchemaDiff {
 		Boolean forward = null;
 		List<String> backwardIssues = new ArrayList<>();
 		List<String> forwardIssues = new ArrayList<>();
+		int backwardCount = 0;
+		int forwardCount = 0;
 		try {
 			SchemaPairCompatibility b = SchemaCompatibility.checkReaderWriterCompatibility(to, from);
 			backward = b.getType() == SchemaCompatibilityType.COMPATIBLE;
-			issues(b, backwardIssues);
+			backwardCount = issues(b, backwardIssues);
 			SchemaPairCompatibility f = SchemaCompatibility.checkReaderWriterCompatibility(from, to);
 			forward = f.getType() == SchemaCompatibilityType.COMPATIBLE;
-			issues(f, forwardIssues);
+			forwardCount = issues(f, forwardIssues);
 		}
 		catch (RuntimeException e) {
 			// uyumluluk hesaplanamadı: alan farkı yine döner
 		}
-		return new Result(d.changes, d.total, backward, forward, backwardIssues, forwardIssues);
+		return new Result(d.changes, d.total, backward, forward, backwardIssues, forwardIssues,
+				Math.max(backwardCount, backwardIssues.size()), Math.max(forwardCount, forwardIssues.size()));
 	}
 
-	private static void issues(SchemaPairCompatibility p, List<String> out) {
+	/** İlk {@link #MAX_ISSUES} uyumsuzluğu out'a ekler; toplam uyumsuzluk sayısını döner. */
+	private static int issues(SchemaPairCompatibility p, List<String> out) {
 		if (p.getResult() == null) {
-			return;
+			return 0;
 		}
-		for (Incompatibility i : p.getResult().getIncompatibilities()) {
+		List<Incompatibility> all = p.getResult().getIncompatibilities();
+		for (Incompatibility i : all) {
 			if (out.size() >= MAX_ISSUES) {
 				break;
 			}
 			out.add(i.getType() + " @" + i.getLocation() + ": " + i.getMessage());
 		}
+		return all.size();
 	}
 
 	/** Kısa tip gösterimi: {@code long(timestamp-millis)}, {@code array<string>}, {@code union[null, string]}. */
@@ -195,6 +209,28 @@ public final class AvroSchemaDiff {
 		};
 	}
 
+	/**
+	 * Sığ Avro okuma kuralı: writer ile yazılmış veri reader ile okunabilir mi (union dalları, tip yükseltmesi, ad/alias
+	 * ve fixed boyutu; kayıt alanları ve enum sembollerine bakılmaz).
+	 */
+	static boolean readable(Schema writer, Schema reader) {
+		if (writer.getType() == Type.UNION) {
+			return writer.getTypes().stream().allMatch(w -> readable(w, reader));
+		}
+		if (reader.getType() == Type.UNION) {
+			return reader.getTypes().stream().anyMatch(r -> readable(writer, r));
+		}
+		return switch (writer.getType()) {
+			case RECORD, ENUM -> reader.getType() == writer.getType()
+					&& SchemaCompatibility.schemaNameEquals(reader, writer);
+			case FIXED -> reader.getType() == Type.FIXED && SchemaCompatibility.schemaNameEquals(reader, writer)
+					&& reader.getFixedSize() == writer.getFixedSize();
+			case ARRAY -> reader.getType() == Type.ARRAY && readable(writer.getElementType(), reader.getElementType());
+			case MAP -> reader.getType() == Type.MAP && readable(writer.getValueType(), reader.getValueType());
+			default -> promotable(writer.getType(), reader.getType());
+		};
+	}
+
 	/** Avro varsayılan değerini JSON metnine çevirir (null → "null"). */
 	static String json(Object defaultValue) {
 		try {
@@ -246,22 +282,20 @@ public final class AvroSchemaDiff {
 				return;
 			}
 			if (ta == Type.UNION) {
+				add(path, "TYPE_CHANGED",
+						"Union tek tipe çevrildi: " + typeName(a) + " → " + typeName(b) + readNote(a, b), typeName(a),
+						typeName(b));
 				Schema match = branch(a, key(b));
-				add(path, "TYPE_CHANGED", "Union tek tipe çevrildi: " + typeName(a) + " → " + typeName(b)
-						+ (match != null ? " (diğer dallarla yazılmış eski veri okunamaz → BACKWARD uyumsuz)"
-								: " (eski union'da bu tip yok → uyumsuz)"),
-						typeName(a), typeName(b));
 				if (match != null) {
 					compareSame(path, match, b);
 				}
 				return;
 			}
 			if (tb == Type.UNION) {
+				add(path, "TYPE_CHANGED",
+						"Tip union'a çevrildi: " + typeName(a) + " → " + typeName(b) + readNote(a, b), typeName(a),
+						typeName(b));
 				Schema match = branch(b, key(a));
-				add(path, "TYPE_CHANGED", "Tip union'a çevrildi: " + typeName(a) + " → " + typeName(b)
-						+ (match != null ? " (eski tip union'da var → BACKWARD uyumlu; eski okuyucular diğer dalları okuyamaz)"
-								: " (eski tip union'da yok → uyumsuz)"),
-						typeName(a), typeName(b));
 				if (match != null) {
 					compareSame(path, a, match);
 				}
@@ -388,16 +422,18 @@ public final class AvroSchemaDiff {
 			}
 			for (String k : ma.keySet()) {
 				if (!mb.containsKey(k)) {
-					add(path, "UNION_BRANCH_REMOVED",
-							"Union dalı silindi: " + k + " (bu dalla yazılmış eski veri okunamaz → BACKWARD uyumsuz)",
-							typeName(ma.get(k)), null);
+					Schema reader = readingBranch(ma.get(k), b);
+					add(path, "UNION_BRANCH_REMOVED", "Union dalı silindi: " + k + (reader != null
+							? " (bu dalla yazılmış eski veri " + typeName(reader) + " dalıyla okunur → BACKWARD uyumlu)"
+							: " (bu dalla yazılmış eski veri okunamaz → BACKWARD uyumsuz)"), typeName(ma.get(k)), null);
 				}
 			}
 			for (String k : mb.keySet()) {
 				if (!ma.containsKey(k)) {
-					add(path, "UNION_BRANCH_ADDED",
-							"Union dalı eklendi: " + k + " (eski okuyucular bu dalı okuyamaz → FORWARD uyumsuz)", null,
-							typeName(mb.get(k)));
+					Schema reader = readingBranch(mb.get(k), a);
+					add(path, "UNION_BRANCH_ADDED", "Union dalı eklendi: " + k + (reader != null
+							? " (eski okuyucular bu dalı " + typeName(reader) + " dalıyla okur → FORWARD uyumlu)"
+							: " (eski okuyucular bu dalı okuyamaz → FORWARD uyumsuz)"), null, typeName(mb.get(k)));
 				}
 			}
 			String firstA = key(a.getTypes().get(0));
@@ -458,6 +494,50 @@ public final class AvroSchemaDiff {
 
 		private static String nz(String s) {
 			return s == null || s.isEmpty() ? "(yok)" : s;
+		}
+
+		/**
+		 * Union'a/union'dan tip değişikliği için BACKWARD/FORWARD notu: Avro okuma kuralları (tip yükseltmesi ve ad
+		 * eşleşmesi dahil) dal dal uygulanır; iç içe alanlar ayrı değişiklik olarak raporlandığından bakılmaz.
+		 */
+		private static String readNote(Schema from, Schema to) {
+			List<String> oldLost = unreadable(from, to);
+			List<String> newLost = unreadable(to, from);
+			String back = oldLost.isEmpty() ? "BACKWARD uyumlu" + (promoted(from, to) ? ", tip yükseltmesiyle" : "")
+					: "BACKWARD uyumsuz: " + String.join(", ", oldLost) + " ile yazılmış eski veri okunamaz";
+			String fwd = newLost.isEmpty() ? "FORWARD uyumlu" + (promoted(to, from) ? ", tip yükseltmesiyle" : "")
+					: "FORWARD uyumsuz: eski okuyucular " + String.join(", ", newLost)
+							+ " ile yazılmış yeni veriyi okuyamaz";
+			return " (" + back + "; " + fwd + ")";
+		}
+
+		/** writer'ın (union ise dallarının) reader ile okunamayan kısımları (kısa tip adlarıyla). */
+		private static List<String> unreadable(Schema writer, Schema reader) {
+			return branchesOf(writer).stream().filter(w -> !readable(w, reader)).map(AvroSchemaDiff::typeName).toList();
+		}
+
+		/** writer'ın en az bir primitif dalı reader'da birebir karşılığı olmadan tip yükseltmesiyle mi okunuyor. */
+		private static boolean promoted(Schema writer, Schema reader) {
+			Set<String> exact = new HashSet<>();
+			branchesOf(reader).forEach(r -> exact.add(key(r)));
+			return branchesOf(writer).stream()
+				.anyMatch(w -> !exact.contains(key(w)) && !isComplex(w.getType()) && readable(w, reader));
+		}
+
+		/** writer dalıyla yazılmış veriyi okuyan ilk reader dalı (reader union değilse kendisi); yoksa null. */
+		private static Schema readingBranch(Schema writer, Schema reader) {
+			return branchesOf(reader).stream().filter(r -> readable(writer, r)).findFirst().orElse(null);
+		}
+
+		private static List<Schema> branchesOf(Schema s) {
+			return s.getType() == Type.UNION ? s.getTypes() : List.of(s);
+		}
+
+		private static boolean isComplex(Type t) {
+			return switch (t) {
+				case RECORD, ENUM, FIXED, ARRAY, MAP, UNION -> true;
+				default -> false;
+			};
 		}
 
 		private static String promotionNote(Type from, Type to) {

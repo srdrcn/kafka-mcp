@@ -124,6 +124,87 @@ class AvroSchemaDiffTest {
 	}
 
 	@Test
+	void unionNotesFollowTypePromotionAndAgreeWithCompatibility() {
+		Schema a = parse("""
+				{"type":"record","name":"P","fields":[
+				 {"name":"n","type":"int"},
+				 {"name":"u","type":["null","int","string"],"default":null},
+				 {"name":"w","type":["int","long"]},
+				 {"name":"s","type":"long"},
+				 {"name":"x","type":["null","string"],"default":null}]}""");
+		Schema b = parse("""
+				{"type":"record","name":"P","fields":[
+				 {"name":"n","type":["null","long"],"default":null},
+				 {"name":"u","type":["null","long","string"],"default":null},
+				 {"name":"w","type":"long"},
+				 {"name":"s","type":["int","long"]},
+				 {"name":"x","type":"string","default":""}]}""");
+		AvroSchemaDiff.Result r = AvroSchemaDiff.diff(a, b);
+		// int → ["null","long"]: int long dalına yükseltilerek okunur
+		String n = find(r, "P.n", "TYPE_CHANGED").detail();
+		assertThat(n).contains("union'a").contains("BACKWARD uyumlu, tip yükseltmesiyle")
+			.contains("FORWARD uyumsuz: eski okuyucular null")
+			.doesNotContain("BACKWARD uyumsuz");
+		// union'da int → long: silinen int dalı long dalıyla okunur
+		assertThat(find(r, "P.u", "UNION_BRANCH_REMOVED").detail()).contains("long dalıyla okunur")
+			.contains("BACKWARD uyumlu");
+		assertThat(find(r, "P.u", "UNION_BRANCH_ADDED").detail()).contains("FORWARD uyumsuz");
+		// ["int","long"] → long: her iki dal da long ile okunur; long eski union'da da var
+		assertThat(find(r, "P.w", "TYPE_CHANGED").detail()).contains("tek tipe")
+			.contains("BACKWARD uyumlu, tip yükseltmesiyle")
+			.contains("FORWARD uyumlu");
+		// long → ["int","long"]: eski okuyucu (long) yeni int dalını yükselterek okur
+		assertThat(find(r, "P.s", "TYPE_CHANGED").detail()).contains("BACKWARD uyumlu;")
+			.contains("FORWARD uyumlu, tip yükseltmesiyle");
+		// ["null","string"] → string: null ile yazılmış eski veri okunamaz
+		assertThat(find(r, "P.x", "TYPE_CHANGED").detail()).contains("BACKWARD uyumsuz: null")
+			.contains("FORWARD uyumlu");
+		// tek BACKWARD uyumsuzluğu x alanındaki null dalı
+		assertThat(r.backward()).isFalse();
+		assertThat(r.backwardIssueCount()).isEqualTo(1);
+
+		// x olmadan: alan notları Avro uyumluluk sonucuyla çelişmez (BACKWARD uyumlu, FORWARD değil)
+		AvroSchemaDiff.Result promoted = AvroSchemaDiff.diff(parse("""
+				{"type":"record","name":"P","fields":[
+				 {"name":"n","type":"int"},
+				 {"name":"u","type":["null","int","string"],"default":null},
+				 {"name":"w","type":["int","long"]}]}"""), parse("""
+				{"type":"record","name":"P","fields":[
+				 {"name":"n","type":["null","long"],"default":null},
+				 {"name":"u","type":["null","long","string"],"default":null},
+				 {"name":"w","type":"long"}]}"""));
+		assertThat(promoted.backward()).isTrue();
+		assertThat(promoted.forward()).isFalse();
+		assertThat(promoted.changes()).noneMatch(c -> c.detail().contains("BACKWARD uyumsuz"));
+		assertThat(promoted.changes()).anyMatch(c -> c.detail().contains("FORWARD uyumsuz"));
+	}
+
+	@Test
+	void compatibilityIssuesBeyondCapAreCounted() {
+		StringBuilder fields = new StringBuilder("{\"name\":\"id\",\"type\":\"string\"}");
+		for (int i = 0; i < 12; i++) {
+			fields.append(",{\"name\":\"f").append(i).append("\",\"type\":\"int\"}");
+		}
+		Schema a = parse("{\"type\":\"record\",\"name\":\"R\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}");
+		Schema b = parse("{\"type\":\"record\",\"name\":\"R\",\"fields\":[" + fields + "]}");
+		AvroSchemaDiff.Result r = AvroSchemaDiff.diff(a, b);
+		assertThat(r.backward()).isFalse();
+		assertThat(r.backwardIssues()).hasSize(10);
+		assertThat(r.backwardIssueCount()).isEqualTo(12);
+		assertThat(r.forward()).isTrue();
+		assertThat(r.forwardIssueCount()).isZero();
+		@SuppressWarnings("unchecked")
+		java.util.Map<String, Object> compat = (java.util.Map<String, Object>) r.toMap().get("compatibility");
+		assertThat(compat).containsEntry("backwardIssuesOmitted", 2).doesNotContainKey("forwardIssuesOmitted");
+
+		// sınırın altında omitted alanı yok
+		java.util.Map<String, Object> small = AvroSchemaDiff.diff(a, parse("""
+				{"type":"record","name":"R","fields":[{"name":"id","type":"string"},{"name":"z","type":"int"}]}"""))
+			.toMap();
+		assertThat(small.get("compatibility").toString()).contains("backwardIssues").doesNotContain("Omitted");
+	}
+
+	@Test
 	void identicalAndCompatibleSchemas() {
 		String s = """
 				{"type":"record","name":"A","fields":[{"name":"x","type":"int"}]}""";

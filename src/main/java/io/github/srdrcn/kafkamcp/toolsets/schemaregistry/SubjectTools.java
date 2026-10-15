@@ -22,6 +22,9 @@ public class SubjectTools {
 	/** subjects_for_topic'te son versiyonu sorgulanacak en fazla subject. */
 	static final int MAX_TOPIC_LOOKUPS = 20;
 
+	/** subjects_for_topic'te adıyla listelenecek en fazla olası (kesin olmayan) eşleşme. */
+	static final int MAX_POSSIBLE_MATCHES = 20;
+
 	/** TopicRecordNameStrategy kayıt adı: Avro/Protobuf tam adı (tire içermez). */
 	private static final Pattern RECORD_NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$");
 
@@ -67,6 +70,8 @@ public class SubjectTools {
 		String topic = call.str("topic");
 		String cluster = call.cluster();
 		List<String[]> matches = new ArrayList<>();
+		// '<topic>-' ile başlayıp kayıt adı tam ad olmayanlar (JSON Schema title'ı ya da başka topic): sadece ad
+		List<String> possible = new ArrayList<>();
 		String prefix = topic + "-";
 		for (String s : api.subjects(cluster, false)) {
 			if (s.equals(topic + "-key")) {
@@ -77,6 +82,9 @@ public class SubjectTools {
 			}
 			else if (s.startsWith(prefix) && RECORD_NAME.matcher(s.substring(prefix.length())).matches()) {
 				matches.add(new String[] { s, "TopicRecordNameStrategy", s.substring(prefix.length()) });
+			}
+			else if (s.startsWith(prefix)) {
+				possible.add(s);
 			}
 		}
 		List<Map<String, Object>> rows = new ArrayList<>();
@@ -111,9 +119,19 @@ public class SubjectTools {
 			out.put("note", "İlk " + lookups + " subject'in son versiyonuna bakıldı; " + skipped
 					+ " subject için versiyon bilgisi atlandı (schemas_get ile bakın)");
 		}
-		if (rows.isEmpty()) {
+		if (!possible.isEmpty()) {
+			out.put("possibleMatchesCount", possible.size());
+			out.put("possibleMatches", possible.stream().limit(MAX_POSSIBLE_MATCHES).toList());
+			out.put("possibleMatchesNote", "'" + prefix + "' ile başlıyor ama kayıt adı Avro/Protobuf tam adı değil: "
+					+ "JSON Schema title'ından türemiş TopicRecordNameStrategy subject'i ya da adı '" + prefix
+					+ "' ile başlayan başka bir topic'in subject'i olabilir; versiyonlarına bakılmadı (schemas_get)");
+		}
+		if (rows.isEmpty() && possible.isEmpty()) {
 			out.put("message", "Bu topic için subject bulunamadı (" + topic + "-key, " + topic + "-value ya da " + topic
 					+ "-<KayıtAdı>). RecordNameStrategy kullanılıyorsa subject adı topic'ten bağımsızdır (subjects_list ile arayın).");
+		}
+		else if (rows.isEmpty()) {
+			out.put("message", "Kesin eşleşme yok; possibleMatches'teki subject'ler bu topic'e ait olabilir");
 		}
 		return out;
 	}

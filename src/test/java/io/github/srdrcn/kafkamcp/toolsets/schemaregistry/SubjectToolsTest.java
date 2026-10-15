@@ -15,6 +15,9 @@ import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 /** subjects_list, schemas_versions_list, subjects_for_topic ve özel karakterli subject'ler. */
 class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 
+	private static final String TITLED_JSON = """
+			{"title":"Order Created","type":"object","properties":{"id":{"type":"string"}}}""";
+
 	private static List<String> texts(JsonNode array) {
 		List<String> out = new ArrayList<>();
 		array.forEach(n -> out.add(n.asText()));
@@ -94,8 +97,10 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 		SrRest.register(topic + "-value", SrRest.V1);
 		SrRest.register(topic + "-value", SrRest.V2);
 		SrRest.register(topic + "-com.example.Order", SrRest.V1);
-		// başka topic'in (<topic>-v2) subject'i eşleşmemeli
+		// başka topic'in (<topic>-v2) subject'i kesin eşleşme sayılmamalı, olası eşleşme olarak raporlanmalı
 		SrRest.register(topic + "-v2-value", SrRest.V1);
+		// JSON Schema TopicRecordNameStrategy: kayıt adı title'dan gelir (boşluk/tire içerebilir)
+		SrRest.register(topic + "-Order Created", TITLED_JSON, "JSON");
 
 		JsonNode r = ok("subjects_for_topic", args("topic", topic));
 		assertThat(r.get("topic").asText()).isEqualTo(topic);
@@ -121,10 +126,22 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 			}
 		}
 		assertThat(subjects).containsExactlyInAnyOrder(topic + "-key", topic + "-value", topic + "-com.example.Order");
+		assertThat(r.get("possibleMatchesCount").asInt()).isEqualTo(2);
+		assertThat(texts(r.get("possibleMatches"))).containsExactly(topic + "-Order Created", topic + "-v2-value");
+		assertThat(r.get("possibleMatchesNote").asText()).contains("JSON Schema title");
+
+		// sadece olası eşleşme varsa "bulunamadı" denmez
+		String jsonTopic = unique("events");
+		SrRest.register(jsonTopic + "-order-created", TITLED_JSON, "JSON");
+		JsonNode onlyPossible = ok("subjects_for_topic", args("topic", jsonTopic));
+		assertThat(onlyPossible.get("found").asInt()).isZero();
+		assertThat(texts(onlyPossible.get("possibleMatches"))).containsExactly(jsonTopic + "-order-created");
+		assertThat(onlyPossible.get("message").asText()).contains("possibleMatches").doesNotContain("bulunamadı");
 
 		JsonNode none = ok("subjects_for_topic", args("topic", unique("nosubject")));
 		assertThat(none.get("found").asInt()).isZero();
 		assertThat(none.get("message").asText()).contains("bulunamadı");
+		assertThat(none.has("possibleMatches")).isFalse();
 	}
 
 	@Test

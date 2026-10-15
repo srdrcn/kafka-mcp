@@ -75,11 +75,7 @@ public class CompatibilityTools {
 			r = api.checkCompatibility(cluster, subject, version, in);
 		}
 		catch (SchemaRegistryException e) {
-			if (e.status() == 422) {
-				throw new ToolException("Geçersiz şema (422" + (e.errorCode() > 0 ? "/" + e.errorCode() : "") + "): "
-						+ SchemaTools.cleanSrMessage(e.srMessage()), e);
-			}
-			throw e;
+			throw SchemaTools.invalidSchemaError(e);
 		}
 		if (!r.compatible()) {
 			// SR 7.x geçersiz şemada 422 yerine is_compatible=false + "Invalid schema ..." mesajı döner
