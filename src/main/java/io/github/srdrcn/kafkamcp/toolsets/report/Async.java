@@ -15,8 +15,9 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 
 /**
- * Yan işi (REST çağrısı, bağımsız admin zinciri) sanal thread'de başlatır; sonucu deadline'dan pay bırakarak
- * bekler. Yetişmezse iş iptal edilir ve {@link Settled#timedOut()} sonucu döner; araç düşmez.
+ * Starts a side task (REST call, independent admin chain) on a virtual thread and waits for its result while
+ * keeping a margin before the deadline. If it does not finish in time, the task is cancelled and a
+ * {@link Settled#timedOut()} result is returned; the tool does not fail.
  */
 public final class Async<T> {
 
@@ -28,12 +29,12 @@ public final class Async<T> {
 		this.future = future;
 	}
 
-	/** İşi hemen başlatır. */
+	/** Starts the task immediately. */
 	public static <T> Async<T> start(Callable<T> task) {
 		return new Async<>(POOL.submit(task));
 	}
 
-	/** En fazla (kalan süre - reserveMillis) bekler; hata/zaman aşımı sonuçta taşınır. */
+	/** Waits at most (remaining time - reserveMillis); errors/timeouts are carried in the result. */
 	public Settled<T> await(ToolCall call, long reserveMillis) {
 		long wait = Math.max(1, call.waitMillis() - reserveMillis);
 		try {
@@ -49,11 +50,11 @@ public final class Async<T> {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 
-	/** Hata mesajı: ToolException ise olduğu gibi, değilse Kafka hata açıklaması. */
+	/** Error message: a ToolException's message as is, otherwise the Kafka error explanation. */
 	public static String message(Settled<?> s) {
 		if (s == null || s.ok()) {
 			return null;

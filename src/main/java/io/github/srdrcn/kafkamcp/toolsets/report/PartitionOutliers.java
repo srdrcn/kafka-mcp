@@ -19,37 +19,37 @@ import io.github.srdrcn.kafkamcp.kafka.LogDirs;
 import io.github.srdrcn.kafkamcp.kafka.Topics;
 
 /**
- * Partition aykırılıkları (saf hesap, test edilebilir): cluster medyanının çok üstünde partition sayısı,
- * topic içinde ortalamanın çok üstünde boyutlu partition'lar (skew) ve broker başına lider dengesizliği.
+ * Partition outliers (pure computation, testable): partition counts far above the cluster median, partitions far
+ * above the topic's average size (skew) and leader imbalance per broker.
  */
 public final class PartitionOutliers {
 
 	private PartitionOutliers() {
 	}
 
-	/** Eşikler: medyan katı ve en az partition, skew katı ve en küçük boyut, lider sapma yüzdesi. */
+	/** Thresholds: median multiple and minimum partitions, skew multiple and minimum size, leader deviation (%). */
 	public record Thresholds(int partitionFactor, int minPartitions, int skewFactor, long minSizeBytes,
 			int leaderImbalancePct) {
 	}
 
-	/** Partition sayısı aykırı topic. */
+	/** Topic with an outlier partition count. */
 	public record CountOutlier(String topic, int partitions, double timesMedian) {
 	}
 
-	/** Ortalamanın çok üstündeki partition. */
+	/** Partition far above the average size. */
 	public record SkewedPartition(int partition, long sizeBytes, double timesAverage) {
 	}
 
-	/** Skew'li topic: ortalama partition boyutu ve aykırı partition'lar (boyuta göre azalan). */
+	/** Skewed topic: average partition size and the outlier partitions (by size, descending). */
 	public record SkewedTopic(String topic, int partitions, long averageBytes, List<SkewedPartition> skewed) {
 	}
 
-	/** Broker yükü: lider/replika sayısı, tercih edilmeyen lider sayısı, ortalamadan sapma (%). */
+	/** Broker load: leader/replica counts, non-preferred leader count, deviation from the average (%). */
 	public record BrokerLoad(int id, int leaders, int replicas, int nonPreferredLeaders, double deviationPct,
 			boolean imbalanced) {
 	}
 
-	/** Medyan (boşsa 0). */
+	/** Median (0 if empty). */
 	public static double median(Collection<Integer> values) {
 		if (values.isEmpty()) {
 			return 0;
@@ -60,7 +60,7 @@ public final class PartitionOutliers {
 		return n % 2 == 1 ? sorted.get(n / 2) : (sorted.get(n / 2 - 1) + sorted.get(n / 2)) / 2.0;
 	}
 
-	/** partitions &gt; factor × medyan ve &gt; minPartitions olan topic'ler (partition sayısına göre azalan). */
+	/** Topics with partitions &gt; factor * median and &gt; minPartitions (by partition count, descending). */
 	public static List<CountOutlier> countOutliers(Map<String, Integer> partitionsByTopic, double median,
 			Thresholds th) {
 		List<CountOutlier> out = new ArrayList<>();
@@ -74,8 +74,8 @@ public final class PartitionOutliers {
 	}
 
 	/**
-	 * Boyutu topic ortalamasının skewFactor katından büyük ve en az minSizeBytes olan partition'lar. Boyutu
-	 * bilinen en az iki partition'ı olan topic'ler incelenir.
+	 * Partitions larger than skewFactor times the topic average and at least minSizeBytes. Only topics with at
+	 * least two partitions of known size are examined.
 	 */
 	public static List<SkewedTopic> skew(Collection<TopicDescription> topics,
 			Map<TopicPartition, LogDirs.PartitionSize> sizes, Thresholds th) {
@@ -110,8 +110,8 @@ public final class PartitionOutliers {
 	}
 
 	/**
-	 * Broker başına lider/replika sayıları ve ortalamadan sapma. Broker kümesi: verilen canlı broker'lar ve
-	 * replika listelerinde geçenler (lideri hiç olmayan broker -100% sapma görünür).
+	 * Leader/replica counts per broker and the deviation from the average. Broker set: the given live brokers plus
+	 * those in replica lists (a broker without leaders shows a -100% deviation).
 	 */
 	public static List<BrokerLoad> leaderBalance(Collection<TopicDescription> topics, Collection<Integer> brokerIds,
 			int imbalancePct) {

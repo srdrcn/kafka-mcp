@@ -16,9 +16,9 @@ class NameSimilarityTest {
 		assertThat(NameSimilarity.normalize("prod.payments.orders.v1")).isEqualTo("payments.orders");
 		assertThat(NameSimilarity.normalize("payments_orders.v10.stg")).isEqualTo("payments.orders");
 		assertThat(NameSimilarity.normalize("dev-orders")).isEqualTo("orders");
-		// sürüm sadece sonda atılır; ortam token'ı olmayan "testing" korunur
+		// versions are only dropped at the end; "testing" is not an environment token and is kept
 		assertThat(NameSimilarity.normalize("v1.orders.testing")).isEqualTo("v1.orders.testing");
-		// hepsi atılırsa küçük harfli ad
+		// if everything is dropped, the lower-case name
 		assertThat(NameSimilarity.normalize("TEST")).isEqualTo("test");
 	}
 
@@ -54,7 +54,7 @@ class NameSimilarityTest {
 			.containsExactly("inventory-evnts", "orders.custmer");
 		assertThat(s.pairs().get(1).b()).isEqualTo("orders.customer");
 		assertThat(s.pairs().get(1).distance()).isEqualTo(1);
-		// sadece rakamları farklı çiftler kaybolmaz: adlarıyla ayrı listede
+		// pairs that differ only in digits are not lost: they are listed separately by name
 		assertThat(s.numericVariants()).isEqualTo(3);
 		assertThat(s.numericPairs()).extracting(p -> p.a() + "/" + p.b())
 			.containsExactly("events-2023/events-2024", "payments.v1.events/payments.v2.events", "shard-01/shard-02");

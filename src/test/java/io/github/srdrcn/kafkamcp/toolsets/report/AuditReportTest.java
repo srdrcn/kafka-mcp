@@ -9,7 +9,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** report_replication_audit, report_retention_audit, report_partition_outliers (KRaft ve ZooKeeper). */
+/** report_replication_audit, report_retention_audit, report_partition_outliers (KRaft and ZooKeeper). */
 class AuditReportTest extends ReportTestBase {
 
 	@ParameterizedTest(name = "zk={0}")
@@ -45,12 +45,12 @@ class AuditReportTest extends ReportTestBase {
 		assertThat(election.at("/items/0/source").asText()).isEqualTo("topic");
 		assertThat(find(findings, "check", "under_replicated").isMissingNode()).isTrue();
 		assertThat(find(findings, "check", "offline_partitions").isMissingNode()).isTrue();
-		// önem sırası: critical önce
+		// severity order: critical first
 		assertThat(findings.get(0).get("severity").asText()).isEqualTo("critical");
 		assertThat(r.at("/bySeverity/critical").asInt()).isEqualTo(1);
 		assertThat(r.get("findingsTotal").asInt()).isEqualTo(5);
 
-		// öğe sınırı: kalan sayı belirtilir
+		// item limit: the remaining count is reported
 		JsonNode limited = ok("report_replication_audit", on(zk, "filter", p, "limit", 1));
 		JsonNode rf1Limited = find(limited.get("findings"), "check", "replication_factor_1");
 		assertThat(rf1Limited.get("items").size()).isEqualTo(1);
@@ -100,7 +100,7 @@ class AuditReportTest extends ReportTestBase {
 		assertThat(texts(shortSeg.get("items"), "topic")).containsExactly(segments);
 		assertThat(r.get("notes").toString()).contains("topic override");
 
-		// varsayılan eşik (10 GiB): küçük sınırsız topic sadece bilgi
+		// default threshold (10 GiB): a small topic with infinite retention is info only
 		JsonNode def = ok("report_retention_audit", on(zk, "filter", p));
 		assertThat(find(def.get("findings"), "check", "infinite_retention_large").isMissingNode()).isTrue();
 		JsonNode info = find(def.get("findings"), "check", "infinite_retention");
@@ -137,7 +137,7 @@ class AuditReportTest extends ReportTestBase {
 		assertThat(brokers.get(0).get("deviationPct").asDouble()).isZero();
 		assertThat(r.at("/leaderBalance/imbalancedBrokers").size()).isZero();
 
-		// varsayılan minSizeMb=1: 300 KB'lık skew raporlanmaz; eşik parametreleri yansıtılır
+		// default minSizeMb=1: a 300 KB skew is not reported; threshold parameters are echoed
 		JsonNode def = ok("report_partition_outliers", on(zk, "filter", p, "minPartitions", 100));
 		assertThat(def.at("/skewedTopics/total").asInt()).isZero();
 		assertThat(def.at("/partitionCountOutliers/total").asInt()).isZero();

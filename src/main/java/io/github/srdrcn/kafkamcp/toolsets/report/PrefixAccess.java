@@ -18,9 +18,9 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.toolsets.acl.Acls;
 
 /**
- * Bir topic önekine (takım ad alanına) TOPIC ACL'i olan principal'lar: LITERAL (önekli topic adı), PREFIXED
- * (daha geniş ya da daha dar önek) ve LITERAL "*" binding'leri; principal + izin başına işlemler ve kapsanan
- * topic sayısı.
+ * Principals with TOPIC ACLs on a topic prefix (team namespace): LITERAL (topic name with the prefix), PREFIXED
+ * (broader or narrower prefix) and LITERAL "*" bindings; operations per principal + permission and the number of
+ * covered topics.
  */
 public final class PrefixAccess {
 
@@ -29,7 +29,7 @@ public final class PrefixAccess {
 	private PrefixAccess() {
 	}
 
-	/** Binding önek ad alanıyla ilgili mi; ilgiliyse kapsadığı topic'ler (yoksa null). */
+	/** Topics covered by the binding if it concerns the prefix namespace, otherwise null. */
 	static Set<String> covered(ResourcePattern p, String prefix, Collection<String> topics) {
 		if (p.resourceType() != ResourceType.TOPIC) {
 			return null;
@@ -59,7 +59,7 @@ public final class PrefixAccess {
 		return null;
 	}
 
-	/** Principal + izin başına satırlar: işlemler, kapsanan topic sayısı, desenler (sıralı). */
+	/** Rows per principal + permission: operations, covered topic count, patterns (sorted). */
 	public static List<Map<String, Object>> principals(Collection<AclBinding> bindings, String prefix,
 			Collection<String> topics) {
 		record Key(String principal, String permission) {

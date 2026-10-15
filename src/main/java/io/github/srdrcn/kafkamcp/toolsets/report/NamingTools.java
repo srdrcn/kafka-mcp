@@ -17,11 +17,11 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Adlandırma raporları: kurala uymayan topic'ler ve birbirine çok benzeyen (kopya şüpheli) topic adları. */
+/** Naming reports: topics that break the naming rule and very similar (suspected duplicate) topic names. */
 @Component
 public class NamingTools {
 
-	/** Levenshtein çiftleri için en fazla mesafe ve en kısa ad. */
+	/** Maximum distance and minimum name length for Levenshtein pairs. */
 	static final int MAX_DISTANCE = 2;
 
 	static final int MIN_LENGTH = 8;
@@ -31,19 +31,19 @@ public class NamingTools {
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("report_naming_check",
-						"Adlandırma kuralına (tam eşleşen regex) uymayan topic'ler, sayıları ve en sık önekleri")
-					.required("pattern", P.string("Topic adının tamamıyla eşleşmesi gereken regex (ör. [a-z]+\\.[a-z0-9-]+\\.v[0-9]+)"))
+						"Topics that do not match a naming rule (full-match regex), with counts and the most common prefixes")
+					.required("pattern", P.string("Regex the whole topic name must match (e.g. [a-z]+\\.[a-z0-9-]+\\.v[0-9]+)"))
 					.param("includeInternal", ReportParams.includeInternal(false))
 					.listParams()
 					.handler(this::namingCheck),
 				ToolSpec.read("report_duplicate_like_topics",
-						"Kopya şüpheli topic adları: normalize edilince çakışan gruplar ve Levenshtein mesafesi ≤ 2 çiftler")
+						"Suspected duplicate topic names: groups that collide after normalization and pairs with Levenshtein distance ≤ 2")
 					.param("includeInternal", ReportParams.includeInternal(false))
 					.listParams(50)
 					.handler(this::duplicateLikeTopics));
 	}
 
-	/** listTopics: filtreye uyan (ve iç/sistem hariç tutulduysa onlar hariç) adlar; kapsam bilgisini doldurur. */
+	/** listTopics: names matching the filter (without internal/system topics unless included); fills in the coverage. */
 	static List<String> names(ToolCall call, boolean includeInternal, Coverage coverage) {
 		Map<String, Boolean> listing = Topics.list(call, true);
 		List<String> out = new ArrayList<>();
@@ -69,7 +69,7 @@ public class NamingTools {
 	Object namingCheck(ToolCall call) {
 		Pattern pattern = call.regex("pattern");
 		if (pattern == null) {
-			throw new io.github.srdrcn.kafkamcp.mcp.ToolException("Parametre eksik: pattern");
+			throw new io.github.srdrcn.kafkamcp.mcp.ToolException("Missing parameter: pattern");
 		}
 		Coverage coverage = new Coverage();
 		List<String> names = names(call, call.bool("includeInternal", false), coverage);
@@ -85,7 +85,7 @@ public class NamingTools {
 		prefixes.sort(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()));
 		Map<String, Integer> topPrefixes = new LinkedHashMap<>();
 		ReportParams.head(prefixes, 10).forEach(e -> topPrefixes.put(e.getKey(), e.getValue()));
-		Map<String, Object> out = Results.map("pattern", pattern.pattern(), "match", "tam ad (matches)", "matching",
+		Map<String, Object> out = Results.map("pattern", pattern.pattern(), "match", "full name (matches)", "matching",
 				names.size() - bad.size(), "nonMatching", bad.size(), "nonMatchingPct",
 				names.isEmpty() ? 0.0 : Format.round(100.0 * bad.size() / names.size(), 1), "nonMatchingByFirstToken",
 				topPrefixes.isEmpty() ? null : topPrefixes, "firstTokensOmitted",
@@ -113,11 +113,11 @@ public class NamingTools {
 		}
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("rules", Results.map("normalize",
-				"küçük harf; - _ . aynı ayraç; ortam token'ları (" + String.join("|", new java.util.TreeSet<>(NameSimilarity.ENV_TOKENS))
-						+ ") ve sondaki sürüm ekleri (v1, v2...) atılır",
-				"similar", "Levenshtein ≤ " + MAX_DISTANCE + ", ad ≥ " + MIN_LENGTH
-						+ " karakter; aynı gruptakiler hariç, sadece rakamları farklı olanlar (ör. shard-01/shard-02, "
-						+ "x.v1.y/x.v2.y) numericVariants altında"));
+				"lower case; - _ . are the same separator; environment tokens (" + String.join("|", new java.util.TreeSet<>(NameSimilarity.ENV_TOKENS))
+						+ ") and trailing version suffixes (v1, v2...) are dropped",
+				"similar", "Levenshtein ≤ " + MAX_DISTANCE + ", name ≥ " + MIN_LENGTH
+						+ " characters; names in the same collision group are excluded; pairs that differ only in digits "
+						+ "(e.g. shard-01/shard-02, x.v1.y/x.v2.y) are under numericVariants"));
 		out.put("collisionGroups", ReportParams.page("groups", groups, limit));
 		Map<String, Object> sim = ReportParams.page("pairs", pairs, limit);
 		sim.put("comparisons", similar.comparisons());
@@ -131,12 +131,12 @@ public class NamingTools {
 		}
 		if (similar.capped()) {
 			sim.put("capped", true);
-			coverage.note("Benzer çift sayısı " + NameSimilarity.MAX_PAIRS + " sınırına ulaştı; tarama durduruldu");
+			coverage.note("Similar pairs reached the limit of " + NameSimilarity.MAX_PAIRS + "; scan stopped");
 			coverage.partial();
 		}
 		if (similar.partial()) {
 			coverage.partial();
-			coverage.note("Süre doldu: benzer çift taraması yarım kaldı");
+			coverage.note("Time ran out: the similar pair scan is incomplete");
 		}
 		out.put("similarPairs", sim);
 		coverage.addTo(out);

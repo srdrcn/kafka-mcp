@@ -14,7 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.ConnectIntegrationTest;
 
-/** Connect'li cluster: özette connector sayıları, takım envanterinde topic'lere referans veren connector'lar. */
+/** Cluster with Connect: connector counts in the summary, connectors referencing the topics in the team inventory. */
 class ConnectReportTest extends ConnectIntegrationTest {
 
 	static final String FILE_SINK = "org.apache.kafka.connect.file.FileStreamSinkConnector";
@@ -71,10 +71,10 @@ class ConnectReportTest extends ConnectIntegrationTest {
 				}
 			}
 			catch (IllegalStateException e) {
-				// henüz yok
+				// not there yet
 			}
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("görev " + state + " olmadı: " + name);
+				throw new IllegalStateException("task did not reach " + state + ": " + name);
 			}
 			Thread.sleep(300);
 		}
@@ -86,7 +86,7 @@ class ConnectReportTest extends ConnectIntegrationTest {
 				return n;
 			}
 		}
-		throw new AssertionError("satır yok: " + name);
+		throw new AssertionError("no row: " + name);
 	}
 
 	private static List<String> texts(JsonNode array) {

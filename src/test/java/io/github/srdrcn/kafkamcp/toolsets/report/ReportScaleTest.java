@@ -16,8 +16,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 
 /**
- * Ölçek testi: tek createTopics ile ~300 topic; ağır raporlar zaman sınırı içinde biter, incelenen sayıları
- * bildirir ve kırpılan listeleri açıkça işaretler.
+ * Scale test: ~300 topics via a single createTopics; heavy reports finish within the time limit, report the
+ * examined counts and flag truncated lists explicitly.
  */
 class ReportScaleTest extends ReportTestBase {
 
@@ -47,12 +47,12 @@ class ReportScaleTest extends ReportTestBase {
 		}
 	}
 
-	/** Aracı çağırır; sürenin araç sınırının (15 sn) altında kaldığını doğrular. */
+	/** Calls the tool and checks that it stays under the tool time limit (15 s). */
 	private JsonNode timed(String tool, Map<String, Object> args) {
 		long t0 = System.nanoTime();
 		JsonNode r = ok(tool, args);
 		long ms = (System.nanoTime() - t0) / 1_000_000;
-		assertThat(ms).as("%s süresi", tool).isLessThan(KafkaClients.TIMEOUT_MS);
+		assertThat(ms).as("%s duration", tool).isLessThan(KafkaClients.TIMEOUT_MS);
 		assertThat(r.has("partial")).as("%s partial", tool).isFalse();
 		return r;
 	}

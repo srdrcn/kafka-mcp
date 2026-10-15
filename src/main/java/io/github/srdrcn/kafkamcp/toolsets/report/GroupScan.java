@@ -16,13 +16,13 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.ConsumerGroups;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag;
 
 /**
- * Consumer group'ların toplu taraması: tek listGroups ve en fazla {@code maxGroups} grup için tek
- * listConsumerGroupOffsets (grubun tüm partition'ları). Sınır aşılırsa önce aktif (Stable/rebalance), sonra
- * Empty gruplar seçilir; atlananlar sayılır ({@link #skipped()}).
+ * Batched scan of consumer groups: one listGroups and one listConsumerGroupOffsets for at most
+ * {@code maxGroups} groups (all partitions of each group). Over the limit, active (Stable/rebalancing) groups are
+ * picked first, then Empty ones; the rest are counted ({@link #skipped()}).
  */
 public final class GroupScan {
 
-	/** Commit'li offset'leri okunan en fazla grup sayısı (toplu tek istek). */
+	/** Maximum number of groups whose committed offsets are read (one batched request). */
 	public static final int MAX_GROUPS = 1000;
 
 	private final List<ConsumerGroups.GroupSummary> listed;
@@ -42,8 +42,8 @@ public final class GroupScan {
 	}
 
 	/**
-	 * Grupları listeler ve seçilenlerin commit'li offset'lerini okur. İki adım da deadline'dan
-	 * {@code reserveMillis} pay bırakır; yanıt vermeyen gruplar {@link GroupLag.Committed#timedOut()} olur.
+	 * Lists the groups and reads the committed offsets of the selected ones. Both steps keep {@code reserveMillis}
+	 * before the deadline; groups that do not respond become {@link GroupLag.Committed#timedOut()}.
 	 */
 	public static GroupScan run(ToolCall call, int maxGroups, long reserveMillis) {
 		ConsumerGroups.GroupList list = ConsumerGroups.list(call, reserveMillis + 1_000);
@@ -61,7 +61,7 @@ public final class GroupScan {
 		return new GroupScan(list.groups(), list.errors(), committed, ordered.size() - selected.size());
 	}
 
-	/** Örnekleme önceliği: aktif gruplar önce, sonra Empty, en son Dead/bilinmeyen. */
+	/** Sampling priority: active groups first, then Empty, Dead/unknown last. */
 	static int priority(String state) {
 		if (state == null) {
 			return 3;
@@ -74,39 +74,39 @@ public final class GroupScan {
 		};
 	}
 
-	/** Listelenen tüm gruplar (groupId sırasıyla). */
+	/** All listed groups (by groupId). */
 	public List<ConsumerGroups.GroupSummary> listed() {
 		return listed;
 	}
 
-	/** listGroups'ta hata veren broker'ların mesajları (doluysa liste eksik olabilir). */
+	/** Messages of the brokers that failed listGroups (if any, the list may be incomplete). */
 	public List<String> listErrors() {
 		return listErrors;
 	}
 
-	/** Offset'i istenen gruplar ve sonuçları (grup bazında hata/timedOut dahil). */
+	/** Groups whose offsets were requested and their results (including per-group error/timedOut). */
 	public Map<String, GroupLag.Committed> committed() {
 		return committed;
 	}
 
-	/** Sınır nedeniyle offset'i okunmayan grup sayısı. */
+	/** Number of groups whose offsets were not read because of the limit. */
 	public int skipped() {
 		return skipped;
 	}
 
-	/** Grup id → durum (Stable, Empty, ...; bilinmiyorsa null değer). */
+	/** Group id → state (Stable, Empty, ...; null value if unknown). */
 	public Map<String, String> states() {
 		Map<String, String> out = new LinkedHashMap<>();
 		listed.forEach(g -> out.put(g.groupId(), g.state()));
 		return out;
 	}
 
-	/** Offset'leri yanıtsız kalan grup sayısı. */
+	/** Number of groups whose offset request got no response. */
 	public int timedOut() {
 		return (int) committed.values().stream().filter(GroupLag.Committed::timedOut).count();
 	}
 
-	/** Offset'leri hata veren (yanıtsız ya da arada silinmiş olmayan) grup sayısı. */
+	/** Number of groups whose offsets failed (other than no response or deleted in the meantime). */
 	public int failed() {
 		return (int) committed.values()
 			.stream()
@@ -114,12 +114,12 @@ public final class GroupScan {
 			.count();
 	}
 
-	/** Tüm gruplar listelendi ve hepsinin offset'i okundu mu? */
+	/** Were all groups listed and all their offsets read? */
 	public boolean complete() {
 		return skipped == 0 && listErrors.isEmpty() && timedOut() == 0 && failed() == 0;
 	}
 
-	/** Grup → commit'li offset'ler (sadece başarılı okunanlar; offset'siz partition'lar hariç). */
+	/** Group → committed offsets (successful reads only; partitions without offsets excluded). */
 	public Map<String, Map<TopicPartition, Long>> offsets() {
 		Map<String, Map<TopicPartition, Long>> out = new TreeMap<>();
 		committed.forEach((g, c) -> {
@@ -130,7 +130,7 @@ public final class GroupScan {
 		return out;
 	}
 
-	/** Topic → o topic'te commit'li offset'i olan gruplar (sıralı). */
+	/** Topic → groups with committed offsets on that topic (sorted). */
 	public Map<String, Set<String>> groupsByTopic() {
 		Map<String, Set<String>> out = new TreeMap<>();
 		offsets().forEach((g, offsets) -> {
@@ -141,21 +141,21 @@ public final class GroupScan {
 		return out;
 	}
 
-	/** Commit'li offset'lerin dokunduğu tüm partition'lar. */
+	/** All partitions touched by committed offsets. */
 	public Set<TopicPartition> committedPartitions() {
 		Set<TopicPartition> out = new java.util.HashSet<>();
 		offsets().values().forEach(m -> out.addAll(m.keySet()));
 		return out;
 	}
 
-	/** Kapsam bilgisini ekler: incelenen/atlanan grup sayıları, örnekleme ve hatalar. */
+	/** Adds the coverage info: examined/skipped group counts, sampling and errors. */
 	public void describe(Coverage coverage) {
 		coverage.examined("groups", committed.size());
 		coverage.skipped("groupsOverLimit", skipped);
 		if (skipped > 0) {
 			coverage.sampled();
-			coverage.note("Grup sayısı " + listed.size() + " > " + committed.size()
-					+ ": sadece öncelikli (aktif, sonra Empty) gruplar incelendi");
+			coverage.note("Group count " + listed.size() + " > " + committed.size()
+					+ ": only priority groups (active, then Empty) were examined");
 		}
 		int timedOut = timedOut();
 		if (timedOut > 0) {

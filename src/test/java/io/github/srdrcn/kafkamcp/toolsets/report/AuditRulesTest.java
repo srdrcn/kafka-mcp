@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import io.github.srdrcn.kafkamcp.kafka.LogDirs;
 import io.github.srdrcn.kafkamcp.kafka.Topics;
 
-/** Replikasyon/retention denetimi ve partition aykırılık kuralları (sentetik metadata ile, broker'sız). */
+/** Replication/retention audit and partition outlier rules (synthetic metadata, no broker). */
 class AuditRulesTest {
 
 	static Node node(int id) {
@@ -49,7 +49,7 @@ class AuditRulesTest {
 		return new ConfigEntry(name, value, source, false, false, List.of(), ConfigEntry.ConfigType.UNKNOWN, null);
 	}
 
-	/** overrides: topic override'ları; defaults: Kafka varsayılanları. */
+	/** overrides: topic overrides; defaults: Kafka defaults. */
 	static Config config(Map<String, String> overrides, Map<String, String> defaults) {
 		List<ConfigEntry> entries = new ArrayList<>();
 		defaults.forEach((k, v) -> {
@@ -124,9 +124,9 @@ class AuditRulesTest {
 	void underMinIsrUsesTheEffectiveMinIsrCappedByReplicaCount() {
 		int[] r12 = { 1, 2 };
 		Map<String, TopicDescription> topics = new TreeMap<>();
-		// RF=1, min.insync=2: broker min ISR'ı 1'e indirir, yazılabilir (min ISR altı değil, RF üstü)
+		// RF=1, min.insync=2: the broker caps min ISR at 1, writable (not under min ISR, but above RF)
 		topics.put("single", topic("single", part(0, 1, new int[] { 1 }, 1)));
-		// RF=2, min.insync=3, 4 partition, sadece biri URP: sadece o partition etkin min ISR (2) altında
+		// RF=2, min.insync=3, 4 partitions, only one URP: only that partition is below the effective min ISR (2)
 		topics.put("above", topic("above", part(0, 1, r12, 1), part(1, 1, r12, 1, 2), part(2, 2, r12, 1, 2),
 				part(3, 2, r12, 1, 2)));
 		topics.put("normal", topic("normal", part(0, 1, new int[] { 1, 2, 3 }, 1), part(1, -1, new int[] { 1, 2, 3 })));
@@ -138,19 +138,19 @@ class AuditRulesTest {
 
 		ReplicationAudit.MinIsrCounts counts = ReplicationAudit.minIsrCounts(topics.values(), configs,
 				Topics.Reassignments.NONE);
-		// above/0 ve normal/0; offline partition sayılmaz
+		// above/0 and normal/0; offline partitions are not counted
 		assertThat(counts.underMinIsrPartitions()).isEqualTo(2);
 		assertThat(counts.aboveRfTopics()).isEqualTo(2);
 		assertThat(counts.unknownTopics()).isEqualTo(1);
 
-		// denetim aynı kuralı kullanır: özet ile çelişmez
+		// the audit uses the same rule: it does not contradict the summary
 		Findings f = replication(topics, configs, null, Map.of(), Topics.Reassignments.NONE);
 		assertThat(topicsOf(f, "under_min_isr")).containsExactly("above", "normal");
 		assertThat(f.items("under_min_isr").get(0)).containsEntry("partitions", List.of(0));
 		assertThat(topicsOf(f, "min_isr_above_rf")).containsExactly("above", "single");
 		assertThat(f.render()).filteredOn(m -> m.get("check").equals("min_isr_above_rf"))
 			.singleElement()
-			.satisfies(m -> assertThat(m.get("message").toString()).contains("eski broker"));
+			.satisfies(m -> assertThat(m.get("message").toString()).contains("older brokers"));
 	}
 
 	@Test
@@ -182,7 +182,7 @@ class AuditRulesTest {
 		RetentionAudit.evaluate("segments", config(Map.of("segment.bytes", "1048576", "segment.ms", "60000"), DEFAULTS),
 				null, false, 1, th, f);
 		RetentionAudit.evaluate("fine", config(Map.of(), DEFAULTS), 10L, true, 1, th, f);
-		// boyutu bilinmeyen ya da eksik (alt sınır) sınırsız topic "küçük" sayılmaz
+		// an infinite-retention topic of unknown or incomplete (lower bound) size is not considered "small"
 		RetentionAudit.evaluate("unknown", config(Map.of("retention.ms", "-1"), DEFAULTS), null, false, 1, th, f);
 		RetentionAudit.evaluate("partial", config(Map.of("retention.ms", "-1"), DEFAULTS), 2048L, false, 1, th, f);
 		RetentionAudit.evaluate("partialBig", config(Map.of("retention.ms", "-1"), DEFAULTS), 30L << 30, false, 1, th,

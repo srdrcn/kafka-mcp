@@ -24,8 +24,8 @@ import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * report testleri için ortak hazırlık: KRaft ({@code test}) ve ZooKeeper ({@code zk}) cluster'larında topic,
- * eski/yeni zaman damgalı veri ve commit'li consumer group'lar.
+ * Shared setup for the report tests: topics, data with old/new timestamps and committed consumer groups on the
+ * KRaft ({@code test}) and ZooKeeper ({@code zk}) clusters.
  */
 abstract class ReportTestBase extends MixedClusterIntegrationTest {
 
@@ -35,12 +35,12 @@ abstract class ReportTestBase extends MixedClusterIntegrationTest {
 
 	private static KafkaProducer<byte[], byte[]> zkProducer;
 
-	/** Hazırlık için cluster'a göre admin (test ya da zk). */
+	/** Admin for the setup, per cluster (test or zk). */
 	static Admin admin(boolean zk) {
 		return zk ? zkAdmin() : testAdmin();
 	}
 
-	/** Araç argümanları; zk true ise cluster=zk. */
+	/** Tool arguments; cluster=zk if zk is true. */
 	static Map<String, Object> on(boolean zk, Object... keyValues) {
 		return zk ? zkArgs(keyValues) : args(keyValues);
 	}
@@ -72,7 +72,7 @@ abstract class ReportTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** Topic oluşturur (RF=1) ve tüm partition'ların lideri gelene kadar bekler. */
+	/** Creates a topic (RF=1) and waits until all partitions have a leader. */
 	static void createTopic(boolean zk, String name, int partitions, Map<String, String> configs) throws Exception {
 		createTopics(zk, List.of(new NewTopic(name, partitions, (short) 1).configs(configs)));
 	}
@@ -93,21 +93,21 @@ abstract class ReportTestBase extends MixedClusterIntegrationTest {
 				}
 			}
 			catch (Exception e) {
-				// henüz görünmüyor
+				// not visible yet
 			}
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("topic'ler hazır olmadı: " + names);
+				throw new IllegalStateException("topics did not become ready: " + names);
 			}
 			Thread.sleep(200);
 		}
 	}
 
-	/** Partition'a count kayıt yazar; timestamp null ise broker/producer zamanı. */
+	/** Writes count records to the partition; a null timestamp means broker/producer time. */
 	static void produce(boolean zk, String topic, int partition, int count, Long timestamp) throws Exception {
 		produce(zk, topic, partition, count, timestamp, 10);
 	}
 
-	/** Partition'a count kayıt yazar (her biri valueSize bayt). */
+	/** Writes count records to the partition (valueSize bytes each). */
 	static void produce(boolean zk, String topic, int partition, int count, Long timestamp, int valueSize)
 			throws Exception {
 		KafkaProducer<byte[], byte[]> p = producer(zk);
@@ -122,23 +122,23 @@ abstract class ReportTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** Grubun topic/partition'daki offset'ini commit eder (grup yoksa Empty durumda oluşur). */
+	/** Commits the group's offset on the topic/partition (a missing group is created in the Empty state). */
 	static void commit(boolean zk, String group, String topic, int partition, long offset) throws Exception {
 		admin(zk).alterConsumerGroupOffsets(group, Map.of(new TopicPartition(topic, partition),
 				new OffsetAndMetadata(offset))).all().get(30, TimeUnit.SECONDS);
 	}
 
-	/** Topic'leri sessizce siler (temizlik). */
+	/** Deletes topics quietly (cleanup). */
 	static void deleteTopicsQuietly(boolean zk, List<String> topics) {
 		try {
 			admin(zk).deleteTopics(topics).all().get(60, TimeUnit.SECONDS);
 		}
 		catch (Exception ignored) {
-			// temizlik
+			// cleanup
 		}
 	}
 
-	/** Dizideki öğelerin bir alanının metin değerleri. */
+	/** Text values of one field of the array items. */
 	static List<String> texts(JsonNode array, String field) {
 		List<String> out = new ArrayList<>();
 		if (array != null) {
@@ -147,7 +147,7 @@ abstract class ReportTestBase extends MixedClusterIntegrationTest {
 		return out;
 	}
 
-	/** Dizide alanı verilen değere eşit ilk öğe; yoksa MissingNode. */
+	/** First array item whose field equals the value; MissingNode if none. */
 	static JsonNode find(JsonNode array, String field, String value) {
 		if (array != null) {
 			for (JsonNode n : array) {

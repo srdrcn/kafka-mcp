@@ -20,9 +20,9 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.toolsets.acl.Acls;
 
 /**
- * Temizlik adayı kuralları (saf hesap, test edilebilir): topic (boş/boşta/consumer'sız), Empty consumer group
- * (silinmiş topic'lerde offset, offset'siz ya da lag'siz ve topic'leri boşta) ve sahipsiz LITERAL ACL'ler.
- * Her aday nedenler ve risk ipucuyla (low/medium/high) döner; hiçbir şey silinmez.
+ * Cleanup candidate rules (pure computation, testable): topics (empty/idle/without consumers), Empty consumer
+ * groups (offsets on deleted topics, no offsets, or no lag with idle topics) and orphan LITERAL ACLs. Every
+ * candidate comes with reasons and a risk hint (low/medium/high); nothing is deleted.
  */
 public final class CleanupRules {
 
@@ -37,7 +37,7 @@ public final class CleanupRules {
 	private CleanupRules() {
 	}
 
-	/** Temizlik adayı: tip (topic/group/acl), ad, nedenler, risk ve kısa ayrıntılar. */
+	/** Cleanup candidate: type (topic/group/acl), name, reasons, risk and short details. */
 	public record Candidate(String type, String name, List<String> reasons, String risk, Map<String, Object> details) {
 
 		public Map<String, Object> toMap() {
@@ -49,10 +49,10 @@ public final class CleanupRules {
 	}
 
 	/**
-	 * Topic adayı: boş (hiç yazılmamış), boşta (son yazma eşikten eski) ya da consumer'sız. Risk: veri yok ve
-	 * consumer yoksa low; veri yok ama consumer varsa (ya da grup taraması başarısız olduğu için consumer sayısı
-	 * {@code null}, bilinmiyorsa) medium; sadece consumer'sız ve yakın zamanda yazılmışsa high (aktif producer
-	 * var). Aday değilse null.
+	 * Topic candidate: empty (never written), idle (last write older than the threshold) or without consumers.
+	 * Risk: low if there is no data and no consumer; medium if there is no data but there are consumers (or the
+	 * consumer count is {@code null}, unknown, because the group scan failed); high if it only lacks consumers and
+	 * was written recently (active producer). Null if not a candidate.
 	 */
 	public static Candidate topic(String name, TopicActivity a, long thresholdMs, Integer consumerGroups,
 			Map<String, Object> details) {
@@ -91,9 +91,9 @@ public final class CleanupRules {
 	}
 
 	/**
-	 * Empty durumdaki consumer group adayı. Nedenler: offset'i yok; silinmiş topic'lerde offset'i var (hepsi
-	 * silinmişse low, bir kısmıysa medium); ya da lag'i 0 ve commit'li topic'lerinin hepsi boşta (medium).
-	 * Aday değilse null.
+	 * Candidate for a consumer group in the Empty state. Reasons: no offsets; offsets on deleted topics (low if all
+	 * of them are deleted, medium if some are); or zero lag with all committed topics idle (medium). Null if not a
+	 * candidate.
 	 */
 	public static Candidate group(String groupId, String state, Map<TopicPartition, Long> committed,
 			Set<String> existingTopics, Map<TopicPartition, Offsets.Range> ranges, Predicate<String> topicInactive) {
@@ -128,9 +128,9 @@ public final class CleanupRules {
 	}
 
 	/**
-	 * Sahipsiz LITERAL ACL'ler: var olmayan topic'e ya da (grup listesi tamsa) var olmayan gruba verilmiş
-	 * binding'ler, kaynak başına tek aday. Topic için risk low, grup için medium (grup sadece offset/üyesi varken
-	 * listelenir; duran bir uygulamanın ACL'i olabilir).
+	 * Orphan LITERAL ACLs: bindings on a topic that does not exist or (if the group list is complete) a group that
+	 * does not exist, one candidate per resource. Risk is low for topics and medium for groups (a group is only
+	 * listed while it has offsets/members; it may be the ACL of a stopped application).
 	 */
 	public static List<Candidate> orphanAcls(Collection<AclBinding> bindings, Set<String> topics, Set<String> groups,
 			boolean groupsKnown) {

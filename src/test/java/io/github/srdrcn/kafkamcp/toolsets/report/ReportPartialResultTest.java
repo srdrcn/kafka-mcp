@@ -48,10 +48,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
+import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 
 /**
- * Yanıt vermeyen broker/koordinatör: maxTimestamp listOffsets'i ve seçili grupların offset sorgusu hiç
- * tamamlanmaz. Rapor deadline'dan önce kısmi sonuçla döner ve bunu {@code partial} ile belirtir.
+ * Unresponsive broker/coordinator: the maxTimestamp listOffsets and the offset query of selected groups never
+ * complete. The report returns a partial result before the deadline and flags it with {@code partial}.
  */
 class ReportPartialResultTest extends ReportTestBase {
 
@@ -72,14 +73,14 @@ class ReportPartialResultTest extends ReportTestBase {
 	@Autowired
 	private AuditTools auditTools;
 
-	/** maxTimestamp sorgularını ve hangGroups'un offset sorgularını asılı bırakan Admin proxy'si. */
+	/** Admin proxy that leaves maxTimestamp queries and the offset queries of hangGroups hanging. */
 	static Admin hanging(Admin real, Set<String> hangGroups) {
 		return proxy(real, hangGroups, false);
 	}
 
 	/**
-	 * maxTimestamp: unsupported true ise eski broker gibi UnsupportedVersionException ile hemen biter, değilse
-	 * hiç tamamlanmaz; hangGroups'un offset sorguları hiç tamamlanmaz.
+	 * maxTimestamp: if unsupported is true it fails immediately with UnsupportedVersionException like an old broker,
+	 * otherwise it never completes; the offset queries of hangGroups never complete.
 	 */
 	static Admin proxy(Admin real, Set<String> hangGroups, boolean unsupported) {
 		return (Admin) Proxy.newProxyInstance(Admin.class.getClassLoader(), new Class<?>[] { Admin.class },
@@ -131,8 +132,8 @@ class ReportPartialResultTest extends ReportTestBase {
 	}
 
 	/**
-	 * Bozuk cluster: listGroups tüm broker'larda hata verir (grup taraması başarısız), describeLogDirs yetkisiz
-	 * (boyutlar bilinmiyor), listPartitionReassignments yetkisiz; diğer istekler gerçek Admin'e gider.
+	 * Degraded cluster: listGroups fails on all brokers (the group scan fails), describeLogDirs is not authorized
+	 * (sizes unknown), listPartitionReassignments is not authorized; other requests go to the real Admin.
 	 */
 	static Admin degraded(Admin real) {
 		return (Admin) Proxy.newProxyInstance(Admin.class.getClassLoader(), new Class<?>[] { Admin.class },
@@ -140,18 +141,18 @@ class ReportPartialResultTest extends ReportTestBase {
 					switch (method.getName()) {
 						case "listGroups" -> {
 							return newResult(ListGroupsResult.class, KafkaFuture.class, KafkaFuture
-								.completedFuture(List.<Object>of(new CoordinatorNotAvailableException("koordinatör yok"))));
+								.completedFuture(List.<Object>of(new CoordinatorNotAvailableException("no coordinator"))));
 						}
 						case "describeLogDirs" -> {
 							Map<Integer, KafkaFuture<Map<String, LogDirDescription>>> futures = new HashMap<>();
 							for (Object id : (Collection<?>) args[0]) {
-								futures.put((Integer) id, failed(new ClusterAuthorizationException("log dizinleri yetkisiz")));
+								futures.put((Integer) id, failed(new ClusterAuthorizationException("log dirs not authorized")));
 							}
 							return newResult(DescribeLogDirsResult.class, Map.class, futures);
 						}
 						case "listPartitionReassignments" -> {
 							return newResult(ListPartitionReassignmentsResult.class, KafkaFuture.class,
-									failed(new ClusterAuthorizationException("reassignment listesi yetkisiz")));
+									failed(new ClusterAuthorizationException("reassignment list not authorized")));
 						}
 						default -> {
 							try {
@@ -171,7 +172,7 @@ class ReportPartialResultTest extends ReportTestBase {
 		return f;
 	}
 
-	/** Admin sonuç sınıflarının paket-özel kurucusuyla örnek oluşturur. */
+	/** Creates an Admin result class instance via its package-private constructor. */
 	private static <T> T newResult(Class<T> type, Class<?> argType, Object arg) throws ReflectiveOperationException {
 		Constructor<T> c = type.getDeclaredConstructor(argType);
 		c.setAccessible(true);
@@ -205,14 +206,15 @@ class ReportPartialResultTest extends ReportTestBase {
 		assertThat(idle.get("partial").asBoolean()).isTrue();
 		assertThat(idle.get("idleCount").asInt()).isZero();
 		assertThat(idle.at("/unknown/count").asInt()).isEqualTo(1);
-		assertThat(idle.at("/unknown/byReason").toString()).contains("yanıt gelmedi").contains(topic);
+		assertThat(idle.at("/unknown/byReason").has(Settled.NO_RESPONSE)).isTrue();
+		assertThat(idle.at("/unknown/byReason").toString()).contains(topic);
 
 		JsonNode noCons = MAPPER.valueToTree(
 				usageTools.topicsWithoutConsumers(call("report_topics_without_consumers", args("filter", p), admin, 8_000)));
 		assertThat(noCons.get("partial").asBoolean()).isTrue();
 		assertThat(noCons.at("/skipped/groupsNoResponse").asInt()).isEqualTo(1);
 		assertThat(noCons.get("uncertain").asBoolean()).isTrue();
-		// "fine" grubunun commit'i görüldüğü için topic listede değil
+		// the topic is not listed because the commit of the "fine" group was seen
 		assertThat(noCons.get("count").asInt()).isZero();
 	}
 
@@ -230,11 +232,11 @@ class ReportPartialResultTest extends ReportTestBase {
 		InventoryReportTest.createAcls(testAdmin(), ghost);
 		Admin admin = degraded(testAdmin());
 		try {
-			// temizlik: grup taraması başarısız ama topic ve ACL adayları yine üretilir
+			// cleanup: the group scan fails but topic and ACL candidates are still produced
 			JsonNode cleanup = MAPPER.valueToTree(inventoryTools
 				.cleanupCandidates(call("report_cleanup_candidates", args("filter", p), admin, 15_000)));
 			assertThat(cleanup.get("partial").asBoolean()).isTrue();
-			assertThat(cleanup.at("/errors/consumerGroups").asText()).contains("koordinatör");
+			assertThat(cleanup.at("/errors/consumerGroups").asText()).contains("no coordinator");
 			JsonNode candidates = cleanup.get("candidates");
 			assertThat(texts(candidates, "name")).containsExactlyInAnyOrder(never, p + "-ghost");
 			JsonNode neverRow = find(candidates, "name", never);
@@ -243,18 +245,18 @@ class ReportPartialResultTest extends ReportTestBase {
 			assertThat(neverRow.get("consumersUnknown").asBoolean()).isTrue();
 			assertThat(find(candidates, "name", p + "-ghost").get("reasons").get(0).asText())
 				.isEqualTo("orphan_topic_acl");
-			assertThat(cleanup.get("notes").toString()).contains("consumersUnknown").contains("sahipsiz GROUP ACL");
+			assertThat(cleanup.get("notes").toString()).contains("consumersUnknown").contains("orphan GROUP ACL");
 
-			// özet: reassignment hatası ve eksik boyutlar bildirilir, grup hatası tek alanda kalır
+			// summary: the reassignment error and incomplete sizes are reported, the group error stays in one field
 			JsonNode summary = MAPPER
 				.valueToTree(clusterTools.clusterSummary(call("report_cluster_summary", args(), admin, 15_000)));
-			assertThat(summary.at("/errors/listPartitionReassignments").asText()).contains("yetki");
-			assertThat(summary.get("notes").toString()).contains("Reassignment listesi alınamadı");
-			assertThat(summary.at("/consumerGroups/error").asText()).contains("koordinatör");
+			assertThat(summary.at("/errors/listPartitionReassignments").asText()).contains("not authorized");
+			assertThat(summary.get("notes").toString()).contains("Could not list reassignments");
+			assertThat(summary.at("/consumerGroups/error").asText()).contains("no coordinator");
 			assertThat(summary.at("/size/complete").asBoolean(true)).isFalse();
 			assertThat(summary.at("/replication/underReplicatedPartitions").asInt()).isZero();
 
-			// retention: boyutu bilinmeyen sınırsız topic "küçük" sayılmaz
+			// retention: an infinite-retention topic of unknown size is not considered "small"
 			JsonNode retention = MAPPER.valueToTree(
 					auditTools.retentionAudit(call("report_retention_audit", args("filter", p), admin, 15_000)));
 			JsonNode unknown = find(retention.get("findings"), "check", "infinite_retention_size_unknown");

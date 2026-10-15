@@ -18,7 +18,7 @@ import io.github.srdrcn.kafkamcp.mcp.RegisteredTool;
 import io.github.srdrcn.kafkamcp.mcp.ToolKind;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** report_cluster_summary ve report_top_topics (KRaft ve ZooKeeper). */
+/** report_cluster_summary and report_top_topics (KRaft and ZooKeeper). */
 class ClusterReportTest extends ReportTestBase {
 
 	@ParameterizedTest(name = "zk={0}")
@@ -30,7 +30,7 @@ class ClusterReportTest extends ReportTestBase {
 		produce(zk, big, 0, 200, null, 1000);
 		commit(zk, p + "-lagging", big, 0, 10);
 		commit(zk, p + "-done", big, 0, 200);
-		// min.insync.replicas (2) > RF (1): broker etkin min ISR'ı 1'e indirir, acks=all yazma kabul edilir
+		// min.insync.replicas (2) > RF (1): the broker caps the effective min ISR at 1, acks=all writes are accepted
 		String minIsr = p + "-minisr";
 		createTopic(zk, minIsr, 1, Map.of("min.insync.replicas", "2"));
 		produce(zk, minIsr, 0, 1, null);
@@ -50,7 +50,7 @@ class ClusterReportTest extends ReportTestBase {
 		assertThat(r.at("/size/allReplicasBytes").asLong()).isGreaterThanOrEqualTo(r.at("/size/logicalBytes").asLong());
 		assertThat(r.at("/replication/underReplicatedPartitions").asInt()).isZero();
 		assertThat(r.at("/replication/offlinePartitions").asInt()).isZero();
-		// tek broker, RF=1: hiçbir partition etkin min ISR altında değil; min ISR > RF topic'leri ayrıca sayılır
+		// single broker, RF=1: no partition is below the effective min ISR; min ISR > RF topics are counted separately
 		assertThat(r.at("/replication/underMinIsrPartitions").asInt()).isZero();
 		assertThat(r.at("/replication/minIsrAboveRfTopics").asInt()).isGreaterThanOrEqualTo(1);
 		assertThat(r.get("notes").toString()).contains("minIsrAboveRfTopics").contains("report_replication_audit");
@@ -107,7 +107,7 @@ class ClusterReportTest extends ReportTestBase {
 		assertThat(consumers.at("/examined/groups").asInt()).isGreaterThanOrEqualTo(3);
 
 		String bad = error("report_top_topics", on(zk, "by", "nope"));
-		assertThat(bad).contains("Geçersiz by");
+		assertThat(bad).contains("Invalid by");
 	}
 
 	@ParameterizedTest(name = "zk={0}")
@@ -164,7 +164,7 @@ class ClusterReportTest extends ReportTestBase {
 		assertThat(report).allMatch(t -> t.clusters().contains(TestConfigs.READ_ONLY_CLUSTER));
 		JsonNode r = ok("report_cluster_summary", args("cluster", TestConfigs.READ_ONLY_CLUSTER));
 		assertThat(r.get("cluster").asText()).isEqualTo(TestConfigs.READ_ONLY_CLUSTER);
-		// yazma araçları readOnly cluster'da reddedilir (report'ta yazma aracı yok; çerçeve davranışı)
+		// write tools are rejected on a readOnly cluster (report has no write tools; framework behaviour)
 		String err = error("topics_create", args("cluster", TestConfigs.READ_ONLY_CLUSTER, "topic", unique("rep-ro")));
 		assertThat(err).contains("readOnly");
 	}
