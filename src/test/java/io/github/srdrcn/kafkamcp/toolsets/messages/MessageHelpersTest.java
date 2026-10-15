@@ -2,21 +2,39 @@ package io.github.srdrcn.kafkamcp.toolsets.messages;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.consumer.CloseOptions;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.TopicPartitionInfo;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
+import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 
-/** Ağa çıkmayan yardımcılar: RecordDecoder, ShapeInference, Timestamps, adil pay dağıtımı. */
+/**
+ * Ağa çıkmayan yardımcılar: RecordDecoder (şema isteği limit/deadline), ShapeInference, Timestamps, adil pay
+ * dağıtımı, offline partition seçimi, sınırlı consumer kapanışı.
+ */
 class MessageHelpersTest {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -143,6 +161,115 @@ class MessageHelpersTest {
 		assertThatThrownBy(() -> MessageFormat.parse("format", "xml", MessageFormat.STRING))
 			.isInstanceOf(ToolException.class);
 		assertThat(List.of(MessageReader.From.parse("Earliest", null))).containsExactly(MessageReader.From.EARLIEST);
+	}
+
+	private static ToolCall call(long remainingMillis) {
+		return new ToolCall("test", Map.of("cluster", "x"), null, Instant.now().plusMillis(remainingMillis));
+	}
+
+	private static SchemaRegistryClient registry(Function<String, JsonNode> get) {
+		return new SchemaRegistryClient(null) {
+			@Override
+			public JsonNode get(String cluster, String path) {
+				return get.apply(path);
+			}
+		};
+	}
+
+	/** Confluent wire format: 0x0 + 4 bayt şema id + 1 bayt gövde. */
+	private static byte[] wire(int schemaId) {
+		return ByteBuffer.allocate(6).put((byte) 0).putInt(schemaId).put((byte) 2).array();
+	}
+
+	@Test
+	void schemaLookupsAreCappedPerCall() {
+		AtomicInteger calls = new AtomicInteger();
+		RecordDecoder d = new RecordDecoder(registry(path -> {
+			calls.incrementAndGet();
+			throw new ToolException("Schema Registry hatası 404 (GET " + path + "): 40403 Schema not found");
+		}), "x");
+		int ids = RecordDecoder.MAX_SCHEMA_LOOKUPS + 10;
+		RecordDecoder.Decoded last = null;
+		for (int id = 1; id <= ids; id++) {
+			last = d.decode(wire(id), MessageFormat.AVRO, 100);
+		}
+		assertThat(calls.get()).isEqualTo(RecordDecoder.MAX_SCHEMA_LOOKUPS);
+		assertThat(d.skippedSchemaLookups()).isEqualTo(10);
+		assertThat(d.timeLimited()).isFalse();
+		assertThat(last.value()).isEqualTo(RecordDecoder.hex(wire(ids)));
+		assertThat(last.error()).contains("en fazla " + RecordDecoder.MAX_SCHEMA_LOOKUPS);
+		assertThat(d.skipNote()).startsWith("10 şema");
+		// aynı id tekrar sorulmaz (çağrı içi memo)
+		d.decode(wire(1), MessageFormat.AVRO, 100);
+		assertThat(calls.get()).isEqualTo(RecordDecoder.MAX_SCHEMA_LOOKUPS);
+	}
+
+	@Test
+	void slowSchemaRegistryIsCutBeforeToolDeadline() {
+		AtomicInteger calls = new AtomicInteger();
+		SchemaRegistryClient slow = registry(path -> {
+			calls.incrementAndGet();
+			try {
+				Thread.sleep(60_000);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			throw new ToolException("kesildi");
+		});
+		ToolCall call = call(RecordDecoder.LOOKUP_RESERVE_MS + 2_000);
+		RecordDecoder d = new RecordDecoder(slow, call);
+		RecordDecoder.Decoded first = d.decode(wire(1), MessageFormat.AVRO, 100);
+		// istek deadline'a pay kalırken bırakıldı: okunanlar partial dönebilir
+		assertThat(call.remainingMillis()).isGreaterThan(500);
+		assertThat(first.error()).contains("zaman sınırı");
+		assertThat(first.value()).isEqualTo(RecordDecoder.hex(wire(1)));
+		RecordDecoder.Decoded second = d.decode(wire(2), MessageFormat.AVRO, 100);
+		assertThat(second.error()).contains("atlandı");
+		assertThat(calls.get()).isEqualTo(1);
+		assertThat(d.timeLimited()).isTrue();
+		assertThat(d.skippedSchemaLookups()).isEqualTo(2);
+
+		// deadline zaten yakınsa istek hiç başlatılmaz
+		AtomicInteger none = new AtomicInteger();
+		RecordDecoder late = new RecordDecoder(registry(path -> {
+			none.incrementAndGet();
+			return null;
+		}), call(RecordDecoder.LOOKUP_RESERVE_MS - 500));
+		assertThat(late.decode(wire(3), MessageFormat.AVRO, 100).error()).contains("zaman sınırı");
+		assertThat(none.get()).isZero();
+		assertThat(late.timeLimited()).isTrue();
+	}
+
+	@Test
+	void offlinePartitionsAreSkippedAndReported() {
+		Node n = new Node(1, "broker-1", 9092);
+		TopicDescription d = new TopicDescription("t", false,
+				List.of(new TopicPartitionInfo(0, n, List.of(n), List.of(n)),
+						new TopicPartitionInfo(1, null, List.of(n), List.of()),
+						new TopicPartitionInfo(2, Node.noNode(), List.of(n), List.of()),
+						new TopicPartitionInfo(3, n, List.of(n), List.of(n))));
+		PartitionOffsets.Selection all = PartitionOffsets.select(d, null);
+		assertThat(all.online()).containsExactly(new TopicPartition("t", 0), new TopicPartition("t", 3));
+		assertThat(all.offline()).containsExactly(1, 2);
+		assertThat(all.note()).contains("offline").contains("[1, 2]");
+		assertThat(PartitionOffsets.select(d, 3).online()).containsExactly(new TopicPartition("t", 3));
+		assertThat(PartitionOffsets.select(d, 3).note()).isNull();
+		assertThatThrownBy(() -> PartitionOffsets.select(d, 1)).isInstanceOf(ToolException.class)
+			.hasMessageContaining("Partition 1 offline");
+		assertThatThrownBy(() -> PartitionOffsets.select(d, 9)).hasMessageContaining("Partition 9 yok");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void consumerCloseIsBoundedByRemainingTime() {
+		KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+		new BoundedConsumer(call(14_000), consumer).close();
+		ArgumentCaptor<CloseOptions> options = ArgumentCaptor.forClass(CloseOptions.class);
+		verify(consumer).close(options.capture());
+		assertThat(options.getValue().timeout()).contains(Duration.ofMillis(BoundedConsumer.MAX_CLOSE_MS));
+		assertThat(BoundedConsumer.closeMillis(800)).isEqualTo(300);
+		assertThat(BoundedConsumer.closeMillis(100)).isZero();
 	}
 
 }

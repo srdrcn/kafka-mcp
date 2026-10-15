@@ -53,28 +53,69 @@ public final class PartitionOffsets {
 
 	}
 
-	/** Topic'in partition sayısı. */
+	/** Topic'in partition sayısı (lideri olmayanlar dahil; varsayılan partitioner da hepsini sayar). */
 	public static int partitionCount(ToolCall call, String topic) {
 		return describe(call, topic).partitions().size();
 	}
 
 	/**
-	 * Topic'in partition'ları (id sırasıyla). {@code partition} verilirse sadece o partition; topic'te yoksa
-	 * Türkçe hata.
+	 * Topic'in seçilen partition'ları: lideri olanlar ({@code online}, id sırasıyla) ve lideri olmayan (offline)
+	 * partition id'leri. Offline partition'lar listOffsets/fetch isteklerine konmaz: client lidersiz partition'ı
+	 * zaman aşımına kadar yeniden dener ve tüm araç düşerdi.
 	 */
-	public static List<TopicPartition> partitions(ToolCall call, String topic, Integer partition) {
-		List<TopicPartitionInfo> infos = new ArrayList<>(describe(call, topic).partitions());
+	public record Selection(String topic, List<TopicPartition> online, List<Integer> offline) {
+
+		/** Çıktı notu; offline partition yoksa null. */
+		public String note() {
+			if (offline.isEmpty()) {
+				return null;
+			}
+			return offline.size() + " partition'ın lideri yok (offline), atlandı: " + offline
+					+ "; sonuçlar sadece lideri olan partition'ları kapsar";
+		}
+
+	}
+
+	/**
+	 * Topic'in partition'larını seçer. {@code partition} verilirse sadece o partition; topic'te yoksa ya da
+	 * lideri yoksa Türkçe hata.
+	 */
+	public static Selection select(ToolCall call, String topic, Integer partition) {
+		return select(describe(call, topic), partition);
+	}
+
+	static Selection select(TopicDescription d, Integer partition) {
+		String topic = d.name();
+		List<TopicPartitionInfo> infos = new ArrayList<>(d.partitions());
 		infos.sort(Comparator.comparingInt(TopicPartitionInfo::partition));
 		if (partition != null) {
 			for (TopicPartitionInfo i : infos) {
 				if (i.partition() == partition) {
-					return List.of(new TopicPartition(topic, partition));
+					if (!hasLeader(i)) {
+						throw new ToolException("Partition " + partition + " offline: lideri yok (broker kapalı ya da "
+								+ "ISR'da replika yok); offset/mesaj okunamaz");
+					}
+					return new Selection(topic, List.of(new TopicPartition(topic, partition)), List.of());
 				}
 			}
 			throw new ToolException("Partition " + partition + " yok: " + topic + " topic'inde " + infos.size()
 					+ " partition var (0.." + (infos.size() - 1) + ")");
 		}
-		return infos.stream().map(i -> new TopicPartition(topic, i.partition())).toList();
+		List<TopicPartition> online = new ArrayList<>();
+		List<Integer> offline = new ArrayList<>();
+		for (TopicPartitionInfo i : infos) {
+			if (hasLeader(i)) {
+				online.add(new TopicPartition(topic, i.partition()));
+			}
+			else {
+				offline.add(i.partition());
+			}
+		}
+		return new Selection(topic, online, offline);
+	}
+
+	private static boolean hasLeader(TopicPartitionInfo i) {
+		return i.leader() != null && !i.leader().isEmpty();
 	}
 
 	private static TopicDescription describe(ToolCall call, String topic) {

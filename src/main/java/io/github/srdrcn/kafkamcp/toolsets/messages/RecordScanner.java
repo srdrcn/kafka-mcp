@@ -99,6 +99,9 @@ public final class RecordScanner {
 		}
 		consumer.assign(active.keySet());
 		active.values().forEach(w -> consumer.seek(w.partition(), w.start()));
+		// aynı consumer'la ikinci tarama: önceki taramada biten partition'lar pause'ta kalmış olabilir (assign()
+		// aynı küme için durumu sıfırlamaz)
+		consumer.resume(active.keySet());
 		long scanned = 0;
 		while (!active.isEmpty()) {
 			if (call.nearDeadline(reserveMs)) {

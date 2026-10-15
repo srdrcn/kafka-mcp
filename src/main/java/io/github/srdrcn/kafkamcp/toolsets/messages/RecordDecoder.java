@@ -19,6 +19,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
@@ -43,11 +47,22 @@ import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 /**
  * Key/value baytlarını {@link MessageFormat}'a göre JSON'a uygun değere çevirir (string, json, hex, long,
  * avro). Avro şemaları Schema Registry'den alınır ve sadece bu nesne (tek araç çağrısı) boyunca tutulur.
+ * Şema istekleri çağrı başına {@link #MAX_SCHEMA_LOOKUPS} ile ve (ToolCall verilmişse) deadline ile sınırlıdır;
+ * atlanan şemalar hex + hata olarak döner, çağıran {@link #timeLimited()} ise "partial" işaretler.
  * Yapılandırılmış değerler {@link JsonNode} olarak döner (iç içe null alanlar korunur).
  */
 public final class RecordDecoder {
 
 	public static final int DEFAULT_MAX_CHARS = 4096;
+
+	/** Çağrı başına en fazla Schema Registry isteği (wire format'a benzeyen sahte şema id'lerinde istek yağmurunu önler). */
+	public static final int MAX_SCHEMA_LOOKUPS = 50;
+
+	/** Şema isteği deadline'dan en az bu kadar önce bitmeli (okunanları partial döndürmeye pay). */
+	static final long LOOKUP_RESERVE_MS = RecordScanner.DEFAULT_RESERVE_MS;
+
+	/** Bundan kısa süre kaldıysa şema isteği hiç başlatılmaz. */
+	private static final long MIN_LOOKUP_MS = 200;
 
 	private static final ObjectMapper MAPPER = JsonMapper.builder()
 		.enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -62,19 +77,61 @@ public final class RecordDecoder {
 
 	private final String cluster;
 
+	private final ToolCall call;
+
 	private final Map<Integer, Schema> schemas = new HashMap<>();
 
 	private final Map<Integer, String> schemaErrors = new HashMap<>();
 
+	private final Set<Integer> skippedIds = new HashSet<>();
+
 	private String registryDown;
 
+	/** Şema istekleri durdurulduysa nedeni (istek limiti ya da zaman sınırı). */
+	private String stopReason;
+
+	private boolean timeLimited;
+
+	private int lookups;
+
 	/**
+	 * Deadline'sız çözücü (testler ve araç dışı kullanım); şema istekleri yine {@link #MAX_SCHEMA_LOOKUPS} ile
+	 * sınırlıdır.
 	 * @param registry Schema Registry client'ı (avro gerekmiyorsa null olabilir)
 	 * @param cluster şemaların alınacağı cluster
 	 */
 	public RecordDecoder(SchemaRegistryClient registry, String cluster) {
+		this(registry, cluster, null);
+	}
+
+	/** Araç çağrısının cluster'ı ve deadline'ı ile çözücü: şema istekleri deadline'a pay bırakarak kesilir. */
+	public RecordDecoder(SchemaRegistryClient registry, ToolCall call) {
+		this(registry, call.cluster(), call);
+	}
+
+	private RecordDecoder(SchemaRegistryClient registry, String cluster, ToolCall call) {
 		this.registry = registry;
 		this.cluster = cluster;
+		this.call = call;
+	}
+
+	/** Zaman sınırı ya da istek limiti yüzünden şeması alınmayan farklı şema id sayısı. */
+	public int skippedSchemaLookups() {
+		return skippedIds.size();
+	}
+
+	/** Bir şema isteği zaman sınırına takıldı mı (çağıran çıktıyı "partial" işaretler)? */
+	public boolean timeLimited() {
+		return timeLimited;
+	}
+
+	/** Atlanan şema istekleri için çıktı notu; atlanan yoksa null. */
+	public String skipNote() {
+		if (skippedIds.isEmpty()) {
+			return null;
+		}
+		return skippedIds.size() + " şema id'sinin şeması alınamadı (" + stopReason
+				+ "); bu kayıtlar hex + valueError/keyError ile döndü";
 	}
 
 	/** Seçilen formatlardan biri avro ise cluster'da schemaRegistryUrl olmalı; değilse Türkçe hata. */
@@ -245,7 +302,7 @@ public final class RecordDecoder {
 			throw new DecodeException("Schema Registry tanımlı değil", id);
 		}
 		try {
-			JsonNode node = registry.get(cluster, "/schemas/ids/" + id);
+			JsonNode node = fetch("/schemas/ids/" + id);
 			String type = node.path("schemaType").asText("AVRO");
 			if (!"AVRO".equalsIgnoreCase(type)) {
 				throw new DecodeException("Şema " + id + " tipi " + type + "; avro formatı sadece AVRO şemalarını çözer", id);
@@ -260,6 +317,12 @@ public final class RecordDecoder {
 			schemaErrors.put(id, e.getMessage());
 			throw e;
 		}
+		catch (LookupSkipped e) {
+			skippedIds.add(id);
+			String msg = "Şema " + id + " alınamadı: " + e.getMessage();
+			schemaErrors.put(id, msg);
+			throw new DecodeException(msg, id);
+		}
 		catch (ToolException e) {
 			String msg = "Şema " + id + " alınamadı: " + e.getMessage();
 			if (e.getMessage() != null && e.getMessage().contains("ulaşılamadı")) {
@@ -272,6 +335,51 @@ public final class RecordDecoder {
 			String msg = "Şema " + id + " ayrıştırılamadı: " + e.getMessage();
 			schemaErrors.put(id, msg);
 			throw new DecodeException(msg, id);
+		}
+	}
+
+	/**
+	 * Schema Registry GET'i: çağrı başına istek limiti ve deadline ile sınırlı. ToolCall varsa istek ayrı (virtual)
+	 * thread'de çalışır ve en fazla deadline'a {@link #LOOKUP_RESERVE_MS} kalana kadar beklenir; yavaş registry
+	 * böylece okunan kayıtları zaman aşımına sokmaz.
+	 */
+	private JsonNode fetch(String path) {
+		if (stopReason == null && lookups >= MAX_SCHEMA_LOOKUPS) {
+			stopReason = "çağrı başına en fazla " + MAX_SCHEMA_LOOKUPS + " şema isteği";
+		}
+		long budget = call == null ? Long.MAX_VALUE : call.remainingMillis() - LOOKUP_RESERVE_MS;
+		if (stopReason == null && budget < MIN_LOOKUP_MS) {
+			stopReason = "araç zaman sınırına yaklaşıldı";
+			timeLimited = true;
+		}
+		if (stopReason != null) {
+			throw new LookupSkipped("istek atlandı (" + stopReason + ")");
+		}
+		lookups++;
+		if (call == null) {
+			return registry.get(cluster, path);
+		}
+		FutureTask<JsonNode> task = new FutureTask<>(() -> registry.get(cluster, path));
+		Thread.ofVirtual().name("kafka-mcp-schema-fetch").start(task);
+		try {
+			return task.get(budget, TimeUnit.MILLISECONDS);
+		}
+		catch (TimeoutException e) {
+			task.cancel(true);
+			stopReason = "Schema Registry araç zaman sınırı içinde yanıt vermedi";
+			timeLimited = true;
+			throw new LookupSkipped(stopReason);
+		}
+		catch (ExecutionException e) {
+			if (e.getCause() instanceof RuntimeException re) {
+				throw re;
+			}
+			throw new ToolException("Schema Registry isteği başarısız: " + e.getCause());
+		}
+		catch (InterruptedException e) {
+			task.cancel(true);
+			Thread.currentThread().interrupt();
+			throw new ToolException("Araç iptal edildi");
 		}
 	}
 
@@ -289,7 +397,7 @@ public final class RecordDecoder {
 			if (!seen.add(subject + "/" + version)) {
 				continue;
 			}
-			JsonNode node = registry.get(cluster, "/subjects/" + SchemaRegistryClient.enc(subject) + "/versions/"
+			JsonNode node = fetch("/subjects/" + SchemaRegistryClient.enc(subject) + "/versions/"
 					+ SchemaRegistryClient.enc(version));
 			parseReferences(parser, node.path("references"), depth + 1, seen);
 			parser.parse(node.path("schema").asText());
@@ -403,6 +511,15 @@ public final class RecordDecoder {
 			return e.getClass().getSimpleName();
 		}
 		return cut(m.replaceAll("\\s+", " "), 120);
+	}
+
+	/** Şema isteği limit ya da zaman sınırı nedeniyle yapılmadı/beklenmedi. */
+	private static final class LookupSkipped extends RuntimeException {
+
+		LookupSkipped(String message) {
+			super(message, null, false, false);
+		}
+
 	}
 
 	private static final class DecodeException extends Exception {

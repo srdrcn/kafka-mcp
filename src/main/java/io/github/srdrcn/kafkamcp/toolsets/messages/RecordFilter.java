@@ -45,11 +45,15 @@ public final class RecordFilter implements Predicate<ConsumerRecord<byte[], byte
 		this.valueFormat = valueFormat;
 	}
 
-	/** keyRegex, valueRegex, headerKey, headerValueRegex parametrelerinden filtre; hiçbiri yoksa null. */
+	/**
+	 * keyRegex, valueRegex, headerKey, headerValueRegex parametrelerinden filtre; hiçbiri yoksa null. Değerler
+	 * trim edilmez (ör. "ERROR " sondaki boşlukla eşleşir).
+	 */
 	public static RecordFilter fromParams(ToolCall call, RecordDecoder decoder, MessageFormat keyFormat,
 			MessageFormat valueFormat) {
-		RecordFilter f = new RecordFilter(call.regex("keyRegex"), call.regex("valueRegex"), call.str("headerKey", null),
-				call.regex("headerValueRegex"), decoder, keyFormat, valueFormat);
+		RecordFilter f = new RecordFilter(MessageParams.rawRegex(call, "keyRegex"),
+				MessageParams.rawRegex(call, "valueRegex"), MessageParams.raw(call, "headerKey"),
+				MessageParams.rawRegex(call, "headerValueRegex"), decoder, keyFormat, valueFormat);
 		return f.isEmpty() ? null : f;
 	}
 

@@ -264,7 +264,7 @@
       },
       "key" : {
         "type" : "string",
-        "description" : "Key (keyFormat'a göre: metin, hex ya da sayı)"
+        "description" : "Key (keyFormat'a göre: metin, hex ya da sayı); metin boşluklarıyla, olduğu gibi hash'lenir"
       },
       "keyFormat" : {
         "type" : "string",

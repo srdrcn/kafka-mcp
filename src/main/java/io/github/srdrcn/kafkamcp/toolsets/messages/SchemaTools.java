@@ -59,7 +59,7 @@ public class SchemaTools {
 		Integer partition = call.optInt("partition");
 		MessageReader.Result r = MessageReader.read(call, new MessageReader.Request(topic, partition, From.LATEST, null,
 				null, call.maxRecords(), MessageReader.DEFAULT_MAX_SCAN, null));
-		RecordDecoder decoder = new RecordDecoder(registry, call.cluster());
+		RecordDecoder decoder = new RecordDecoder(registry, call);
 		ShapeInference shape = new ShapeInference(ShapeInference.DEFAULT_MAX_PATHS);
 		int failed = 0;
 		int tombstones = 0;
@@ -95,12 +95,7 @@ public class SchemaTools {
 		if (shape.arraysSampled()) {
 			out.put("arraysSampled", "Dizilerin sadece ilk " + ShapeInference.MAX_ARRAY_ELEMENTS + " elemanı incelendi");
 		}
-		if (r.partial()) {
-			out.put("partial", true);
-		}
-		if (!r.notes().isEmpty()) {
-			out.put("notes", r.notes());
-		}
+		ConsumeTools.status(out, r, decoder);
 		out.put("paths", shape.paths());
 		return out;
 	}

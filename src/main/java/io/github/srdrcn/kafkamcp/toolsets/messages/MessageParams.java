@@ -2,9 +2,12 @@ package io.github.srdrcn.kafkamcp.toolsets.messages;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
+import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /** messages araçlarının ortak parametre şemaları ve okuyucuları. */
 final class MessageParams {
@@ -77,6 +80,33 @@ final class MessageParams {
 
 	static int maxScan(ToolCall call) {
 		return call.integer("maxScan", MessageReader.DEFAULT_MAX_SCAN, 1, MessageReader.MAX_SCAN_LIMIT);
+	}
+
+	/**
+	 * Ham string argüman (trim edilmez: key/regex/header adındaki boşluklar anlamlıdır); yoksa ya da boş string
+	 * ise null.
+	 */
+	static String raw(ToolCall call, String name) {
+		Object v = call.args().get(name);
+		if (v == null) {
+			return null;
+		}
+		String s = String.valueOf(v);
+		return s.isEmpty() ? null : s;
+	}
+
+	/** Ham (trim edilmemiş) regex argümanını derler; yoksa null. */
+	static Pattern rawRegex(ToolCall call, String name) {
+		String s = raw(call, name);
+		if (s == null) {
+			return null;
+		}
+		try {
+			return Pattern.compile(s);
+		}
+		catch (PatternSyntaxException e) {
+			throw new ToolException("Geçersiz regex (" + name + "): " + e.getDescription());
+		}
 	}
 
 }

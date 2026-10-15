@@ -2,8 +2,10 @@ package io.github.srdrcn.kafkamcp.toolsets.messages;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
@@ -14,12 +16,10 @@ import com.fasterxml.jackson.databind.node.NullNode;
 
 /**
  * {@link ConsumerRecord}'u kompakt JSON map'ine çevirir: partition, offset, timestamp (ISO-8601 UTC) +
- * timestampType, çözülmüş key/value (kesilme/hata bayraklarıyla), header'lar ve serialized boyutlar.
+ * timestampType, çözülmüş key/value (kesilme/hata bayraklarıyla), header'lar (value ile aynı karakter sınırı;
+ * kesilenler {@code headersTruncated} listesinde) ve serialized boyutlar.
  */
 public final class RecordJson {
-
-	/** Header değerleri için karakter sınırı. */
-	public static final int MAX_HEADER_CHARS = 1024;
 
 	/** UTF-8 olmayan header değerlerinin öneki. */
 	public static final String HEX_PREFIX = "hex:";
@@ -49,9 +49,12 @@ public final class RecordJson {
 		else {
 			put(m, "value", decoder.decode(r.value(), valueFormat, maxChars));
 		}
-		Map<String, Object> headers = headers(r.headers());
-		if (!headers.isEmpty()) {
-			m.put("headers", headers);
+		HeaderValues headers = headers(r.headers(), maxChars);
+		if (!headers.values().isEmpty()) {
+			m.put("headers", headers.values());
+		}
+		if (!headers.truncated().isEmpty()) {
+			m.put("headersTruncated", headers.truncated());
 		}
 		if (r.serializedKeySize() >= 0) {
 			m.put("keySize", r.serializedKeySize());
@@ -75,14 +78,26 @@ public final class RecordJson {
 		}
 	}
 
-	/** Header adı → değer (tekrarlayan adlar liste olur; UTF-8 olmayanlar "hex:" önekli). */
-	public static Map<String, Object> headers(Headers headers) {
+	/**
+	 * Header'lar: ad → değer (tekrarlayan adlar liste olur; UTF-8 olmayanlar "hex:" önekli) ve değeri
+	 * {@code maxChars}'ta kesilen header adları.
+	 */
+	public record HeaderValues(Map<String, Object> values, List<String> truncated) {
+	}
+
+	/** Header'ları çözer; {@code maxChars}'tan uzun değerler kesilir ve adları {@code truncated}'a eklenir. */
+	public static HeaderValues headers(Headers headers, int maxChars) {
 		Map<String, Object> out = new LinkedHashMap<>();
+		Set<String> truncated = new LinkedHashSet<>();
 		if (headers == null) {
-			return out;
+			return new HeaderValues(out, List.of());
 		}
 		for (Header h : headers) {
-			String v = headerValue(h.value());
+			String full = headerText(h.value());
+			String v = RecordDecoder.cut(full, maxChars);
+			if (v.length() < full.length()) {
+				truncated.add(h.key());
+			}
 			Object prev = out.get(h.key());
 			if (prev == null) {
 				out.put(h.key(), v);
@@ -99,17 +114,16 @@ public final class RecordJson {
 				out.put(h.key(), list);
 			}
 		}
-		return out;
+		return new HeaderValues(out, new ArrayList<>(truncated));
 	}
 
-	/** Header değeri metni: UTF-8 ise metin, değilse "hex:..." ; null ise boş metin. */
-	public static String headerValue(byte[] value) {
+	/** Header değerinin tam (kesilmemiş) metni: UTF-8 ise metin, değilse "hex:..." ; null ise boş metin. */
+	public static String headerText(byte[] value) {
 		if (value == null) {
 			return "";
 		}
 		String s = RecordDecoder.utf8(value);
-		String v = s != null ? s : HEX_PREFIX + RecordDecoder.hex(value);
-		return RecordDecoder.cut(v, MAX_HEADER_CHARS);
+		return s != null ? s : HEX_PREFIX + RecordDecoder.hex(value);
 	}
 
 }

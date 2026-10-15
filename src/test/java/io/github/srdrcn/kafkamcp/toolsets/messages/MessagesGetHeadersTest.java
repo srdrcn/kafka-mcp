@@ -91,4 +91,52 @@ class MessagesGetHeadersTest extends KafkaIntegrationTest {
 		assertThat(error("messages_headers", args("topic", topic, "from", "offset"))).contains("earliest");
 	}
 
+	@Test
+	void longHeadersAreFlaggedWhenCutAndFullInGet() throws Exception {
+		String t = unique("msg-long-headers");
+		TestData.createTopic(testAdmin(), t, 1);
+		String trace = "java.lang.IllegalStateException: boom\n" + "\tat com.example.Handler.handle(Handler.java:42)\n".repeat(200);
+		byte[] binary = new byte[600];
+		for (int i = 0; i < binary.length; i++) {
+			binary[i] = (byte) (0x80 | i);
+		}
+		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
+		for (int i = 0; i < 2; i++) {
+			ProducerRecord<byte[], byte[]> r = TestData.record(t, 0, null, null, "dlt-" + i);
+			r.headers().add(new RecordHeader("kafka_dlt-exception-stacktrace", (trace + i).getBytes(StandardCharsets.UTF_8)));
+			r.headers().add(new RecordHeader("bin", binary));
+			records.add(r);
+		}
+		TestData.send(records);
+		String hex = RecordJson.HEX_PREFIX + RecordDecoder.hex(binary);
+
+		JsonNode full = ok("messages_get", args("topic", t, "partition", 0, "offset", 0));
+		assertThat(full.get("headers").get("kafka_dlt-exception-stacktrace").asText()).isEqualTo(trace + 0);
+		assertThat(full.get("headers").get("bin").asText()).isEqualTo(hex);
+		assertThat(full.has("headersTruncated")).isFalse();
+
+		// varsayılan maxValueChars (4096): uzun stacktrace kesilir ve işaretlenir, 1204 karakterlik hex kesilmez
+		JsonNode consumed = ok("messages_consume", args("topic", t, "from", "earliest", "maxRecords", 1));
+		JsonNode rec = consumed.get("records").get(0);
+		assertThat(rec.get("headers").get("kafka_dlt-exception-stacktrace").asText())
+			.hasSize(RecordDecoder.DEFAULT_MAX_CHARS);
+		assertThat(rec.get("headers").get("bin").asText()).isEqualTo(hex);
+		assertThat(rec.get("headersTruncated")).hasSize(1);
+		assertThat(rec.get("headersTruncated").get(0).asText()).isEqualTo("kafka_dlt-exception-stacktrace");
+
+		JsonNode small = ok("messages_consume", args("topic", t, "from", "earliest", "maxRecords", 1, "maxValueChars", 100));
+		JsonNode smallRec = small.get("records").get(0);
+		assertThat(smallRec.get("headers").get("bin").asText()).hasSize(100);
+		assertThat(smallRec.get("headersTruncated").toString()).contains("kafka_dlt-exception-stacktrace").contains("bin");
+
+		// farklı değer sayımı kesilmemiş değerler üzerinden: iki stacktrace sadece son karakterde ayrılır
+		JsonNode stats = ok("messages_headers", args("topic", t, "from", "earliest"));
+		Map<String, JsonNode> byKey = new HashMap<>();
+		stats.get("headers").forEach(h -> byKey.put(h.get("key").asText(), h));
+		JsonNode st = byKey.get("kafka_dlt-exception-stacktrace");
+		assertThat(st.get("distinctValues").asInt()).isEqualTo(2);
+		assertThat(st.get("samplesTruncatedAt").asInt()).isEqualTo(200);
+		assertThat(byKey.get("bin").get("distinctValues").asInt()).isEqualTo(1);
+	}
+
 }

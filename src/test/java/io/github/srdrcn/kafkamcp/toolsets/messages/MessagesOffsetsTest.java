@@ -106,4 +106,31 @@ class MessagesOffsetsTest extends KafkaIntegrationTest {
 			.contains("hex");
 	}
 
+	@Test
+	void partitionForKeyHashesKeyBytesExactlyWithoutTrimming() throws Exception {
+		String t = unique("msg-keys-ws");
+		TestData.createTopic(testAdmin(), t, 11);
+		// sabit genişlikli/boşluklu key'ler ve boş string (null olmayan geçerli key) olduğu gibi hash'lenir
+		List<String> keys = List.of("ACC123   ", "ACC123", " order-1", "order-1", "", "   ");
+		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
+		for (String k : keys) {
+			records.add(new ProducerRecord<>(t, TestData.utf8(k), TestData.utf8("v")));
+		}
+		List<RecordMetadata> sent = TestData.send(records);
+		for (int i = 0; i < keys.size(); i++) {
+			JsonNode r = ok("messages_partition_for_key", args("topic", t, "key", keys.get(i)));
+			assertThat(r.get("partition").asInt()).as("key '%s'", keys.get(i)).isEqualTo(sent.get(i).partition());
+			assertThat(r.get("key").asText()).isEqualTo(keys.get(i));
+			assertThat(r.get("keyBytes").asInt()).isEqualTo(keys.get(i).length());
+		}
+		// trim edilseydi aynı partition'a düşerlerdi: en az bir çift gerçekten farklı partition'da olmalı
+		assertThat(sent.get(0).partition() != sent.get(1).partition() || sent.get(2).partition() != sent.get(3).partition()
+				|| sent.get(4).partition() != sent.get(5).partition())
+			.as("test verisi trim farkını göstermeli")
+			.isTrue();
+		assertThat(error("messages_partition_for_key", args("topic", t))).contains("key");
+		assertThat(error("messages_partition_for_key", args("topic", t, "key", "  ", "keyFormat", "long")))
+			.contains("key");
+	}
+
 }

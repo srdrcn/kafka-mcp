@@ -5,8 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.BeforeAll;
@@ -15,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
+import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
 /** messages_consume: başlangıç modları, sıralama, filtreler, formatlar; group/commit oluşmaz. */
@@ -136,6 +140,52 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 
 		assertThat(error("messages_consume", args("topic", topic, "headerValueRegex", "x"))).contains("headerKey");
 		assertThat(error("messages_consume", args("topic", topic, "valueRegex", "(unclosed"))).contains("regex");
+	}
+
+	@Test
+	void regexFiltersKeepSignificantWhitespace() {
+		// "v1 " sadece v1'i bulur; trim edilseydi "v1" v1 ve v10..v19'u da bulurdu
+		JsonNode r = ok("messages_consume", args("topic", topic, "from", "earliest", "valueRegex", "v1 "));
+		assertThat(values(r)).containsExactly("v1");
+		assertThat(r.get("filters").get("valueRegex").asText()).isEqualTo("v1 ");
+		JsonNode both = ok("messages_consume", args("topic", topic, "from", "earliest", "valueRegex", " ok$",
+				"keyRegex", "^k1"));
+		// key k1: i%5==1, " ok": i%4!=0 -> 1, 6, 11, 21, 26
+		assertThat(values(both)).containsExactlyInAnyOrder("v1", "v6", "v11", "v21", "v26");
+	}
+
+	@Test
+	void latestFillsMaxRecordsDespiteTransactionMarkers() throws Exception {
+		String t = unique("msg-tx");
+		TestData.createTopic(testAdmin(), t, 1);
+		// her transaction'da 1 kayıt: commit marker'ı da bir offset kaplar (60 kayıt, 120 offset)
+		try (KafkaProducer<byte[], byte[]> producer = KafkaTestCluster
+			.producer(Map.of(ProducerConfig.TRANSACTIONAL_ID_CONFIG, unique("tx")))) {
+			producer.initTransactions();
+			for (int i = 0; i < 60; i++) {
+				producer.beginTransaction();
+				producer.send(TestData.record(t, 0, null, null, "v" + i));
+				producer.commitTransaction();
+			}
+		}
+		JsonNode r = ok("messages_consume", args("topic", t, "maxRecords", 50));
+		assertThat(r.get("returned").asInt()).isEqualTo(50);
+		List<String> expected = new ArrayList<>();
+		for (int i = 10; i < 60; i++) {
+			expected.add("v" + i);
+		}
+		assertThat(values(r)).containsExactlyElementsOf(expected);
+		assertThat(r.has("approximate")).isFalse();
+		assertThat(r.get("reachedEnd").asBoolean()).isTrue();
+
+		// maxScan geriye genişletmeyi kısarsa eksik okuma sessiz kalmaz
+		JsonNode capped = ok("messages_consume", args("topic", t, "maxRecords", 50, "maxScan", 60));
+		assertThat(capped.get("returned").asInt()).isLessThan(50).isGreaterThan(25);
+		assertThat(capped.get("approximate").asBoolean()).isTrue();
+		assertThat(capped.get("notes").toString()).contains("transaction marker");
+
+		JsonNode headers = ok("messages_headers", args("topic", t, "maxRecords", 40));
+		assertThat(headers.get("recordsRead").asInt()).isEqualTo(40);
 	}
 
 	@Test

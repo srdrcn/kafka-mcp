@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.springframework.stereotype.Component;
@@ -99,7 +98,7 @@ public class ConsumeTools {
 			}
 		}
 		Integer partition = call.optInt("partition");
-		RecordDecoder decoder = new RecordDecoder(registry, call.cluster());
+		RecordDecoder decoder = new RecordDecoder(registry, call);
 		RecordFilter filter = RecordFilter.fromParams(call, decoder, keyFormat, valueFormat);
 		MessageReader.Result r = MessageReader.read(call, new MessageReader.Request(topic, partition, from, offset,
 				timestamp, call.maxRecords(), MessageParams.maxScan(call), filter));
@@ -120,20 +119,36 @@ public class ConsumeTools {
 		if (r.scanLimitReached()) {
 			out.put("scanLimitReached", true);
 		}
-		if (r.approximate()) {
-			out.put("approximate", true);
-		}
-		if (r.partial()) {
-			out.put("partial", true);
-		}
 		if (partition != null && from != From.LATEST) {
 			out.put("nextOffset", r.nextOffsets().get(new TopicPartition(topic, partition)));
 		}
-		if (!r.notes().isEmpty()) {
-			out.put("notes", r.notes());
-		}
+		status(out, r, decoder);
 		out.put("records", records);
 		return out;
+	}
+
+	/**
+	 * Okuma/çözme durumunu çıktıya ekler: offlinePartitions, approximate, partial (okuma ya da şema isteği zaman
+	 * sınırına takıldıysa), schemaLookupsSkipped ve notes. {@code decoder} null olabilir.
+	 */
+	static void status(Map<String, Object> out, MessageReader.Result r, RecordDecoder decoder) {
+		if (!r.offlinePartitions().isEmpty()) {
+			out.put("offlinePartitions", r.offlinePartitions());
+		}
+		if (r.approximate()) {
+			out.put("approximate", true);
+		}
+		if (r.partial() || decoder != null && decoder.timeLimited()) {
+			out.put("partial", true);
+		}
+		List<String> notes = new ArrayList<>(r.notes());
+		if (decoder != null && decoder.skippedSchemaLookups() > 0) {
+			out.put("schemaLookupsSkipped", decoder.skippedSchemaLookups());
+			notes.add(decoder.skipNote());
+		}
+		if (!notes.isEmpty()) {
+			out.put("notes", notes);
+		}
 	}
 
 	private static From from(ToolCall call) {
@@ -161,7 +176,7 @@ public class ConsumeTools {
 		MessageFormat valueFormat = MessageParams.valueFormat(call);
 		MessageFormat keyFormat = MessageParams.keyFormat(call);
 		RecordDecoder.requireSupported(call, keyFormat, valueFormat);
-		List<TopicPartition> tps = PartitionOffsets.partitions(call, topic, partition);
+		List<TopicPartition> tps = PartitionOffsets.select(call, topic, partition).online();
 		TopicPartition tp = tps.get(0);
 		PartitionOffsets.Bounds b = PartitionOffsets.bounds(call, tps);
 		long earliest = b.earliest(tp);
@@ -175,8 +190,8 @@ public class ConsumeTools {
 		}
 		List<ConsumerRecord<byte[], byte[]>> found = new ArrayList<>(1);
 		RecordScanner.Result scan;
-		try (KafkaConsumer<byte[], byte[]> consumer = call.newConsumer()) {
-			scan = RecordScanner.scan(call, consumer, List.of(new RecordScanner.Window(tp, offset, latest)), r -> {
+		try (BoundedConsumer c = BoundedConsumer.open(call)) {
+			scan = RecordScanner.scan(call, c.consumer(), List.of(new RecordScanner.Window(tp, offset, latest)), r -> {
 				found.add(r);
 				return RecordScanner.Next.STOP;
 			});
@@ -190,13 +205,16 @@ public class ConsumeTools {
 					+ ") arasında kayıt yok (compaction ya da transaction marker olabilir)");
 		}
 		ConsumerRecord<byte[], byte[]> rec = found.get(0);
-		RecordDecoder decoder = new RecordDecoder(registry, call.cluster());
+		RecordDecoder decoder = new RecordDecoder(registry, call);
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("topic", topic);
 		out.putAll(RecordJson.render(rec, decoder, keyFormat, valueFormat, MessageParams.FULL_VALUE_CHARS));
 		if (rec.offset() != offset) {
 			out.put("requestedOffset", offset);
 			out.put("note", "İstenen offset'te kayıt yok (compaction ya da transaction marker); sonraki kayıt döndü");
+		}
+		if (decoder.timeLimited()) {
+			out.put("partial", true);
 		}
 		return out;
 	}
@@ -216,7 +234,7 @@ public class ConsumeTools {
 			Set<String> seenInRecord = new HashSet<>();
 			for (Header h : rec.headers()) {
 				HeaderStat s = stats.computeIfAbsent(h.key(), HeaderStat::new);
-				s.add(RecordJson.headerValue(h.value()), seenInRecord.add(h.key()));
+				s.add(RecordJson.headerText(h.value()), seenInRecord.add(h.key()));
 			}
 			if (!seenInRecord.isEmpty()) {
 				withHeaders++;
@@ -234,15 +252,7 @@ public class ConsumeTools {
 		if (sorted.size() > MAX_HEADER_KEYS) {
 			out.put("headerKeysSkipped", sorted.size() - MAX_HEADER_KEYS);
 		}
-		if (r.partial()) {
-			out.put("partial", true);
-		}
-		if (r.approximate()) {
-			out.put("approximate", true);
-		}
-		if (!r.notes().isEmpty()) {
-			out.put("notes", r.notes());
-		}
+		status(out, r, null);
 		out.put("headers", rows);
 		return out;
 	}
@@ -259,10 +269,13 @@ public class ConsumeTools {
 
 		private final List<String> samples = new ArrayList<>();
 
+		private boolean samplesTruncated;
+
 		HeaderStat(String key) {
 			this.key = key;
 		}
 
+		/** {@code value}: tam (kesilmemiş) değer; farklı değer sayımı bunun üzerinden yapılır. */
 		void add(String value, boolean firstInRecord) {
 			count++;
 			if (firstInRecord) {
@@ -272,12 +285,13 @@ public class ConsumeTools {
 			String sample = RecordDecoder.cut(value, HEADER_SAMPLE_CHARS);
 			if (samples.size() < HEADER_SAMPLES && !samples.contains(sample)) {
 				samples.add(sample);
+				samplesTruncated |= sample.length() < value.length();
 			}
 		}
 
 		Map<String, Object> toMap() {
 			return Results.map("key", key, "count", count, "records", records, "distinctValues", distinct.size(),
-					"samples", samples);
+					"samples", samples, "samplesTruncatedAt", samplesTruncated ? HEADER_SAMPLE_CHARS : null);
 		}
 
 	}

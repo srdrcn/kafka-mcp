@@ -50,7 +50,7 @@ public class OffsetTools {
 					.read("messages_partition_for_key",
 							"Key'in Kafka varsayılan partitioner'ıyla (murmur2) düşeceği partition'ı hesaplar")
 					.required("topic", MessageParams.topic())
-					.required("key", P.string("Key (keyFormat'a göre: metin, hex ya da sayı)"))
+					.required("key", P.string("Key (keyFormat'a göre: metin, hex ya da sayı); metin boşluklarıyla, olduğu gibi hash'lenir"))
 					.param("keyFormat",
 							MessageParams.format("Key", List.of("string", "hex", "long"), "string"))
 					.handler(this::partitionForKey));
@@ -59,7 +59,8 @@ public class OffsetTools {
 	Object offsetForTimestamp(ToolCall call) {
 		String topic = call.str("topic");
 		long ts = Timestamps.required(call, "timestamp");
-		List<TopicPartition> tps = PartitionOffsets.partitions(call, topic, call.optInt("partition"));
+		PartitionOffsets.Selection sel = PartitionOffsets.select(call, topic, call.optInt("partition"));
+		List<TopicPartition> tps = sel.online();
 		ListOffsetsResult byTime = PartitionOffsets.request(call, tps, OffsetSpec.forTimestamp(ts));
 		ListOffsetsResult latest = PartitionOffsets.request(call, tps, OffsetSpec.latest());
 		Map<TopicPartition, OffsetAt> at = PartitionOffsets.await(call, byTime);
@@ -85,6 +86,7 @@ public class OffsetTools {
 		if (found < tps.size()) {
 			out.put("note", "offset null: o partition'da bu zamandan sonra kayıt yok (latestOffset'ten itibaren yeni kayıt gelir)");
 		}
+		offline(out, sel);
 		out.put("partitions", rows);
 		return out;
 	}
@@ -105,7 +107,8 @@ public class OffsetTools {
 		if (fromTs != null && toTs != null && toTs < fromTs) {
 			throw new ToolException("toTimestamp fromTimestamp'ten önce olamaz");
 		}
-		List<TopicPartition> tps = PartitionOffsets.partitions(call, topic, call.optInt("partition"));
+		PartitionOffsets.Selection sel = PartitionOffsets.select(call, topic, call.optInt("partition"));
+		List<TopicPartition> tps = sel.online();
 		ListOffsetsResult e = PartitionOffsets.request(call, tps, OffsetSpec.earliest());
 		ListOffsetsResult l = PartitionOffsets.request(call, tps, OffsetSpec.latest());
 		ListOffsetsResult f = fromTs == null ? null : PartitionOffsets.request(call, tps, OffsetSpec.forTimestamp(fromTs));
@@ -141,17 +144,36 @@ public class OffsetTools {
 			total += n;
 			rows.add(Results.map("partition", tp.partition(), "start", start, "end", end, "count", n));
 		}
-		return Results.map("topic", topic, "fromOffset", fromOffset, "toOffset", toOffset, "fromTimestamp",
-				fromTs == null ? null : Timestamps.iso(fromTs), "toTimestamp", toTs == null ? null : Timestamps.iso(toTs),
-				"total", total, "approximate", true, "note",
-				"Sayım offset farkıdır (end hariç): compacted ya da transactional topic'lerde gerçek kayıt sayısı daha az olabilir",
-				"partitions", rows);
+		Map<String, Object> out = Results.map("topic", topic, "fromOffset", fromOffset, "toOffset", toOffset,
+				"fromTimestamp", fromTs == null ? null : Timestamps.iso(fromTs), "toTimestamp",
+				toTs == null ? null : Timestamps.iso(toTs), "total", total, "approximate", true, "note",
+				"Sayım offset farkıdır (end hariç): compacted ya da transactional topic'lerde gerçek kayıt sayısı daha az olabilir");
+		offline(out, sel);
+		out.put("partitions", rows);
+		return out;
+	}
+
+	/** Lideri olmayan (atlanan) partition'ları çıktıya ekler. */
+	private static void offline(Map<String, Object> out, PartitionOffsets.Selection sel) {
+		if (!sel.offline().isEmpty()) {
+			out.put("offlinePartitions", sel.offline());
+			out.put("offlineNote", sel.note());
+		}
 	}
 
 	Object partitionForKey(ToolCall call) {
 		String topic = call.str("topic");
-		String key = call.str("key");
+		// ham değer: producer key baytlarını olduğu gibi hash'ler; " a " ile "a" farklı partition'a düşebilir ve
+		// boş string ("") geçerli (null olmayan) bir key'dir
+		Object raw = call.args().get("key");
+		if (raw == null) {
+			throw new ToolException("Parametre eksik: key");
+		}
+		String key = String.valueOf(raw);
 		String format = call.str("keyFormat", "string").toLowerCase(Locale.ROOT);
+		if (!"string".equals(format) && key.isBlank()) {
+			throw new ToolException("Parametre eksik: key (keyFormat=" + format + ")");
+		}
 		byte[] bytes = switch (format) {
 			case "string" -> key.getBytes(StandardCharsets.UTF_8);
 			case "hex" -> parseHex(key);
@@ -168,7 +190,7 @@ public class OffsetTools {
 		int partitions = PartitionOffsets.partitionCount(call, topic);
 		int partition = Utils.toPositive(Utils.murmur2(bytes)) % partitions;
 		return Results.map("topic", topic, "key", key, "keyFormat", format, "keyHex", RecordDecoder.hex(bytes),
-				"partition", partition, "partitionCount", partitions, "note",
+				"keyBytes", bytes.length, "partition", partition, "partitionCount", partitions, "note",
 				"Kafka varsayılan partitioner'ı (murmur2) içindir; özel partitioner kullanan ya da partition'ı açıkça "
 						+ "veren producer'larda farklı olabilir. Partition sayısı değişirse sonuç da değişir.");
 	}
