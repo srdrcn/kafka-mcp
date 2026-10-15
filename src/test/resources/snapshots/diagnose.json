@@ -1,0 +1,167 @@
+[ {
+  "name" : "diagnose_topic",
+  "description" : "Diagnose topic health: partitions/ISR, config, size/skew, writes, consumer lag/stuck, transactions, connectors, ACLs",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic name"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "Wait between two offset samples in seconds (default 3, 1-10; may be shortened to fit the time limit)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 3
+      }
+    },
+    "required" : [ "cluster", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_consumer_group",
+  "description" : "Diagnose a consumer group: state/type, members and assignment, lag and trend, stuck partitions, missing topics, coordinator, ACLs",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group id"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "Wait between two offset samples in seconds (default 5, 1-10; may be shortened to fit the time limit)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_connector",
+  "description" : "Diagnose a connector: connector/task state and error summaries, config/plugin/converters, topics, sink lag, source writes, workers",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector name"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "Wait between two offset samples in seconds (default 5, 1-10; may be shortened to fit the time limit)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_cluster",
+  "description" : "Diagnose the cluster: mode/version, controller/quorum, brokers, URP/offline/min ISR, disks, balance, config drift, lag, connectors",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_access",
+  "description" : "Check if a principal can produce/consume/transactional-produce/admin-topic on a topic; suggests missing ACLs for acls_create",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "principal" : {
+        "type" : "string",
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
+      },
+      "intent" : {
+        "type" : "string",
+        "description" : "Intent",
+        "enum" : [ "produce", "consume", "transactional-produce", "admin-topic" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic name"
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group (required for consume; for offset commits with transactional-produce)"
+      },
+      "transactionalId" : {
+        "type" : "string",
+        "description" : "transactional.id (required for transactional-produce)"
+      },
+      "host" : {
+        "type" : "string",
+        "description" : "Client IP (default *: only ACLs with host * match)"
+      }
+    },
+    "required" : [ "cluster", "principal", "intent", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_connectivity",
+  "description" : "Diagnose connectivity step by step with timings: DNS, TCP, security/Kerberos, Kafka with a new client, advertised addresses, Connect/SR",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster name",
+        "enum" : [ "alpha", "beta" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+} ]

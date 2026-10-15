@@ -1,0 +1,60 @@
+package io.github.srdrcn.kafkamcp.toolsets.diagnose;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.springframework.stereotype.Component;
+
+import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
+import io.github.srdrcn.kafkamcp.mcp.Toolset;
+
+/** diagnose: single-call health diagnosis tools (topic, consumer group, connector, cluster, access, connectivity). */
+@Component
+public class DiagnoseToolset implements Toolset {
+
+	private final DiagnoseTopicTools topicTools;
+
+	private final DiagnoseGroupTools groupTools;
+
+	private final DiagnoseConnectorTools connectorTools;
+
+	private final DiagnoseClusterTools clusterTools;
+
+	private final DiagnoseAccessTools accessTools;
+
+	private final DiagnoseConnectivityTools connectivityTools;
+
+	public DiagnoseToolset(DiagnoseTopicTools topicTools, DiagnoseGroupTools groupTools,
+			DiagnoseConnectorTools connectorTools, DiagnoseClusterTools clusterTools, DiagnoseAccessTools accessTools,
+			DiagnoseConnectivityTools connectivityTools) {
+		this.topicTools = topicTools;
+		this.groupTools = groupTools;
+		this.connectorTools = connectorTools;
+		this.clusterTools = clusterTools;
+		this.accessTools = accessTools;
+		this.connectivityTools = connectivityTools;
+	}
+
+	@Override
+	public String name() {
+		return "diagnose";
+	}
+
+	@Override
+	public String description() {
+		return "Diagnosis tools: health summaries for topics, consumer groups, connectors, the cluster, access and connectivity";
+	}
+
+	@Override
+	public List<ToolSpec> tools() {
+		List<ToolSpec> tools = new ArrayList<>();
+		tools.addAll(topicTools.tools());
+		tools.addAll(groupTools.tools());
+		tools.addAll(connectorTools.tools());
+		tools.addAll(clusterTools.tools());
+		tools.addAll(accessTools.tools());
+		tools.addAll(connectivityTools.tools());
+		return tools;
+	}
+
+}
