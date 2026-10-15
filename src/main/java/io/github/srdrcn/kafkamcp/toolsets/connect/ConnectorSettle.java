@@ -14,24 +14,24 @@ import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 
 /**
- * Yazma araçlarının durum yoklaması için "yerleşti mi?" koşulları. Koşullar yoklamalar arasında durum tutar
- * (her araç çağrısı için yeni örnek) ve iki tuzağı önler: Connect işlemi henüz uygulamadan önceki (eski)
- * durumu sonuç sanmak ve hiç görev üretmeyen connector için görev beklemek.
+ * "Has it settled?" conditions for the status polling of the write tools. The conditions keep state between polls
+ * (a new instance per tool call) and avoid two traps: taking the (old) status from before Connect applied the
+ * operation as the result, and waiting for tasks of a connector that never creates any.
  */
 public final class ConnectorSettle {
 
-	/** Görevsiz RUNNING durumun kalıcı ("görev üretmiyor") sayılması için değişmeden görülmesi gereken süre. */
+	/** How long a task-less RUNNING status must stay unchanged to count as permanent ("creates no tasks"). */
 	public static final long ZERO_TASK_STABLE_MS = 3_000;
 
-	/** {@link #changedFrom} için connector'ın kendisini temsil eden id (görev id'leri 0'dan başlar). */
+	/** Id standing for the connector itself in {@link #changedFrom} (task ids start at 0). */
 	public static final int CONNECTOR = -1;
 
 	private ConnectorSettle() {
 	}
 
 	/**
-	 * Resume sonrası: connector/görevler PAUSED/STOPPED değil, geçişte değil; ve görev var, bir hata var ya da
-	 * görevsiz RUNNING durum {@link #ZERO_TASK_STABLE_MS} boyunca değişmedi.
+	 * After resume: the connector/tasks are not PAUSED/STOPPED and not in transition; and there are tasks, there is
+	 * a failure, or the task-less RUNNING status stayed unchanged for {@link #ZERO_TASK_STABLE_MS}.
 	 */
 	public static Predicate<ConnectorStatus> resumed(LongSupplier nanoClock) {
 		ZeroTasks zero = new ZeroTasks(nanoClock);
@@ -42,9 +42,10 @@ public final class ConnectorSettle {
 	}
 
 	/**
-	 * Config yazımı sonrası: geçişte olmayan ve görevli, hatalı, RUNNING dışı ya da kalıcı görevsiz durum.
-	 * {@code before} (güncellemede çağrı öncesi durum) verilirse ayrıca durumun ondan farklılaştığı ya da
-	 * geçişte görüldüğü bir yoklama gerekir: aksi halde eski durum yeni config'in sonucu sanılır.
+	 * After a config write: a status that is not in transition and has tasks, a failure, a state other than
+	 * RUNNING, or permanently no tasks. If {@code before} (the status before the call, on update) is given, some
+	 * poll must also have seen the status differ from it or be in transition; otherwise the old status would be
+	 * taken as the result of the new config.
 	 */
 	public static Predicate<ConnectorStatus> applied(ConnectorStatus before, LongSupplier nanoClock) {
 		ZeroTasks zero = new ZeroTasks(nanoClock);
@@ -60,9 +61,9 @@ public final class ConnectorSettle {
 	}
 
 	/**
-	 * {@code ids} içindeki her öğe (görev id'si ya da {@link #CONNECTOR}) bir yoklamada RESTARTING/UNASSIGNED
-	 * görüldüyse ya da durumu/worker'ı/trace'i {@code before}'dakinden farklıysa true (bir kez görülen öğe
-	 * değişmiş sayılır). {@code before} null ise hemen true.
+	 * True once every item in {@code ids} (a task id or {@link #CONNECTOR}) has been seen RESTARTING/UNASSIGNED in
+	 * a poll, or with a state/worker/trace different from {@code before} (an item seen changed once stays changed).
+	 * Immediately true if {@code before} is null.
 	 */
 	public static Predicate<ConnectorStatus> changedFrom(ConnectorStatus before, Collection<Integer> ids) {
 		Set<Integer> pending = before == null ? new HashSet<>() : new HashSet<>(ids);
@@ -72,7 +73,7 @@ public final class ConnectorSettle {
 		};
 	}
 
-	/** Connector ya da görevi PAUSED/STOPPED mı (resume henüz uygulanmamış)? */
+	/** Is the connector or a task PAUSED/STOPPED (resume not applied yet)? */
 	private static boolean held(ConnectorStatus s) {
 		return PAUSED.equals(s.state()) || STOPPED.equals(s.state())
 				|| s.tasks().stream().anyMatch(t -> PAUSED.equals(t.state()));
@@ -101,7 +102,7 @@ public final class ConnectorSettle {
 			.orElse(null);
 	}
 
-	/** Görevsiz RUNNING durumun aynen sürdüğü süreyi izler. */
+	/** Tracks how long a task-less RUNNING status has stayed the same. */
 	private static final class ZeroTasks {
 
 		private final LongSupplier clock;
@@ -114,7 +115,7 @@ public final class ConnectorSettle {
 			this.clock = clock;
 		}
 
-		/** Yoklamayı işler; durum görevsiz RUNNING ve {@link #ZERO_TASK_STABLE_MS} boyunca aynıysa true. */
+		/** Processes a poll; true if the status is task-less RUNNING and unchanged for {@link #ZERO_TASK_STABLE_MS}. */
 		boolean stable(ConnectorStatus s) {
 			if (!RUNNING.equals(s.state()) || !s.tasks().isEmpty()) {
 				seen = null;

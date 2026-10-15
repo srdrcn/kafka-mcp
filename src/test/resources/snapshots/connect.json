@@ -1,6 +1,6 @@
 [ {
   "name" : "connect_clusters_list",
-  "description" : "Connect URL'si olan cluster'larda Connect erişimi, sürümü ve connector sayısı",
+  "description" : "Connect reachability, version and connector count for clusters with a Connect URL",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -18,7 +18,7 @@
   }
 }, {
   "name" : "connect_plugins_list",
-  "description" : "Yüklü Connect plugin'leri (sınıf, tip, sürüm)",
+  "description" : "Installed Connect plugins (class, type, version)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -40,7 +40,7 @@
       },
       "connectorsOnly" : {
         "type" : "boolean",
-        "description" : "Sadece connector plugin'leri (varsayılan true; false: converter/transform vb. dahil)"
+        "description" : "Only connector plugins (default true; false also includes converters, transforms, etc.)"
       }
     },
     "required" : [ "cluster" ]
@@ -51,7 +51,7 @@
   }
 }, {
   "name" : "connect_plugins_validate",
-  "description" : "Connector config'ini plugin'e göre doğrular; sadece hatalı alanları döner",
+  "description" : "Validate a connector config against its plugin; returns only the invalid fields",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -62,11 +62,11 @@
       },
       "plugin" : {
         "type" : "string",
-        "description" : "Connector sınıfı (tam ya da kısa ad, ör. FileStreamSinkConnector)"
+        "description" : "Connector class (full or short name, e.g. FileStreamSinkConnector)"
       },
       "config" : {
         "type" : "object",
-        "description" : "Doğrulanacak connector config'i (anahtar → string değer)",
+        "description" : "Connector config to validate (key → string value)",
         "additionalProperties" : {
           "type" : "string"
         }
@@ -80,7 +80,7 @@
   }
 }, {
   "name" : "connectors_list",
-  "description" : "Connector'ları durum, tip, sınıf, worker ve görev sayılarıyla listeler",
+  "description" : "List connectors with state, type, class, worker and task counts",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -102,7 +102,7 @@
       },
       "state" : {
         "type" : "string",
-        "description" : "Connector durumu filtresi",
+        "description" : "Connector state filter",
         "enum" : [ "RUNNING", "PAUSED", "STOPPED", "FAILED", "UNASSIGNED", "RESTARTING" ]
       }
     },
@@ -114,7 +114,7 @@
   }
 }, {
   "name" : "connectors_get",
-  "description" : "Connector detayı: tip, sınıf, maskeli config, görevler ve durum özeti",
+  "description" : "Connector details: type, class, masked config, tasks and status summary",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -125,11 +125,11 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "includeTaskConfigs" : {
         "type" : "boolean",
-        "description" : "Görev config'lerini de getir (maskeli; varsayılan false)"
+        "description" : "Also return the task configs (masked; default false)"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -140,7 +140,7 @@
   }
 }, {
   "name" : "connectors_status",
-  "description" : "Connector ve görevlerinin durumu, worker'ı ve hata özeti (trace'in ilk 3 satırı)",
+  "description" : "Status, worker and error summary (first 3 trace lines) of a connector and its tasks",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -151,7 +151,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -162,7 +162,7 @@
   }
 }, {
   "name" : "connectors_failed",
-  "description" : "FAILED connector'lar ya da FAILED görevi olanlar, hata özetiyle",
+  "description" : "FAILED connectors and connectors with FAILED tasks, with an error summary",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -191,7 +191,7 @@
   }
 }, {
   "name" : "connectors_topics",
-  "description" : "Connector'ın aktif olarak kullandığı topic'ler",
+  "description" : "Topics actively used by a connector",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -202,7 +202,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -213,7 +213,7 @@
   }
 }, {
   "name" : "connectors_offsets",
-  "description" : "Connector offset'leri (source: partition/offset, sink: topic/partition/offset)",
+  "description" : "Connector offsets (source: partition/offset, sink: topic/partition/offset)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -224,11 +224,11 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "filter" : {
         "type" : "string",
-        "description" : "Sink'te topic, source'ta partition (JSON) filtresi (regex, kısmi eşleşme)"
+        "description" : "Regex filter (partial match) on the topic for sink connectors or the partition JSON for source connectors"
       },
       "limit" : {
         "type" : "integer",
@@ -246,7 +246,7 @@
   }
 }, {
   "name" : "connectors_task_distribution",
-  "description" : "Worker başına connector/görev dağılımı, dengesizlik ve RUNNING olmayan görevler",
+  "description" : "Connector/task distribution per worker, imbalance and non-RUNNING tasks",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -264,7 +264,7 @@
   }
 }, {
   "name" : "connectors_config_diff",
-  "description" : "Connector config'ini verilen config'le ya da başka bir connector'la karşılaştırır",
+  "description" : "Compare a connector's config with a given config or with another connector",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -275,18 +275,18 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "config" : {
         "type" : "object",
-        "description" : "Karşılaştırılacak hedef config (otherName ile birlikte verilmez)",
+        "description" : "Target config to compare with (not together with otherName)",
         "additionalProperties" : {
           "type" : "string"
         }
       },
       "otherName" : {
         "type" : "string",
-        "description" : "Karşılaştırılacak diğer connector adı (config yerine)"
+        "description" : "Name of the other connector to compare with (instead of config)"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -297,7 +297,7 @@
   }
 }, {
   "name" : "connectors_pause",
-  "description" : "WRITE: Connector'ı ve görevlerini duraklatır (PAUSED)",
+  "description" : "WRITE: Pause a connector and its tasks (PAUSED)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -308,7 +308,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -319,7 +319,7 @@
   }
 }, {
   "name" : "connectors_resume",
-  "description" : "WRITE: Duraklatılmış/durdurulmuş connector'ı devam ettirir (RUNNING)",
+  "description" : "WRITE: Resume a paused/stopped connector (RUNNING)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -330,7 +330,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -341,7 +341,7 @@
   }
 }, {
   "name" : "connectors_stop",
-  "description" : "WRITE: Connector'ı durdurur (STOPPED: görevler kapanır, config korunur)",
+  "description" : "WRITE: Stop a connector (STOPPED: its tasks shut down, the config is kept)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -352,7 +352,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -363,7 +363,7 @@
   }
 }, {
   "name" : "connectors_restart",
-  "description" : "WRITE: Connector'ı yeniden başlatır (isteğe bağlı görevleriyle ya da sadece FAILED olanları)",
+  "description" : "WRITE: Restart a connector (optionally with its tasks, or only the FAILED ones)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -374,15 +374,15 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "includeTasks" : {
         "type" : "boolean",
-        "description" : "Görevleri de yeniden başlat (varsayılan false)"
+        "description" : "Also restart the tasks (default false)"
       },
       "onlyFailed" : {
         "type" : "boolean",
-        "description" : "Sadece FAILED connector/görevleri yeniden başlat (varsayılan false)"
+        "description" : "Restart only the FAILED connector/tasks (default false)"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -393,7 +393,7 @@
   }
 }, {
   "name" : "connectors_task_restart",
-  "description" : "WRITE: Connector'ın tek bir görevini yeniden başlatır",
+  "description" : "WRITE: Restart a single task of a connector",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -404,11 +404,11 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "taskId" : {
         "type" : "integer",
-        "description" : "Görev id'si (0'dan başlar)"
+        "description" : "Task id (starts at 0)"
       }
     },
     "required" : [ "cluster", "name", "taskId" ]
@@ -419,7 +419,7 @@
   }
 }, {
   "name" : "connectors_create_or_update",
-  "description" : "WRITE: Connector oluşturur ya da config'ini tamamen değiştirir",
+  "description" : "WRITE: Create a connector or replace its whole config",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -430,11 +430,11 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       },
       "config" : {
         "type" : "object",
-        "description" : "Connector config'i (anahtar → string değer; connector.class dahil)",
+        "description" : "Connector config (key → string value; including connector.class)",
         "additionalProperties" : {
           "type" : "string"
         }
@@ -448,7 +448,7 @@
   }
 }, {
   "name" : "connectors_delete",
-  "description" : "WRITE: Connector'ı siler (geri alınamaz)",
+  "description" : "WRITE: Delete a connector (irreversible)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -459,7 +459,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]
@@ -470,7 +470,7 @@
   }
 }, {
   "name" : "connectors_offsets_reset",
-  "description" : "WRITE: STOPPED durumdaki connector'ın offset'lerini sıfırlar (geri alınamaz)",
+  "description" : "WRITE: Reset the offsets of a STOPPED connector (irreversible)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -481,7 +481,7 @@
       },
       "name" : {
         "type" : "string",
-        "description" : "Connector adı"
+        "description" : "Connector name"
       }
     },
     "required" : [ "cluster", "name" ]

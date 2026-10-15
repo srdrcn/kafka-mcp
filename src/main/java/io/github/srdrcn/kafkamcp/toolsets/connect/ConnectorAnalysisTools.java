@@ -14,11 +14,11 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Connector analiz araçları: connectors_task_distribution, connectors_config_diff. */
+/** Connector analysis tools: connectors_task_distribution, connectors_config_diff. */
 @Component
 public class ConnectorAnalysisTools {
 
-	/** Worker başına örnek olarak listelenen RUNNING olmayan görev sayısı üst sınırı. */
+	/** Maximum number of non-RUNNING tasks listed as a sample per worker. */
 	static final int NOT_RUNNING_SAMPLE = 20;
 
 	private final ConnectApi api;
@@ -30,16 +30,16 @@ public class ConnectorAnalysisTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("connectors_task_distribution",
-					"Worker başına connector/görev dağılımı, dengesizlik ve RUNNING olmayan görevler")
+					"Connector/task distribution per worker, imbalance and non-RUNNING tasks")
 			.connect()
 			.handler(this::taskDistribution),
 				ToolSpec
 					.read("connectors_config_diff",
-							"Connector config'ini verilen config'le ya da başka bir connector'la karşılaştırır")
+							"Compare a connector's config with a given config or with another connector")
 					.connect()
 					.required("name", ConnectorReadTools.nameParam())
-					.param("config", P.stringMap("Karşılaştırılacak hedef config (otherName ile birlikte verilmez)"))
-					.param("otherName", P.string("Karşılaştırılacak diğer connector adı (config yerine)"))
+					.param("config", P.stringMap("Target config to compare with (not together with otherName)"))
+					.param("otherName", P.string("Name of the other connector to compare with (instead of config)"))
 					.handler(this::configDiff));
 	}
 
@@ -109,7 +109,7 @@ public class ConnectorAnalysisTools {
 				"minTasksPerWorker", workers.isEmpty() ? 0 : min, "unassignedConnectors",
 				unassignedConnectors == 0 ? null : unassignedConnectors, "unassignedTasks",
 				unassignedTasks == 0 ? null : unassignedTasks, "workers", rows, "note",
-				"Sadece connector/görev çalıştıran worker'lar görünür (boştaki worker'lar REST'te listelenmez)");
+				"Only workers running connectors/tasks are shown (idle workers are not listed by the REST API)");
 	}
 
 	Object configDiff(ToolCall call) {
@@ -118,7 +118,7 @@ public class ConnectorAnalysisTools {
 		boolean hasConfig = call.args().get("config") != null;
 		String other = call.str("otherName", null);
 		if (hasConfig == (other != null)) {
-			throw new ToolException("config ya da otherName parametrelerinden tam olarak biri verilmeli");
+			throw new ToolException("Exactly one of the config or otherName parameters is required");
 		}
 		Map<String, String> current = api.config(cluster, name);
 		Map<String, String> target = other != null ? api.config(cluster, other) : call.stringMap("config");

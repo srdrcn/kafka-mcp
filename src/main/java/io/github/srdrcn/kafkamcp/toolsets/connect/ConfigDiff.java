@@ -11,9 +11,9 @@ import java.util.TreeSet;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * İki connector config'inin farkı (maskeli değerlerle): hedefte olup mevcutta olmayan (added), mevcutta
- * olup hedefte olmayan (removed) ve değeri farklı (changed) anahtarlar; boş gruplar çıktıya yazılmaz.
- * Verilen anahtarlar (ör. "name") yok sayılır.
+ * Difference between two connector configs (with masked values): keys in the target but not in the current config
+ * (added), in the current config but not in the target (removed), and with different values (changed); empty groups
+ * are left out of the output. The given keys (e.g. "name") are ignored.
  */
 public final class ConfigDiff {
 

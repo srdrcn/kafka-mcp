@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Maskeleme, config farkı, trace özeti ve plugin çözümleme (ağsız birim testleri). */
+/** Masking, config diff, trace summary and plugin resolution (unit tests without network). */
 class ConnectSecretsTest {
 
 	@Test
@@ -79,7 +79,7 @@ class ConnectSecretsTest {
 		assertThat(ConnectApi.resolvePlugin(plugins, "filestreamsink")).isEqualTo(plugins.get(0));
 		assertThat(ConnectApi.resolvePlugin(plugins, plugins.get(1))).isEqualTo(plugins.get(1));
 		assertThatThrownBy(() -> ConnectApi.resolvePlugin(plugins, "Nope")).isInstanceOf(ToolException.class)
-			.hasMessageContaining("bulunamadı")
+			.hasMessageContaining("not found")
 			.hasMessageContaining("MirrorSourceConnector");
 	}
 

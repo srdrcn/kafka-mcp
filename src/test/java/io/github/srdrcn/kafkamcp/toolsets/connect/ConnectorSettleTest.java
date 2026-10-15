@@ -12,9 +12,9 @@ import org.junit.jupiter.api.Test;
 import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectorStatus.Task;
 
 /**
- * Yazma araçlarının durum yoklama koşulları (ağsız birim testleri): görevsiz RUNNING connector'ın yerleşmesi,
- * güncelleme/restart sonrası çağrı öncesi (eski) durumun sonuç sayılmaması ve connector adlarının path
- * kodlaması.
+ * Status polling conditions of the write tools (unit tests without network): settling of a task-less RUNNING
+ * connector, the pre-call (old) status not counting as the result after an update/restart, and path encoding of
+ * connector names.
  */
 class ConnectorSettleTest {
 
@@ -46,7 +46,7 @@ class ConnectorSettleTest {
 		at(ConnectorSettle.ZERO_TASK_STABLE_MS);
 		assertThat(p.test(zero)).isTrue();
 
-		// süre kesintisiz olmalı: arada başka bir durum görülürse pencere yeniden başlar
+		// the window must be uninterrupted: if another status is seen in between, it starts over
 		Predicate<ConnectorStatus> q = ConnectorSettle.resumed(clock::get);
 		at(0);
 		assertThat(q.test(zero)).isFalse();
@@ -84,12 +84,12 @@ class ConnectorSettleTest {
 		assertThat(p.test(status("RUNNING", task(0, "FAILED")))).isFalse();
 		assertThat(p.test(status("RUNNING", task(0, "RUNNING")))).isTrue();
 
-		// geçiş görüldükten sonra aynı FAILED durum yeni config'in sonucudur
+		// once a transition was seen, the same FAILED status is the result of the new config
 		Predicate<ConnectorStatus> q = ConnectorSettle.applied(failed, clock::get);
 		assertThat(q.test(status("RUNNING", task(0, "UNASSIGNED")))).isFalse();
 		assertThat(q.test(failed)).isTrue();
 
-		// tasks.max 1 → 2: eski tek görevli RUNNING durum kabul edilmez
+		// tasks.max 1 → 2: the old single-task RUNNING status is not accepted
 		ConnectorStatus one = status("RUNNING", task(0, "RUNNING"));
 		Predicate<ConnectorStatus> r = ConnectorSettle.applied(one, clock::get);
 		assertThat(r.test(one)).isFalse();
@@ -117,14 +117,14 @@ class ConnectorSettleTest {
 		assertThat(p.test(before)).isFalse();
 		assertThat(p.test(status("RUNNING", task(0, "FAILED"), task(1, "RUNNING")))).isFalse();
 		assertThat(p.test(status("RUNNING", task(0, "RESTARTING"), task(1, "RUNNING")))).isTrue();
-		// bir kez değişmiş görülen öğe değişmiş kalır (yeniden FAILED olsa da)
+		// an item seen changed once stays changed (even if it is FAILED again)
 		assertThat(p.test(before)).isTrue();
 
 		Predicate<ConnectorStatus> q = ConnectorSettle.changedFrom(before, List.of(ConnectorSettle.CONNECTOR, 0));
 		assertThat(q.test(status("RESTARTING", task(0, "FAILED"), task(1, "RUNNING")))).isFalse();
 		assertThat(q.test(status("RUNNING", task(0, "RUNNING"), task(1, "RUNNING")))).isTrue();
 
-		// trace ya da worker farkı da değişimdir
+		// a different trace or worker also counts as a change
 		Predicate<ConnectorStatus> t = ConnectorSettle.changedFrom(before, List.of(0));
 		assertThat(t.test(status("RUNNING", new Task(0, "FAILED", W, "other"), task(1, "RUNNING")))).isTrue();
 

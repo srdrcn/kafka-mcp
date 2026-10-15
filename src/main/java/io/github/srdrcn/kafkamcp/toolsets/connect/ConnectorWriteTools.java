@@ -17,14 +17,14 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
 /**
- * Connector yazma araçları: pause/resume/stop/restart/task_restart/create_or_update ve destructive
- * connectors_delete, connectors_offsets_reset. Durum değiştiren araçlar yeni durumu kısa ve sınırlı bir
- * süre yoklayarak döner.
+ * Connector write tools: pause/resume/stop/restart/task_restart/create_or_update and the destructive
+ * connectors_delete, connectors_offsets_reset. Tools that change the state return the new state after polling it
+ * for a short, bounded time.
  */
 @Component
 public class ConnectorWriteTools {
 
-	/** Durum geçişi için en fazla bekleme. */
+	/** Maximum wait for a state transition. */
 	static final long STATE_WAIT_MS = 6_000;
 
 	private final ConnectApi api;
@@ -36,43 +36,43 @@ public class ConnectorWriteTools {
 	public List<ToolSpec> tools() {
 		Map<String, Object> name = ConnectorReadTools.nameParam();
 		return List.of(
-				ToolSpec.write("connectors_pause", "Connector'ı ve görevlerini duraklatır (PAUSED)")
+				ToolSpec.write("connectors_pause", "Pause a connector and its tasks (PAUSED)")
 					.connect()
 					.required("name", name)
 					.handler(this::pause),
-				ToolSpec.write("connectors_resume", "Duraklatılmış/durdurulmuş connector'ı devam ettirir (RUNNING)")
+				ToolSpec.write("connectors_resume", "Resume a paused/stopped connector (RUNNING)")
 					.connect()
 					.required("name", name)
 					.handler(this::resume),
-				ToolSpec.write("connectors_stop", "Connector'ı durdurur (STOPPED: görevler kapanır, config korunur)")
+				ToolSpec.write("connectors_stop", "Stop a connector (STOPPED: its tasks shut down, the config is kept)")
 					.connect()
 					.required("name", name)
 					.handler(this::stop),
 				ToolSpec
 					.write("connectors_restart",
-							"Connector'ı yeniden başlatır (isteğe bağlı görevleriyle ya da sadece FAILED olanları)")
+							"Restart a connector (optionally with its tasks, or only the FAILED ones)")
 					.connect()
 					.required("name", name)
-					.param("includeTasks", P.bool("Görevleri de yeniden başlat (varsayılan false)"))
-					.param("onlyFailed", P.bool("Sadece FAILED connector/görevleri yeniden başlat (varsayılan false)"))
+					.param("includeTasks", P.bool("Also restart the tasks (default false)"))
+					.param("onlyFailed", P.bool("Restart only the FAILED connector/tasks (default false)"))
 					.handler(this::restart),
-				ToolSpec.write("connectors_task_restart", "Connector'ın tek bir görevini yeniden başlatır")
+				ToolSpec.write("connectors_task_restart", "Restart a single task of a connector")
 					.connect()
 					.required("name", name)
-					.required("taskId", P.integer("Görev id'si (0'dan başlar)"))
+					.required("taskId", P.integer("Task id (starts at 0)"))
 					.handler(this::taskRestart),
-				ToolSpec.write("connectors_create_or_update", "Connector oluşturur ya da config'ini tamamen değiştirir")
+				ToolSpec.write("connectors_create_or_update", "Create a connector or replace its whole config")
 					.connect()
 					.required("name", name)
-					.required("config", P.stringMap("Connector config'i (anahtar → string değer; connector.class dahil)"))
+					.required("config", P.stringMap("Connector config (key → string value; including connector.class)"))
 					.handler(this::createOrUpdate),
-				ToolSpec.destructive("connectors_delete", "Connector'ı siler (geri alınamaz)")
+				ToolSpec.destructive("connectors_delete", "Delete a connector (irreversible)")
 					.connect()
 					.required("name", name)
 					.handler(this::delete),
 				ToolSpec
 					.destructive("connectors_offsets_reset",
-							"STOPPED durumdaki connector'ın offset'lerini sıfırlar (geri alınamaz)")
+							"Reset the offsets of a STOPPED connector (irreversible)")
 					.connect()
 					.required("name", name)
 					.handler(this::offsetsReset));
@@ -87,8 +87,8 @@ public class ConnectorWriteTools {
 	}
 
 	/**
-	 * Yoklama sonucunu çıktıya ekler; yerleşmediyse nedenine göre kısa not düşer ({@code before}: çağrı öncesi
-	 * durum, biliniyorsa).
+	 * Adds the polling result to the output; if it did not settle, adds a short note on why ({@code before}: the
+	 * status before the call, if known).
 	 */
 	private static Map<String, Object> withState(Map<String, Object> out, String target, ConnectorStatus before,
 			ConnectApi.Awaited a) {
@@ -100,17 +100,17 @@ public class ConnectorWriteTools {
 		if (!a.settled()) {
 			String note;
 			if (s != null && s.equals(before)) {
-				note = "Durum çağrı öncesiyle aynı: işlem henüz uygulanmamış ya da görülemeyecek kadar hızlı bitip aynı"
-						+ " duruma dönmüş olabilir";
+				note = "Status is the same as before the call: the operation may not have been applied yet, or it may"
+						+ " have finished too fast to observe and returned to the same state";
 			}
 			else if (target != null && s != null && target.equals(s.state())) {
-				note = "Connector " + target + " ama görevler henüz oturmadı";
+				note = "Connector is " + target + " but its tasks have not settled yet";
 			}
 			else {
-				note = target == null ? "Durum henüz oturmadı" : "Durum henüz " + target + " değil";
+				note = target == null ? "Status has not settled yet" : "Status is not " + target + " yet";
 			}
 			out.put("note",
-					note + "; connectors_status ile tekrar bakın" + (a.error() == null ? "" : " (" + a.error() + ")"));
+					note + "; check again with connectors_status" + (a.error() == null ? "" : " (" + a.error() + ")"));
 		}
 		return out;
 	}
@@ -139,12 +139,13 @@ public class ConnectorWriteTools {
 					+ "&onlyFailed=" + onlyFailed, null);
 		Map<String, Object> out = Results.map("name", name, "action", "restart", "includeTasks", includeTasks,
 				"onlyFailed", onlyFailed, "httpStatus", r.status());
-		// Yerleşmiş sayılmak için değişmesi (ya da RESTARTING/UNASSIGNED görülmesi) gereken öğeler. 202: istek
-		// config topic'ine yazılır, worker'lar planı sonra uygular → plandaki her öğe. 204: connector zaten
-		// yeniden başlatıldı, ama önceden FAILED ise status önbelleği eski FAILED'ı bir süre daha gösterebilir.
+		// Items that must change (or be seen RESTARTING/UNASSIGNED) to count as settled. 202: the request is
+		// written to the config topic and the workers apply the plan later → every item in the plan. 204: the
+		// connector was already restarted, but if it was FAILED before, the status cache may still show the old
+		// FAILED for a while.
 		List<Integer> mustChange = new ArrayList<>();
 		if (r.body().isObject()) {
-			// 202: Connect'in yeniden başlatacaklarını RESTARTING olarak işaretlediği plan
+			// 202: the plan in which Connect marks what it will restart as RESTARTING
 			ConnectorStatus planned = ConnectorStatus.from(r.body());
 			boolean connector = ConnectorStatus.RESTARTING.equals(planned.state());
 			List<Integer> tasks = planned.tasks()
@@ -162,7 +163,8 @@ public class ConnectorWriteTools {
 			mustChange.add(ConnectorSettle.CONNECTOR);
 		}
 		Predicate<ConnectorStatus> changed = ConnectorSettle.changedFrom(before, mustChange);
-		// 202'de geçişi (RESTARTING/UNASSIGNED) kaçırmamak için hemen yokla; 204'te yeni durumun okunmasını bekle
+		// On 202 poll right away so the transition (RESTARTING/UNASSIGNED) is not missed; on 204 wait for the new
+		// status to be readable
 		long initialDelay = r.body().isObject() ? 0 : 500;
 		return withState(out, null, before,
 				api.await(call, name, initialDelay, STATE_WAIT_MS, s -> changed.test(s) && !s.inTransition()));
@@ -172,14 +174,14 @@ public class ConnectorWriteTools {
 		String name = call.str("name");
 		long taskId = call.requiredLong("taskId");
 		if (taskId < 0) {
-			throw new ToolException("taskId negatif olamaz");
+			throw new ToolException("taskId cannot be negative");
 		}
 		ConnectorStatus before = api.statusOrNull(call.cluster(), name);
 		ConnectClient.Response r = api.client()
 			.send(call.cluster(), "POST", ConnectApi.path(name) + "/tasks/" + taskId + "/restart", null);
 		int id = (int) taskId;
-		// 204: görev yeniden başlatıldı; ama önceden FAILED ise status önbelleği eski FAILED'ı bir süre daha
-		// gösterebilir → görev değişmeden (ya da geçişte görülmeden) yerleşmiş sayılmaz.
+		// 204: the task was restarted; but if it was FAILED before, the status cache may still show the old FAILED
+		// for a while → it does not count as settled until the task changes (or is seen in transition).
 		ConnectorStatus.Task old = before == null ? null : task(before, id);
 		Predicate<ConnectorStatus> changed = ConnectorSettle.changedFrom(before,
 				old != null && old.failed() ? List.of(id) : List.of());
@@ -195,9 +197,9 @@ public class ConnectorWriteTools {
 		out.put("settled", a.settled());
 		if (!a.settled()) {
 			out.put("note", (now != null && now.equals(old)
-					? "Görev durumu çağrı öncesiyle aynı: yeniden başlatma henüz yansımamış ya da görev aynı hatayla"
-							+ " yine düşmüş olabilir"
-					: "Görev henüz RUNNING/FAILED değil") + "; connectors_status ile tekrar bakın"
+					? "Task status is the same as before the call: the restart may not be visible yet, or the task may"
+							+ " have failed again with the same error"
+					: "Task is not RUNNING/FAILED yet") + "; check again with connectors_status"
 					+ (a.error() == null ? "" : " (" + a.error() + ")"));
 		}
 		return out;
@@ -211,11 +213,11 @@ public class ConnectorWriteTools {
 		String name = call.str("name");
 		Map<String, String> config = call.stringMap("config");
 		if (config.isEmpty()) {
-			throw new ToolException("config boş olamaz (en az connector.class gerekli)");
+			throw new ToolException("config cannot be empty (at least connector.class is required)");
 		}
 		config.forEach((k, v) -> {
 			if (v == null) {
-				throw new ToolException("config değeri null olamaz: " + k);
+				throw new ToolException("config value cannot be null: " + k);
 			}
 		});
 		ConnectorStatus before = api.statusOrNull(call.cluster(), name);
@@ -226,8 +228,8 @@ public class ConnectorWriteTools {
 		Map<String, Object> out = Results.map("name", name, "result", created ? "created" : "updated",
 				"httpStatus", r.status(), "type", ConnectJson.text(body, "type"), "class",
 				connectorClass == null ? config.get(ConnectorInfo.CONNECTOR_CLASS) : connectorClass);
-		// Güncellemede (200) Connect connector'ı/görevleri yanıttan sonra yeniden başlatır: çağrı öncesi durum
-		// değişmeden (ya da geçişte görülmeden) yerleşmiş sayılmaz.
+		// On update (200) Connect restarts the connector/tasks after responding: it does not count as settled until
+		// the pre-call status changes (or is seen in transition).
 		ConnectorStatus old = created ? null : before;
 		return withState(out, null, old,
 				api.await(call, name, 0, STATE_WAIT_MS, ConnectorSettle.applied(old, System::nanoTime)));
@@ -243,8 +245,8 @@ public class ConnectorWriteTools {
 		String name = call.str("name");
 		ConnectorStatus s = api.status(call.cluster(), name);
 		if (!ConnectorStatus.STOPPED.equals(s.state())) {
-			throw new ToolException("Connector '" + name + "' durumu " + s.state()
-					+ "; offset'ler sadece STOPPED durumunda sıfırlanabilir. Önce connectors_stop ile durdurun.");
+			throw new ToolException("Connector '" + name + "' is " + s.state()
+					+ "; offsets can only be reset in the STOPPED state. Stop it first with connectors_stop.");
 		}
 		ConnectClient.Response r = api.client()
 			.send(call.cluster(), "DELETE", ConnectApi.path(name) + "/offsets", null);

@@ -1,12 +1,12 @@
 package io.github.srdrcn.kafkamcp.toolsets.connect;
 
 /**
- * {@code GET /connectors?expand=status&expand=info} içindeki tek connector: durum ve info (info ham config
- * içerir; dışarı verirken maskeleyin).
+ * A single connector in {@code GET /connectors?expand=status&expand=info}: status and info (info holds the raw
+ * config; mask it before returning it).
  */
 public record ConnectorOverview(String name, ConnectorStatus status, ConnectorInfo info) {
 
-	/** source / sink (durumdan, yoksa info'dan). */
+	/** source / sink (from the status, otherwise from the info). */
 	public String type() {
 		if (status.type() != null) {
 			return status.type();
@@ -14,7 +14,7 @@ public record ConnectorOverview(String name, ConnectorStatus status, ConnectorIn
 		return info == null ? null : info.type();
 	}
 
-	/** Tam connector.class (info yoksa null). */
+	/** Full connector.class (null without info). */
 	public String connectorClass() {
 		return info == null ? null : info.connectorClass();
 	}

@@ -11,8 +11,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.support.ConnectTestCluster;
 
 /**
- * Okuma araçları: connect_clusters_list, connectors_list/get/status/topics/offsets,
- * connectors_task_distribution, connectors_config_diff (adında boşluk ve gizli config'ler olan sink ile).
+ * Read tools: connect_clusters_list, connectors_list/get/status/topics/offsets, connectors_task_distribution,
+ * connectors_config_diff (with a sink that has spaces in its name and secret configs).
  */
 class ConnectorReadToolsTest extends ConnectToolTestBase {
 
@@ -51,7 +51,7 @@ class ConnectorReadToolsTest extends ConnectToolTestBase {
 		assertThat(created.get("result").asText()).isEqualTo("created");
 		awaitTaskState(name, "RUNNING");
 
-		// connectors_list: filtre + state filtresi + sınıf kısa adı
+		// connectors_list: filter + state filter + short class name
 		JsonNode list = ok("connectors_list", args("filter", token));
 		assertThat(list.get("total").asInt()).isEqualTo(1);
 		JsonNode row = list.at("/connectors/0");
@@ -65,12 +65,12 @@ class ConnectorReadToolsTest extends ConnectToolTestBase {
 		assertThat(list.at("/states/RUNNING").asInt()).isEqualTo(1);
 		assertThat(ok("connectors_list", args("filter", token, "state", "PAUSED")).get("total").asInt()).isZero();
 		assertThat(ok("connectors_list", args("filter", token, "state", "RUNNING")).get("total").asInt()).isEqualTo(1);
-		assertThat(error("connectors_list", args("state", "BOGUS"))).contains("Geçersiz state");
-		// readOnly cluster'da okuma araçları çalışır
+		assertThat(error("connectors_list", args("state", "BOGUS"))).contains("Invalid state");
+		// read tools work on a readOnly cluster
 		assertThat(ok("connectors_list", args("cluster", "test-ro", "filter", token)).get("total").asInt())
 			.isEqualTo(1);
 
-		// connectors_get: maskeli config, key.converter görünür, görevler
+		// connectors_get: masked config, key.converter visible, tasks
 		JsonNode get = ok("connectors_get", args("name", name));
 		assertThat(get.get("name").asText()).isEqualTo(name);
 		assertThat(get.get("type").asText()).isEqualTo("sink");
@@ -100,8 +100,8 @@ class ConnectorReadToolsTest extends ConnectToolTestBase {
 		assertThat(status.at("/tasks/0/worker").asText()).isEqualTo("connect:8083");
 		assertThat(status.get("failedTasks").asInt()).isZero();
 
-		// connectors_topics: kayıt işlendikten sonra aktif topic
-		JsonNode topics = await("aktif topic", () -> ok("connectors_topics", args("name", name)),
+		// connectors_topics: active topic after the records are processed
+		JsonNode topics = await("active topic", () -> ok("connectors_topics", args("name", name)),
 				t -> t.get("count").asInt() == 1);
 		assertThat(texts(topics.get("topics"))).containsExactly(topic);
 
@@ -122,7 +122,7 @@ class ConnectorReadToolsTest extends ConnectToolTestBase {
 		assertThat(dist.get("taskImbalance").asInt()).isZero();
 		assertThat(dist.get("tasks").asInt()).isEqualTo(dist.at("/workers/0/tasks").asInt());
 
-		// connectors_config_diff: verilen config'e karşı
+		// connectors_config_diff: against a given config
 		Map<String, Object> desired = sinkConfig(topic + "-v2", "/tmp/" + token + ".txt");
 		desired.put("database.password", "changed-pw");
 		desired.put("tasks.max", "1");
@@ -141,7 +141,7 @@ class ConnectorReadToolsTest extends ConnectToolTestBase {
 		assertThat(diff.at("/changed/1/target").asText()).isEqualTo(topic + "-v2");
 		assertThat(diff.toString()).doesNotContain("changed-pw").doesNotContain("s3cret-pw");
 
-		// connectors_config_diff: başka connector'a karşı
+		// connectors_config_diff: against another connector
 		Map<String, Object> otherConfig = new java.util.LinkedHashMap<>(config);
 		otherConfig.put("tasks.max", "2");
 		create(other, otherConfig);
@@ -151,16 +151,16 @@ class ConnectorReadToolsTest extends ConnectToolTestBase {
 		assertThat(diff2.at("/changed/0/key").asText()).isEqualTo("tasks.max");
 		assertThat(diff2.get("addedCount").asInt()).isZero();
 		assertThat(diff2.get("removedCount").asInt()).isZero();
-		assertThat(error("connectors_config_diff", args("name", name))).contains("tam olarak biri");
+		assertThat(error("connectors_config_diff", args("name", name))).contains("Exactly one of");
 		assertThat(error("connectors_config_diff", args("name", name, "otherName", other, "config", desired)))
-			.contains("tam olarak biri");
+			.contains("Exactly one of");
 	}
 
 	@Test
 	void unknownConnectorIsReported() {
-		String msg = error("connectors_status", args("name", "yok " + unique("x")));
+		String msg = error("connectors_status", args("name", "missing " + unique("x")));
 		assertThat(msg).contains("404");
-		assertThat(error("connectors_get", args("name", "yok " + unique("x")))).contains("404");
+		assertThat(error("connectors_get", args("name", "missing " + unique("x")))).contains("404");
 	}
 
 }
