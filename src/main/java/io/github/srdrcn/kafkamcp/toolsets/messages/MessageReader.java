@@ -86,7 +86,8 @@ public final class MessageReader {
 	/**
 	 * Okuma sonucu. {@code records}: latest için zamana, diğerleri için partition/offset'e göre sıralı.
 	 * {@code partitions}: okunan (lideri olan) partition'lar; {@code offlinePartitions}: lideri olmadığı için
-	 * atlananlar. {@code nextOffsets}: partition başına bir sonraki okunacak offset.
+	 * atlananlar. {@code nextOffsets}: partition başına bir sonraki okunacak offset. {@code partial}: zaman
+	 * sınırına takıldı ya da bazı partition'ların başlangıcı bulunamadığı için okunmadı (nedeni notes'ta).
 	 */
 	public record Result(List<ConsumerRecord<byte[], byte[]>> records, List<TopicPartition> partitions,
 			List<Integer> offlinePartitions, long scanned, long matched, boolean reachedEnd, boolean partial,
@@ -104,11 +105,17 @@ public final class MessageReader {
 		if (req.from() == From.LATEST) {
 			return latest(call, req, sel, b, notes);
 		}
-		return forward(call, req, sel, b, starts(call, req, tps, b, notes), notes);
+		List<Integer> skipped = new ArrayList<>();
+		Map<TopicPartition, Long> starts = starts(call, req, tps, b, notes, skipped);
+		return forward(call, req, sel, b, starts, notes, !skipped.isEmpty());
 	}
 
+	/**
+	 * Partition başına başlangıç offset'i. Başlangıcı bulunamadığı için okunmayacak partition'lar (zamana göre
+	 * aramayı desteklemeyen eski broker) {@code skipped}'e eklenir.
+	 */
 	private static Map<TopicPartition, Long> starts(ToolCall call, Request req, List<TopicPartition> tps,
-			PartitionOffsets.Bounds b, List<String> notes) {
+			PartitionOffsets.Bounds b, List<String> notes, List<Integer> skipped) {
 		Map<TopicPartition, Long> starts = new LinkedHashMap<>();
 		switch (req.from()) {
 			case EARLIEST -> tps.forEach(tp -> starts.put(tp, b.earliest(tp)));
@@ -133,12 +140,17 @@ public final class MessageReader {
 				}
 			}
 			case TIMESTAMP -> {
-				Map<TopicPartition, PartitionOffsets.OffsetAt> at = PartitionOffsets.forTimestamp(call, tps,
-						req.timestamp());
+				// eski ZooKeeper broker'ları (v0 mesaj formatı / eski protokol) zamana göre aramayı partition
+				// bazında reddedebilir: o partition'lar okunmaz ve not alır, diğerleri okunur
+				PartitionOffsets.Lookup at = PartitionOffsets.forTimestampEach(call, tps, req.timestamp());
 				List<Integer> none = new ArrayList<>();
 				for (TopicPartition tp : tps) {
-					PartitionOffsets.OffsetAt a = at.get(tp);
-					if (a == null || !a.found()) {
+					PartitionOffsets.OffsetAt a = at.offsets().get(tp);
+					if (at.unsupported().containsKey(tp)) {
+						skipped.add(tp.partition());
+						starts.put(tp, b.latest(tp));
+					}
+					else if (a == null || !a.found()) {
 						none.add(tp.partition());
 						starts.put(tp, b.latest(tp));
 					}
@@ -149,6 +161,9 @@ public final class MessageReader {
 				if (!none.isEmpty()) {
 					notes.add("Bu zamandan sonra kaydı olmayan partition: " + list(none));
 				}
+				at.unsupportedByReason()
+					.forEach((reason, ps) -> notes.add("Zamana göre başlangıç bulunamadı, okunmadı: partition "
+							+ list(ps) + " (" + reason + ")"));
 			}
 			default -> throw new IllegalStateException();
 		}
@@ -282,8 +297,9 @@ public final class MessageReader {
 		return out;
 	}
 
+	/** {@code incomplete}: bazı partition'lar okunamadı (sonuç partial işaretlenir). */
 	private static Result forward(ToolCall call, Request req, PartitionOffsets.Selection sel,
-			PartitionOffsets.Bounds b, Map<TopicPartition, Long> starts, List<String> notes) {
+			PartitionOffsets.Bounds b, Map<TopicPartition, Long> starts, List<String> notes, boolean incomplete) {
 		List<TopicPartition> tps = sel.online();
 		boolean filtered = req.filter() != null;
 		Map<TopicPartition, Long> avail = new HashMap<>();
@@ -339,7 +355,7 @@ public final class MessageReader {
 			notes.add("Zaman sınırına yaklaşıldı; o ana kadar okunanlar döndü");
 		}
 		return new Result(records, tps, sel.offline(), scan.scanned(), records.size(), reachedEnd,
-				scan.deadlineReached(), scanLimitReached, false, scan.positions(), notes);
+				scan.deadlineReached() || incomplete, scanLimitReached, false, scan.positions(), notes);
 	}
 
 	private static String list(List<Integer> partitions) {
