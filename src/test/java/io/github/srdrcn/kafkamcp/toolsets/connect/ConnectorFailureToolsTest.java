@@ -9,9 +9,9 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 
 /**
- * Görevi FAILED olan connector (yazılamayan dosyaya yazan FileStreamSink): connectors_failed,
- * connectors_status trace özeti, connectors_restart (onlyFailed), connectors_task_restart ve config
- * düzeltilince create_or_update'in eski FAILED durumu sonuç diye döndürmemesi.
+ * Connector with a FAILED task (FileStreamSink writing to a file it cannot write): connectors_failed, the
+ * connectors_status trace summary, connectors_restart (onlyFailed), connectors_task_restart, and create_or_update
+ * not returning the old FAILED status as the result once the config is fixed.
  */
 class ConnectorFailureToolsTest extends ConnectToolTestBase {
 
@@ -52,7 +52,7 @@ class ConnectorFailureToolsTest extends ConnectToolTestBase {
 		assertThat(dist.at("/workers/0/tasksNotRunning").asInt()).isGreaterThanOrEqualTo(1);
 		assertThat(texts(dist.at("/workers/0/notRunningTasks"))).contains(name + "/0 (FAILED)");
 
-		// restart includeTasks+onlyFailed: 202 ve sadece FAILED görev yeniden başlatılır
+		// restart includeTasks+onlyFailed: 202 and only the FAILED task is restarted
 		JsonNode restart = ok("connectors_restart",
 				args("name", name, "includeTasks", true, "onlyFailed", true));
 		assertThat(restart.get("httpStatus").asInt()).isEqualTo(202);
@@ -60,14 +60,14 @@ class ConnectorFailureToolsTest extends ConnectToolTestBase {
 		assertThat(texts(restart.at("/restarting/tasks"))).containsExactly("0");
 		awaitTaskState(name, "FAILED");
 
-		// tek görev restart: dosya hâlâ yazılamaz, görev yine FAILED olur
+		// single task restart: the file still cannot be written, the task becomes FAILED again
 		JsonNode taskRestart = ok("connectors_task_restart", args("name", name, "taskId", 0));
 		assertThat(taskRestart.get("httpStatus").asInt()).isEqualTo(204);
 		assertThat(taskRestart.get("taskId").asInt()).isZero();
 		awaitTaskState(name, "FAILED");
 		assertThat(error("connectors_task_restart", args("name", name, "taskId", 7))).contains("404");
 
-		// sağlıklı connector connectors_failed'da görünmez
+		// a healthy connector does not show up in connectors_failed
 		String healthy = "mcp healthy " + token;
 		create(healthy, sinkConfig(topic, "/tmp/" + token + ".txt"));
 		awaitTaskState(healthy, "RUNNING");
@@ -77,8 +77,8 @@ class ConnectorFailureToolsTest extends ConnectToolTestBase {
 		assertThat(ok("connectors_failed", Map.of("cluster", "test-ro", "filter", token)).get("total").asInt())
 			.isEqualTo(1);
 
-		// config düzeltilir: PUT 200'den sonra Connect görevi sonradan yeniden başlatır; araç güncelleme öncesi
-		// FAILED durumu "yerleşti" diye döndürmemeli
+		// the config is fixed: after PUT 200 Connect restarts the task later; the tool must not return the
+		// pre-update FAILED status as "settled"
 		JsonNode fixed = ok("connectors_create_or_update",
 				args("name", name, "config", sinkConfig(topic, "/tmp/" + token + "-fixed.txt")));
 		assertThat(fixed.get("result").asText()).isEqualTo("updated");

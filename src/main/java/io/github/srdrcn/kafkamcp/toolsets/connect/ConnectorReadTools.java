@@ -22,7 +22,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
 /**
- * Connector okuma araçları: connectors_list, connectors_get, connectors_status, connectors_failed,
+ * Connector read tools: connectors_list, connectors_get, connectors_status, connectors_failed,
  * connectors_topics, connectors_offsets.
  */
 @Component
@@ -38,49 +38,49 @@ public class ConnectorReadTools {
 	}
 
 	static Map<String, Object> nameParam() {
-		return P.string("Connector adı");
+		return P.string("Connector name");
 	}
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("connectors_list", "Connector'ları durum, tip, sınıf, worker ve görev sayılarıyla listeler")
+				ToolSpec.read("connectors_list", "List connectors with state, type, class, worker and task counts")
 					.connect()
 					.listParams()
-					.param("state", P.enumOf("Connector durumu filtresi", STATES))
+					.param("state", P.enumOf("Connector state filter", STATES))
 					.handler(this::list),
-				ToolSpec.read("connectors_get", "Connector detayı: tip, sınıf, maskeli config, görevler ve durum özeti")
+				ToolSpec.read("connectors_get", "Connector details: type, class, masked config, tasks and status summary")
 					.connect()
 					.required("name", nameParam())
-					.param("includeTaskConfigs", P.bool("Görev config'lerini de getir (maskeli; varsayılan false)"))
+					.param("includeTaskConfigs", P.bool("Also return the task configs (masked; default false)"))
 					.handler(this::get),
 				ToolSpec
 					.read("connectors_status",
-							"Connector ve görevlerinin durumu, worker'ı ve hata özeti (trace'in ilk 3 satırı)")
+							"Status, worker and error summary (first 3 trace lines) of a connector and its tasks")
 					.connect()
 					.required("name", nameParam())
 					.handler(this::status),
-				ToolSpec.read("connectors_failed", "FAILED connector'lar ya da FAILED görevi olanlar, hata özetiyle")
+				ToolSpec.read("connectors_failed", "FAILED connectors and connectors with FAILED tasks, with an error summary")
 					.connect()
 					.listParams()
 					.handler(this::failed),
-				ToolSpec.read("connectors_topics", "Connector'ın aktif olarak kullandığı topic'ler")
+				ToolSpec.read("connectors_topics", "Topics actively used by a connector")
 					.connect()
 					.required("name", nameParam())
 					.handler(this::topics),
 				ToolSpec
 					.read("connectors_offsets",
-							"Connector offset'leri (source: partition/offset, sink: topic/partition/offset)")
+							"Connector offsets (source: partition/offset, sink: topic/partition/offset)")
 					.connect()
 					.required("name", nameParam())
 					.listParams()
-					.param("filter", P.string("Sink'te topic, source'ta partition (JSON) filtresi (regex, kısmi eşleşme)"))
+					.param("filter", P.string("Filter on the topic (sink) or the partition JSON (source) (regex, partial match)"))
 					.handler(this::offsets));
 	}
 
 	Object list(ToolCall call) {
 		String state = call.str("state", null);
 		if (state != null && !STATES.contains(state.toUpperCase(java.util.Locale.ROOT))) {
-			throw new ToolException("Geçersiz state: " + state + " (geçerli: " + STATES + ")");
+			throw new ToolException("Invalid state: " + state + " (valid: " + STATES + ")");
 		}
 		List<Map<String, Object>> rows = new ArrayList<>();
 		Map<String, Integer> states = new TreeMap<>();

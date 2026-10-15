@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** connect_plugins_list ve connect_plugins_validate. */
+/** connect_plugins_list and connect_plugins_validate. */
 class ConnectPluginToolsTest extends ConnectToolTestBase {
 
 	@Test
@@ -32,7 +32,7 @@ class ConnectPluginToolsTest extends ConnectToolTestBase {
 
 	@Test
 	void validateReportsOnlyErroneousConfigs() {
-		// topics eksik: topics ve topics.regex hatalı; connector.class ve name otomatik eklenir
+		// topics missing: topics and topics.regex are invalid; connector.class and name are added automatically
 		JsonNode bad = ok("connect_plugins_validate", args("plugin", "FileStreamSinkConnector", "config",
 				Map.of("file", "/tmp/x.txt", "database.password", "pw-123", "tasks.max", "1")));
 		assertThat(bad.get("plugin").asText()).isEqualTo(FILE_SINK);
@@ -45,7 +45,7 @@ class ConnectPluginToolsTest extends ConnectToolTestBase {
 		assertThat(texts(bad.get("addedKeys"))).containsExactlyInAnyOrder("connector.class", "name");
 		assertThat(bad.toString()).doesNotContain("pw-123");
 
-		// tasks.max geçersiz: değer + hata mesajı; gizli anahtarın değeri maskeli
+		// invalid tasks.max: value + error message; the value of the secret key is masked
 		JsonNode badValue = ok("connect_plugins_validate",
 				args("plugin", "filestreamsink", "config", Map.of("connector.class", FILE_SINK, "topics", "t",
 						"tasks.max", "abc", "name", "v1")));
@@ -66,10 +66,10 @@ class ConnectPluginToolsTest extends ConnectToolTestBase {
 		assertThat(good.get("errors")).isEmpty();
 
 		assertThat(error("connect_plugins_validate", args("plugin", "NoSuchConnector", "config", Map.of())))
-			.contains("bulunamadı");
+			.contains("not found");
 		assertThat(error("connect_plugins_validate",
 				args("plugin", "FileStreamSinkConnector", "config", Map.of("connector.class", FILE_SOURCE))))
-			.contains("uyuşmuyor");
+			.contains("does not match");
 	}
 
 }

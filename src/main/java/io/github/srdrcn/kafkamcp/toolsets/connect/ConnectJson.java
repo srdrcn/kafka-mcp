@@ -8,10 +8,10 @@ import java.util.TreeMap;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/** Connect REST JSON yardımcıları: JsonNode → Java değeri, kısa sınıf adı ve stack trace özeti. */
+/** Connect REST JSON helpers: JsonNode → Java value, short class name and stack trace summary. */
 public final class ConnectJson {
 
-	/** traceSummary'de tutulan en fazla satır. */
+	/** Maximum number of lines kept in traceSummary. */
 	public static final int TRACE_LINES = 3;
 
 	private static final int TRACE_LINE_MAX = 300;
@@ -21,7 +21,7 @@ public final class ConnectJson {
 	private ConnectJson() {
 	}
 
-	/** JsonNode'u Map/List/primitive'e çevirir; null/eksik → null. */
+	/** Converts a JsonNode to a Map/List/primitive; null/missing → null. */
 	public static Object toJava(JsonNode node) {
 		if (node == null || node.isNull() || node.isMissingNode()) {
 			return null;
@@ -29,13 +29,13 @@ public final class ConnectJson {
 		return MAPPER.convertValue(node, Object.class);
 	}
 
-	/** Alanın metin değeri; yoksa ya da null ise null. */
+	/** Text value of the field; null if absent or null. */
 	public static String text(JsonNode node, String field) {
 		JsonNode v = node == null ? null : node.get(field);
 		return v == null || v.isNull() || v.isMissingNode() ? null : v.asText();
 	}
 
-	/** JSON nesnesini anahtara göre sıralı string map'e çevirir (config'ler için). */
+	/** Converts a JSON object to a string map sorted by key (for configs). */
 	public static Map<String, String> stringMap(JsonNode node) {
 		Map<String, String> out = new TreeMap<>();
 		if (node != null && node.isObject()) {
@@ -52,7 +52,7 @@ public final class ConnectJson {
 		return className.substring(className.lastIndexOf('.') + 1);
 	}
 
-	/** Stack trace'in ilk {@value #TRACE_LINES} dolu satırı (her biri en fazla 300 karakter); yoksa null. */
+	/** First {@value #TRACE_LINES} non-blank lines of the stack trace (each at most 300 characters); null if none. */
 	public static String traceSummary(String trace) {
 		if (trace == null || trace.isBlank()) {
 			return null;

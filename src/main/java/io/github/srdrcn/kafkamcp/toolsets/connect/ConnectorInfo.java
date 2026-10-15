@@ -7,8 +7,8 @@ import java.util.Map;
 import com.fasterxml.jackson.databind.JsonNode;
 
 /**
- * {@code GET /connectors/{name}} (ya da {@code expand=info}) yanıtı: tip, ham (maskelenmemiş!) config ve
- * görev id'leri. Dışarı verirken config'i {@link ConnectSecrets#mask(Map)} ile maskeleyin.
+ * {@code GET /connectors/{name}} (or {@code expand=info}) response: type, raw (unmasked!) config and task ids. Mask
+ * the config with {@link ConnectSecrets#mask(Map)} before returning it.
  */
 public record ConnectorInfo(String name, String type, Map<String, String> config, List<Integer> taskIds) {
 

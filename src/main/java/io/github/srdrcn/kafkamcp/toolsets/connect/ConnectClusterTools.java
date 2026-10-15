@@ -23,11 +23,11 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Connect cluster'ı ve plugin araçları: connect_clusters_list, connect_plugins_list, connect_plugins_validate. */
+/** Connect cluster and plugin tools: connect_clusters_list, connect_plugins_list, connect_plugins_validate. */
 @Component
 public class ConnectClusterTools {
 
-	/** Doğrulamada name verilmemişse kullanılan yer tutucu (Connect name'i zorunlu tutar). */
+	/** Placeholder used when no name is given for validation (Connect requires a name). */
 	static final String VALIDATE_NAME = "kafka-mcp-validate";
 
 	private final ConnectApi api;
@@ -38,22 +38,22 @@ public class ConnectClusterTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
-			.read("connect_clusters_list", "Connect URL'si olan cluster'larda Connect erişimi, sürümü ve connector sayısı")
+			.read("connect_clusters_list", "Connect reachability, version and connector count for clusters with a Connect URL")
 			.connect()
 			.clusterOptional()
 			.handler(this::clustersList),
-				ToolSpec.read("connect_plugins_list", "Yüklü Connect plugin'leri (sınıf, tip, sürüm)")
+				ToolSpec.read("connect_plugins_list", "Installed Connect plugins (class, type, version)")
 					.connect()
 					.listParams()
 					.param("connectorsOnly",
-							P.bool("Sadece connector plugin'leri (varsayılan true; false: converter/transform vb. dahil)"))
+							P.bool("Only connector plugins (default true; false also includes converters, transforms, etc.)"))
 					.handler(this::pluginsList),
 				ToolSpec
 					.read("connect_plugins_validate",
-							"Connector config'ini plugin'e göre doğrular; sadece hatalı alanları döner")
+							"Validate a connector config against its plugin; returns only the invalid fields")
 					.connect()
-					.required("plugin", P.string("Connector sınıfı (tam ya da kısa ad, ör. FileStreamSinkConnector)"))
-					.required("config", P.stringMap("Doğrulanacak connector config'i (anahtar → string değer)"))
+					.required("plugin", P.string("Connector class (full or short name, e.g. FileStreamSinkConnector)"))
+					.required("config", P.stringMap("Connector config to validate (key → string value)"))
 					.handler(this::pluginsValidate));
 	}
 
@@ -83,7 +83,7 @@ public class ConnectClusterTools {
 				catch (TimeoutException e) {
 					f.cancel(true);
 					row.put("reachable", false);
-					row.put("error", "Connect yanıtı zaman sınırında gelmedi");
+					row.put("error", "No response from Connect within the time limit");
 				}
 				catch (java.util.concurrent.ExecutionException e) {
 					row.put("reachable", false);
@@ -94,7 +94,7 @@ public class ConnectClusterTools {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		finally {
 			pool.shutdownNow();
@@ -116,7 +116,7 @@ public class ConnectClusterTools {
 		}
 	}
 
-	/** URL'deki kullanıcı bilgisini (user:pass@) gizler. */
+	/** Hides the user info (user:pass@) in a URL. */
 	static String safeUrl(String url) {
 		return url == null ? null : url.replaceAll("//[^/@]*@", "//***@");
 	}
@@ -147,8 +147,8 @@ public class ConnectClusterTools {
 			added.add(ConnectorInfo.CONNECTOR_CLASS);
 		}
 		else if (!ConnectApi.resolvePlugin(plugins, given).equals(plugin)) {
-			throw new ToolException("config'teki connector.class (" + given + ") plugin parametresiyle (" + plugin
-					+ ") uyuşmuyor");
+			throw new ToolException(
+					"connector.class in config (" + given + ") does not match the plugin parameter (" + plugin + ")");
 		}
 		config.put(ConnectorInfo.CONNECTOR_CLASS, plugin);
 		if (config.get("name") == null || config.get("name").isBlank()) {
@@ -167,7 +167,7 @@ public class ConnectClusterTools {
 			String key = ConnectJson.text(v, "name");
 			List<String> messages = new ArrayList<>();
 			errs.forEach(e -> messages.add(e.asText()));
-			// parse hatalarında Connect value'yu null döner; gönderilen değeri göster
+			// on parse errors Connect returns a null value; show the submitted value
 			String value = ConnectJson.text(v, "value");
 			errors.add(Results.map("name", key, "value",
 					ConnectSecrets.mask(key, value != null ? value : config.get(key)), "errors", messages));

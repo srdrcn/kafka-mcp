@@ -15,8 +15,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * {@code GET /connectors/{name}/status} (ya da {@code expand=status}) yanıtının ayrıştırılmış hali.
- * state/workerId/trace connector'ın kendisine aittir; görevler id'ye göre sıralıdır.
+ * Parsed {@code GET /connectors/{name}/status} (or {@code expand=status}) response. state/workerId/trace belong to
+ * the connector itself; tasks are sorted by id.
  */
 public record ConnectorStatus(String name, String type, String state, String workerId, String trace,
 		List<Task> tasks) {
@@ -33,7 +33,7 @@ public record ConnectorStatus(String name, String type, String state, String wor
 
 	public static final String RESTARTING = "RESTARTING";
 
-	/** Bir görevin durumu. */
+	/** Status of a task. */
 	public record Task(int id, String state, String workerId, String trace) {
 
 		public boolean failed() {
@@ -66,17 +66,17 @@ public record ConnectorStatus(String name, String type, String state, String wor
 		return tasks.stream().filter(t -> s.equals(t.state())).count();
 	}
 
-	/** Connector ya da görevlerinden biri FAILED mı? */
+	/** Is the connector or one of its tasks FAILED? */
 	public boolean hasFailure() {
 		return FAILED.equals(state) || tasks.stream().anyMatch(Task::failed);
 	}
 
-	/** Connector ve tüm görevleri verilen durumda mı (görev yoksa sadece connector'a bakılır)? */
+	/** Are the connector and all its tasks in the given state (only the connector is checked if there are no tasks)? */
 	public boolean allIn(String s) {
 		return s.equals(state) && tasks.stream().allMatch(t -> s.equals(t.state()));
 	}
 
-	/** Connector ya da bir görev geçiş durumunda mı (RESTARTING/UNASSIGNED ya da durum henüz yok)? */
+	/** Is the connector or a task in transition (RESTARTING/UNASSIGNED, or no state yet)? */
 	public boolean inTransition() {
 		if (state == null || RESTARTING.equals(state) || UNASSIGNED.equals(state)) {
 			return true;
@@ -84,7 +84,7 @@ public record ConnectorStatus(String name, String type, String state, String wor
 		return tasks.stream().anyMatch(t -> RESTARTING.equals(t.state()) || UNASSIGNED.equals(t.state()));
 	}
 
-	/** Connector FAILED ise onun trace'i, değilse ilk FAILED görevin trace'i. */
+	/** The connector's trace if it is FAILED, otherwise the trace of the first FAILED task. */
 	public String firstTrace() {
 		if (FAILED.equals(state) && trace != null) {
 			return trace;
@@ -92,27 +92,27 @@ public record ConnectorStatus(String name, String type, String state, String wor
 		return tasks.stream().filter(Task::failed).map(Task::trace).filter(t -> t != null).findFirst().orElse(null);
 	}
 
-	/** FAILED görevlerin çalıştığı worker'lar. */
+	/** Workers running the FAILED tasks. */
 	public Set<String> failedTaskWorkers() {
 		Set<String> out = new LinkedHashSet<>();
 		tasks.stream().filter(Task::failed).map(Task::workerId).filter(w -> w != null).forEach(out::add);
 		return out;
 	}
 
-	/** Tam durum: ad, tip, connector state/worker/traceSummary ve her görev. */
+	/** Full status: name, type, connector state/worker/traceSummary and every task. */
 	public Map<String, Object> toMap() {
 		Map<String, Object> m = Results.map("name", name, "type", type);
 		m.putAll(states());
 		return m;
 	}
 
-	/** Ad/tip olmadan durum: connector state/worker/traceSummary ve her görev (başka çıktıya gömmek için). */
+	/** Status without name/type: connector state/worker/traceSummary and every task (for embedding in other output). */
 	public Map<String, Object> states() {
 		return Results.map("state", state, "worker", workerId, "traceSummary", traceSummary(trace), "tasks",
 				tasks.stream().map(Task::toMap).toList());
 	}
 
-	/** Kısa özet: durum, worker ve görev sayıları. */
+	/** Short summary: state, worker and task counts. */
 	public Map<String, Object> summary() {
 		return Results.map("state", state, "worker", workerId, "traceSummary", traceSummary(trace), "tasks",
 				tasks.size(), "runningTasks", tasksInState(RUNNING), "failedTasks", tasksInState(FAILED));

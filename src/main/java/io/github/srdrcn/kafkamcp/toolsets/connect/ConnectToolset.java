@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** connect: Kafka Connect REST araçları (sadece connectUrl tanımlı cluster'larda listelenir). */
+/** connect: Kafka Connect REST tools (listed only on clusters that have a connectUrl). */
 @Component
 public class ConnectToolset implements Toolset {
 
@@ -35,7 +35,7 @@ public class ConnectToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Kafka Connect connector, görev ve plugin araçları";
+		return "Kafka Connect connector, task and plugin tools";
 	}
 
 	@Override

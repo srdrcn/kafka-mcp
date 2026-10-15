@@ -18,17 +18,16 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * {@link ConnectClient} üzerinde ayrıştırılmış Connect REST çağrıları: tek çağrıda tüm connector'lar
- * (expand=status+info), tek connector'ın durumu/info'su/config'i, plugin çözümleme ve durum geçişi için
- * sınırlı bekleme.
+ * Parsed Connect REST calls on top of {@link ConnectClient}: all connectors in a single call (expand=status+info),
+ * the status/info/config of a single connector, plugin resolution and a bounded wait for state transitions.
  */
 @Component
 public class ConnectApi {
 
-	/** Durum yoklamaları arası bekleme. */
+	/** Wait between status polls. */
 	static final long POLL_MS = 300;
 
-	/** Yoklamayı bırakırken araç deadline'ına bırakılan pay (son REST çağrısı + yanıt için). */
+	/** Margin left before the tool deadline when polling stops (for the last REST call and the response). */
 	static final long POLL_RESERVE_MS = 3_000;
 
 	private final ConnectClient client;
@@ -41,16 +40,16 @@ public class ConnectApi {
 		return client;
 	}
 
-	/** {@code /connectors/{kodlanmış ad}} */
+	/** {@code /connectors/{encoded name}} */
 	public static String path(String connector) {
 		return "/connectors/" + ConnectClient.enc(connector);
 	}
 
-	/** Tüm connector'lar ada göre sıralı, tek REST çağrısıyla (expand=status&expand=info). */
+	/** All connectors sorted by name, in a single REST call (expand=status&expand=info). */
 	public List<ConnectorOverview> overview(String cluster) {
 		JsonNode r = client.get(cluster, "/connectors?expand=status&expand=info");
 		if (!r.isObject()) {
-			throw new ToolException("Connect REST expand=status/info desteklemiyor (Connect 2.3+ gerekli)");
+			throw new ToolException("Connect REST does not support expand=status/info (Connect 2.3+ required)");
 		}
 		List<ConnectorOverview> out = new ArrayList<>();
 		r.properties().forEach(e -> {
@@ -68,7 +67,10 @@ public class ConnectApi {
 		return ConnectorStatus.from(client.get(cluster, path(connector) + "/status"));
 	}
 
-	/** {@link #status}; Connect hata yanıtı dönerse (ör. connector henüz yok: 404) null. Erişim hataları atılır. */
+	/**
+	 * {@link #status}; null if Connect returns an error response (e.g. the connector does not exist yet: 404).
+	 * Connection errors are thrown.
+	 */
 	public ConnectorStatus statusOrNull(String cluster, String connector) {
 		try {
 			return status(cluster, connector);
@@ -85,12 +87,12 @@ public class ConnectApi {
 		return ConnectorInfo.from(client.get(cluster, path(connector)));
 	}
 
-	/** Connector'ın ham (maskelenmemiş) config'i. */
+	/** Raw (unmasked) config of the connector. */
 	public Map<String, String> config(String cluster, String connector) {
 		return ConnectJson.stringMap(client.get(cluster, path(connector) + "/config"));
 	}
 
-	/** Görev id → ham görev config'i ({@code GET /connectors/{name}/tasks}). */
+	/** Task id → raw task config ({@code GET /connectors/{name}/tasks}). */
 	public Map<Integer, Map<String, String>> taskConfigs(String cluster, String connector) {
 		Map<Integer, Map<String, String>> out = new LinkedHashMap<>();
 		for (JsonNode t : client.get(cluster, path(connector) + "/tasks")) {
@@ -99,7 +101,7 @@ public class ConnectApi {
 		return out;
 	}
 
-	/** Yüklü connector plugin'lerinin tam sınıf adları ({@code GET /connector-plugins}). */
+	/** Fully qualified class names of the installed connector plugins ({@code GET /connector-plugins}). */
 	public List<String> connectorPlugins(String cluster) {
 		List<String> classes = new ArrayList<>();
 		for (JsonNode n : client.get(cluster, "/connector-plugins")) {
@@ -112,8 +114,8 @@ public class ConnectApi {
 	}
 
 	/**
-	 * Plugin adını (tam sınıf, kısa ad ya da "Connector" eki olmadan; büyük/küçük harf duyarsız) verilen
-	 * plugin sınıflarından birine çevirir; bulunamazsa {@link ToolException}.
+	 * Resolves a plugin name (full class, short name or without the "Connector" suffix; case-insensitive) to one of
+	 * the given plugin classes; {@link ToolException} if not found.
 	 */
 	public static String resolvePlugin(List<String> pluginClasses, String plugin) {
 		String p = plugin.trim().toLowerCase(Locale.ROOT);
@@ -125,18 +127,21 @@ public class ConnectApi {
 				return cls;
 			}
 		}
-		throw new ToolException("Connector plugin'i bulunamadı: " + plugin + " (yüklü: "
+		throw new ToolException("Connector plugin not found: " + plugin + " (installed: "
 				+ pluginClasses.stream().map(ConnectJson::shortClass).toList() + ")");
 	}
 
-	/** Durum yoklamasının sonucu: son durum, hedefe ulaşıldı mı, son hata (durum okunamadıysa). */
+	/**
+	 * Result of status polling: last status, whether the target was reached, last error (if the status could not
+	 * be read).
+	 */
 	public record Awaited(ConnectorStatus status, boolean settled, String error) {
 	}
 
 	/**
-	 * Connector durumu {@code until} sağlanana kadar en fazla {@code maxMillis} (ve araç deadline'ına
-	 * {@value #POLL_RESERVE_MS} ms kalana kadar) yoklar. Durum okunamazsa (ör. henüz 404) denemeye devam
-	 * eder.
+	 * Polls the connector status until {@code until} holds, for at most {@code maxMillis} (and until
+	 * {@value #POLL_RESERVE_MS} ms remain before the tool deadline). Keeps trying if the status cannot be read
+	 * (e.g. still 404).
 	 */
 	public Awaited await(ToolCall call, String connector, long initialDelayMillis, long maxMillis,
 			Predicate<ConnectorStatus> until) {
@@ -170,7 +175,7 @@ public class ConnectApi {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 
