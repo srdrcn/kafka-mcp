@@ -83,8 +83,8 @@ class ConfigLoaderTest {
 			.hasMessageContaining("whitespace");
 		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: |\n  3f9a1c2b7d4e8f60a1b2" + clusters))
 			.hasMessageContaining("whitespace");
-		assertThatThrownBy(() -> ConfigLoader.parse("apiKey: short-key" + clusters))
-			.hasMessageContaining("at least 16 characters");
+		// short keys are accepted (only a startup warning is logged)
+		assertThat(ConfigLoader.parse("apiKey: short-key" + clusters).getApiKey()).isEqualTo("short-key");
 	}
 
 	@Test

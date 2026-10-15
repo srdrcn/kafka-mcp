@@ -102,6 +102,10 @@ public class McpServerConfiguration {
 	FilterRegistrationBean<ApiKeyFilter> apiKeyFilter(KafkaMcpConfig config) {
 		if (config.isApiKeyEnabled()) {
 			log.info("API key authentication enabled for {} (header {})", ENDPOINT, ApiKeyFilter.HEADER);
+			if (config.getApiKey().length() < io.github.srdrcn.kafkamcp.config.ConfigLoader.RECOMMENDED_API_KEY_LENGTH) {
+				log.warn("apiKey is shorter than {} characters; use a long random key (e.g. openssl rand -hex 32)",
+						io.github.srdrcn.kafkamcp.config.ConfigLoader.RECOMMENDED_API_KEY_LENGTH);
+			}
 		}
 		else {
 			log.warn("API key authentication DISABLED (apiKey is empty): anyone who can reach {} can call the tools",

@@ -105,7 +105,7 @@ This is the content of `kafka-mcp.example.yaml` without its header comment
 
 ```yaml
 port: 8080
-apiKey: <api-key>                # X-Authorization value, 16+ chars (openssl rand -hex 32); "" = no auth
+apiKey: <api-key>                # X-Authorization value; use a long random key (openssl rand -hex 32); "" = no auth
 readOnly: true
 disableDestructive: true
 toolsets: [core, messages, consumers, acl, connect, report, diagnose]
@@ -139,7 +139,7 @@ clusters:
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `port` | integer (0–65535) | not set | HTTP port. When it is set (> 0) and `--transport` is not given, the server runs Streamable HTTP, otherwise stdio. `--port` overrides it. |
-| `apiKey` | string | not set | Static API key. HTTP requests must send it in the `X-Authorization` header. Not set or empty (`""`) turns the check off. A non-empty key must be at least 16 characters, must not start or end with whitespace and must not be a `<...>` or `${...}` placeholder, otherwise the server does not start. See [Security](#security). |
+| `apiKey` | string | not set | Static API key. HTTP requests must send it in the `X-Authorization` header. Not set or empty (`""`) turns the check off. A non-empty key must not start or end with whitespace and must not be a `<...>` or `${...}` placeholder, otherwise the server does not start; a key shorter than 16 characters only logs a warning. See [Security](#security). |
 | `readOnly` | boolean | `false` | `true` hides every write tool on clusters that do not override it with their own `readOnly`. |
 | `disableDestructive` | boolean | `false` | `true` hides the destructive tools (names ending in `_delete` or `_reset`, plus `schemas_delete_version`) on every cluster. It is global only and does not affect the other write tools. |
 | `toolsets` | list of strings | `[core]` | Toolsets to enable, which also sets the order of `tools/list`. An unknown or duplicate name stops the server at startup. |
@@ -496,9 +496,9 @@ left out below) are hidden by `readOnly`, and *destructive* tools are hidden by 
   `{"error":"unauthorized","message":"X-Authorization header is missing or the API key does not match"}`.
   The header is `X-Authorization`, not `Authorization`, and takes the raw key (no `Bearer` prefix). An empty
   `apiKey` turns the check off. There are no users, roles or tokens. The server checks the key at startup: a blank
-  value, surrounding whitespace, a `<...>`/`${...}` placeholder or a key shorter than 16 characters stops it. The
-  startup log says `API key authentication enabled`, or warns `API key authentication DISABLED` when the key is
-  empty.
+  value, surrounding whitespace or a `<...>`/`${...}` placeholder stops it; a key shorter than 16 characters only
+  logs a warning. The startup log says `API key authentication enabled`, or warns `API key authentication DISABLED`
+  when the key is empty.
 - **Browser requests are refused**: a request to `/mcp` that carries an `Origin` header (that is, one sent by a web
   page) gets **HTTP 403** `Invalid Origin header`, even with the right key. This stops a web page from driving the
   tools through the user's browser (CSRF, DNS rebinding), which matters most when `apiKey` is empty. MCP clients such
@@ -634,8 +634,8 @@ images:
 
 **3. Prepare the config files** from the templates. Keep `port: 8080`, and keep the paths that match the mounts:
 `krb5Conf: /etc/kafka-mcp/krb5/krb5.conf` and `keytab: /etc/kafka-mcp/keytabs/svc.keytab`. Generate the API key
-with something like `openssl rand -hex 32` (the server does not start with the `<api-key>` placeholder or a key
-shorter than 16 characters).
+with something like `openssl rand -hex 32` (the server does not start with the `<api-key>` placeholder; a key shorter
+than 16 characters only logs a warning).
 
 ```bash
 cp deploy/openshift/kafka-mcp.yaml.example kafka-mcp.yaml   # set apiKey, principal, clusters (git-ignored)
@@ -756,7 +756,7 @@ are translated into short explanations, with the original message in parentheses
 | `Kafka timeout: brokers unreachable or not responding` or `No response from Kafka within 15 s (timeout)` | Check `bootstrapServers`, the network path from the pod, and Kerberos (see above). |
 | A tool or cluster is missing from the list | Its toolset is not in `toolsets`, the cluster is read-only (write tools), `disableDestructive` is on (delete/reset tools), or the cluster has no `connectUrl`/`schemaRegistryUrl`. |
 | `format=avro requires a schemaRegistryUrl on cluster ...` | Add `schemaRegistryUrl` to the cluster. |
-| Startup fails with `Unknown toolset: [...]` or `Invalid config: ...` | Fix the named key. Valid toolsets are `acl`, `connect`, `consumers`, `core`, `diagnose`, `messages`, `report` and `schemaregistry`. `apiKey still holds a placeholder` or `apiKey must be at least 16 characters long` means the key was not filled in; `must not contain credentials` means a `connectUrl`/`schemaRegistryUrl` has `user:password@`. |
+| Startup fails with `Unknown toolset: [...]` or `Invalid config: ...` | Fix the named key. Valid toolsets are `acl`, `connect`, `consumers`, `core`, `diagnose`, `messages`, `report` and `schemaregistry`. `apiKey still holds a placeholder` means the key was not filled in; `must not contain credentials` means a `connectUrl`/`schemaRegistryUrl` has `user:password@`. |
 
 ## Development
 

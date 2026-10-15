@@ -34,8 +34,8 @@ public final class ConfigLoader {
 
 	private static final Pattern CLUSTER_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,62}");
 
-	/** Minimum length of a non-empty apiKey. */
-	static final int MIN_API_KEY_LENGTH = 16;
+	/** Recommended minimum length of a non-empty apiKey; shorter keys only produce a startup warning. */
+	public static final int RECOMMENDED_API_KEY_LENGTH = 16;
 
 	private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory())
 		.enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
@@ -272,8 +272,9 @@ public final class ConfigLoader {
 	}
 
 	/**
-	 * Null if the apiKey is acceptable: not set or empty (no authentication), or at least
-	 * {@value #MIN_API_KEY_LENGTH} characters without surrounding whitespace that is not a template placeholder.
+	 * Null if the apiKey is acceptable: not set or empty (no authentication), or a value without surrounding
+	 * whitespace that is not a template placeholder. Keys shorter than {@value #RECOMMENDED_API_KEY_LENGTH}
+	 * characters are accepted (a warning is logged at startup).
 	 */
 	static String apiKeyError(String apiKey) {
 		if (apiKey == null || apiKey.isEmpty()) {
@@ -287,10 +288,6 @@ public final class ConfigLoader {
 		}
 		if (apiKey.contains("<") || apiKey.contains(">") || apiKey.contains("${")) {
 			return "apiKey still holds a placeholder (<...> or ${...}); set a real key, e.g. from `openssl rand -hex 32`";
-		}
-		if (apiKey.length() < MIN_API_KEY_LENGTH) {
-			return "apiKey must be at least " + MIN_API_KEY_LENGTH
-					+ " characters long; generate one, e.g. with `openssl rand -hex 32`";
 		}
 		return null;
 	}
