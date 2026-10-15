@@ -29,22 +29,22 @@ public class CompatibilityTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("schemas_compatibility_get", "Compatibility seviyesini verir: subject seviyesi, global seviye ve hangisinin geçerli olduğu")
+				ToolSpec.read("schemas_compatibility_get", "Get the compatibility level: subject level, global level and which one applies")
 					.schemaRegistry()
-					.param("subject", P.string("Subject adı (verilmezse sadece global seviye)"))
+					.param("subject", P.string("Subject name (omit to get only the global level)"))
 					.handler(this::get),
-				ToolSpec.read("schemas_compatibility_check", "Şemanın subject versiyonuyla uyumlu olup olmadığını kaydetmeden test eder; SR'ın ayrıntılı mesajlarını verir")
+				ToolSpec.read("schemas_compatibility_check", "Test whether a schema is compatible with a subject version without registering it; returns the detailed SR messages")
 					.schemaRegistry()
-					.required("subject", P.string("Subject adı"))
+					.required("subject", P.string("Subject name"))
 					.required("schema", SchemaTools.schemaParam())
 					.param("schemaType", SchemaTools.schemaTypeParam())
-					.param("version", P.string("Karşılaştırılacak versiyon ya da latest (varsayılan latest)"))
+					.param("version", P.string("Version to check against or latest (default latest)"))
 					.param("references", SchemaReference.param())
 					.handler(this::check),
-				ToolSpec.write("schemas_compatibility_set", "Subject'in (verilmezse global) compatibility seviyesini değiştirir; önceki ve yeni değeri döner")
+				ToolSpec.write("schemas_compatibility_set", "Change the compatibility level of a subject (or the global level if omitted); returns the old and new value")
 					.schemaRegistry()
-					.param("subject", P.string("Subject adı (verilmezse global seviye değişir)"))
-					.required("level", P.enumOf("Yeni compatibility seviyesi", SchemaRegistryApi.LEVELS))
+					.param("subject", P.string("Subject name (if omitted, the global level is changed)"))
+					.required("level", P.enumOf("New compatibility level", SchemaRegistryApi.LEVELS))
 					.handler(this::set));
 	}
 
@@ -57,12 +57,12 @@ public class CompatibilityTools {
 		}
 		String subjectLevel = api.subjectCompatibility(cluster, subject);
 		boolean own = subjectLevel != null;
-		// subject seviyesi yoksa geçerli değer SR'dan (defaultToGlobal=true; context varsayılanlarını da kapsar)
+		// no subject level: the effective value comes from SR (defaultToGlobal=true; also covers context defaults)
 		String effective = own ? subjectLevel : api.effectiveCompatibility(cluster, subject);
 		return Results.map("subject", subject, "subjectLevel", subjectLevel, "globalLevel", global, "effective",
 				effective, "appliesFrom", own ? "subject" : "global", "note",
-				own ? "Subject seviyesindeki tanım global seviyeyi geçersiz kılar"
-						: "Subject seviyesinde tanım yok; global seviye geçerli");
+				own ? "The subject-level setting overrides the global level"
+						: "No subject-level setting; the global level applies");
 	}
 
 	Object check(ToolCall call) {
@@ -78,13 +78,13 @@ public class CompatibilityTools {
 			throw SchemaTools.invalidSchemaError(e);
 		}
 		if (!r.compatible()) {
-			// SR 7.x geçersiz şemada 422 yerine is_compatible=false + "Invalid schema ..." mesajı döner
+			// for an invalid schema SR 7.x returns is_compatible=false + an "Invalid schema ..." message instead of 422
 			r.messages()
 				.stream()
 				.filter(m -> m.startsWith("Invalid schema"))
 				.findFirst()
 				.ifPresent(m -> {
-					throw new ToolException("Geçersiz şema: " + SchemaTools.cleanSrMessage(m));
+					throw new ToolException("Schema is invalid: " + SchemaTools.cleanSrMessage(m));
 				});
 		}
 		String level;
@@ -109,7 +109,7 @@ public class CompatibilityTools {
 			}
 		}
 		else if (r.compatible() && api.versionsOrEmpty(cluster, subject, false).isEmpty()) {
-			out.put("note", "Subject'te aktif versiyon yok; ilk şema her zaman uyumlu sayılır");
+			out.put("note", "The subject has no active versions; the first schema is always compatible");
 		}
 		return out;
 	}
@@ -129,7 +129,7 @@ public class CompatibilityTools {
 		String after = api.setCompatibility(cluster, subject, level);
 		return Results.map("scope", "subject", "subject", subject, "before", before, "beforeInherited", inherited,
 				"after", after, "changed", !Objects.equals(before != null ? before : inherited, after), "note",
-				before == null ? "Önceden subject seviyesinde tanım yoktu (global " + inherited + " geçerliydi)" : null);
+				before == null ? "There was no subject-level setting before (global " + inherited + " applied)" : null);
 	}
 
 }

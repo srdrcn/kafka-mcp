@@ -8,12 +8,13 @@ import java.util.Map;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * İki metin arasında kompakt satır farkı: ortak baş/son atılır, kalan kısım LCS ile hizalanır ({@code "-12: ..."} eski
- * satır, {@code "+13: ..."} yeni satır). Çok büyük metinlerde sırasız çoklu-küme farkına düşer ({@code exact=false}).
+ * Compact line diff between two texts: the common head/tail is skipped and the rest is aligned with LCS
+ * ({@code "-12: ..."} old line, {@code "+13: ..."} new line). Very large texts fall back to an unordered multiset diff
+ * ({@code exact=false}).
  */
 public final class LineDiff {
 
-	/** LCS tablosu için üst sınır (hücre); üstünde çoklu-küme farkı kullanılır. */
+	/** Upper bound for the LCS table (cells); above it the multiset diff is used. */
 	static final long MAX_LCS_CELLS = 4_000_000L;
 
 	private static final int MAX_LINE_CHARS = 200;
@@ -22,11 +23,11 @@ public final class LineDiff {
 	}
 
 	/**
-	 * @param added eklenen satır sayısı
-	 * @param removed silinen satır sayısı
-	 * @param exact false ise satırlar sırasız (çok büyük metin) karşılaştırıldı
-	 * @param lines en fazla maxLines fark satırı
-	 * @param truncated fark satırları kesildi mi
+	 * @param added number of added lines
+	 * @param removed number of removed lines
+	 * @param exact if false, the lines were compared unordered (very large text)
+	 * @param lines at most maxLines diff lines
+	 * @param truncated whether the diff lines were truncated
 	 */
 	public record Result(int added, int removed, boolean exact, List<String> lines, boolean truncated) {
 
@@ -42,7 +43,7 @@ public final class LineDiff {
 			}
 			if (!exact) {
 				m.put("exact", false);
-				m.put("note", "Metin çok büyük; satırlar sırasız (küme farkı) karşılaştırıldı");
+				m.put("note", "Text too large; lines were compared unordered (multiset diff)");
 			}
 			return m;
 		}

@@ -11,14 +11,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Kayıt/uyumluluk/lookup istekleri için şema gövdesi: şema metni, schemaType ve referanslar. */
+/** Schema body for register/compatibility/lookup requests: schema text, schemaType and references. */
 public record SchemaInput(String schema, String schemaType, List<SchemaReference> references) {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
 	/**
-	 * Araç argümanlarından ({@code schema}, {@code schemaType}, {@code references}) okur. {@code schema} JSON
-	 * nesnesi olarak verilmişse metne çevrilir.
+	 * Reads the tool arguments ({@code schema}, {@code schemaType}, {@code references}). If {@code schema} is given
+	 * as a JSON object, it is converted to text.
 	 */
 	public static SchemaInput fromCall(ToolCall call) {
 		Object raw = call.args().get("schema");
@@ -28,7 +28,7 @@ public record SchemaInput(String schema, String schemaType, List<SchemaReference
 				schema = MAPPER.writeValueAsString(raw);
 			}
 			catch (JsonProcessingException e) {
-				throw new ToolException("schema JSON'a çevrilemedi: " + e.getOriginalMessage());
+				throw new ToolException("Could not serialize schema to JSON: " + e.getOriginalMessage());
 			}
 		}
 		else {
@@ -38,7 +38,7 @@ public record SchemaInput(String schema, String schemaType, List<SchemaReference
 				SchemaReference.fromArg(call.args().get("references")));
 	}
 
-	/** SR istek gövdesi; AVRO için schemaType gönderilmez (eski SR sürümleriyle uyum). */
+	/** SR request body; schemaType is not sent for AVRO (compatibility with older SR versions). */
 	public Map<String, Object> toBody() {
 		Map<String, Object> body = new LinkedHashMap<>();
 		body.put("schema", schema);

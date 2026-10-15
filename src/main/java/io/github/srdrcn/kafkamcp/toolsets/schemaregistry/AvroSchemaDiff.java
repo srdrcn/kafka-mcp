@@ -26,9 +26,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * İki Avro şeması arasında alan bazlı fark (eklenen/silinen/yeniden adlandırılan alan, tip/varsayılan değişikliği,
- * enum sembolü, union dalı, ad/namespace, fixed boyutu, mantıksal tip) ve Avro okuma kurallarına göre
- * BACKWARD/FORWARD uyumluluk ipucu.
+ * Field-level diff between two Avro schemas (added/removed/renamed field, type/default change, enum symbol, union
+ * branch, name/namespace, fixed size, logical type) and a BACKWARD/FORWARD compatibility hint based on the Avro
+ * reading rules.
  */
 public final class AvroSchemaDiff {
 
@@ -41,7 +41,7 @@ public final class AvroSchemaDiff {
 	private AvroSchemaDiff() {
 	}
 
-	/** Tek fark: path (ör. {@code Order.customer.email}), kind (ör. FIELD_ADDED), Türkçe açıklama, eski/yeni değer. */
+	/** A single change: path (e.g. {@code Order.customer.email}), kind (e.g. FIELD_ADDED), detail, old/new value. */
 	public record Change(String path, String kind, String detail, Object from, Object to) {
 
 		public Map<String, Object> toMap() {
@@ -51,30 +51,34 @@ public final class AvroSchemaDiff {
 	}
 
 	/**
-	 * Fark sonucu. backward: yeni şema (to) eski veriyi (from) okuyabilir; forward: eski şema yeni veriyi okuyabilir
-	 * (Avro {@link SchemaCompatibility}; hesaplanamadıysa null). *Issues listeleri en fazla 10 kayıt tutar;
-	 * *IssueCount toplam uyumsuzluk sayısıdır.
+	 * Diff result. backward: the new schema (to) can read old data (from); forward: the old schema can read new data
+	 * (Avro {@link SchemaCompatibility}; null if it could not be computed). The *Issues lists hold at most 10 entries;
+	 * *IssueCount is the total number of incompatibilities.
 	 */
 	public record Result(List<Change> changes, int totalChanges, Boolean backward, Boolean forward,
 			List<String> backwardIssues, List<String> forwardIssues, int backwardIssueCount, int forwardIssueCount) {
 
 		public String hint() {
 			if (backward == null || forward == null) {
-				return "Uyumluluk hesaplanamadı";
+				return "Compatibility could not be computed";
 			}
 			if (backward && forward) {
-				return "FULL uyumlu: yeni şema eski veriyi, eski şema yeni veriyi okuyabilir";
+				return "FULL compatible: the new schema can read old data and the old schema can read new data";
 			}
 			if (backward) {
-				return "Sadece BACKWARD uyumlu: yeni şema eski veriyi okur; eski şemalı consumer'lar yeni veriyi okuyamayabilir";
+				return "BACKWARD compatible only: the new schema reads old data; consumers on the old schema may be "
+						+ "unable to read new data";
 			}
 			if (forward) {
-				return "Sadece FORWARD uyumlu: eski şema yeni veriyi okur; yeni şemalı consumer'lar eski veriyi okuyamaz";
+				return "FORWARD compatible only: the old schema reads new data; consumers on the new schema cannot "
+						+ "read old data";
 			}
-			return "Uyumsuz: ne BACKWARD ne FORWARD (sadece NONE seviyesinde kabul edilir)";
+			return "Incompatible: neither BACKWARD nor FORWARD (accepted only at level NONE)";
 		}
 
-		/** Seviyenin bu iki versiyon için koşulu sağlanıyor mu (TRANSITIVE seviyelerde sadece bu çift); bilinmiyorsa null. */
+		/**
+		 * Is the level's condition met for these two versions (only this pair for TRANSITIVE levels); null if unknown.
+		 */
 		public Boolean satisfies(String level) {
 			if (level == null || backward == null || forward == null) {
 				return null;
@@ -129,13 +133,13 @@ public final class AvroSchemaDiff {
 			forwardCount = issues(f, forwardIssues);
 		}
 		catch (RuntimeException e) {
-			// uyumluluk hesaplanamadı: alan farkı yine döner
+			// compatibility could not be computed: the field diff is still returned
 		}
 		return new Result(d.changes, d.total, backward, forward, backwardIssues, forwardIssues,
 				Math.max(backwardCount, backwardIssues.size()), Math.max(forwardCount, forwardIssues.size()));
 	}
 
-	/** İlk {@link #MAX_ISSUES} uyumsuzluğu out'a ekler; toplam uyumsuzluk sayısını döner. */
+	/** Adds the first {@link #MAX_ISSUES} incompatibilities to out; returns the total number of incompatibilities. */
 	private static int issues(SchemaPairCompatibility p, List<String> out) {
 		if (p.getResult() == null) {
 			return 0;
@@ -150,7 +154,7 @@ public final class AvroSchemaDiff {
 		return all.size();
 	}
 
-	/** Kısa tip gösterimi: {@code long(timestamp-millis)}, {@code array<string>}, {@code union[null, string]}. */
+	/** Short type notation: {@code long(timestamp-millis)}, {@code array<string>}, {@code union[null, string]}. */
 	public static String typeName(Schema s) {
 		return switch (s.getType()) {
 			case RECORD -> s.getFullName();
@@ -167,7 +171,7 @@ public final class AvroSchemaDiff {
 		};
 	}
 
-	/** Kök yolu: adlı tiplerde kısa ad (ör. Order), diğerlerinde "$". */
+	/** Root path: the short name for named types (e.g. Order), "$" otherwise. */
 	private static String rootPath(Schema s) {
 		return switch (s.getType()) {
 			case RECORD, ENUM, FIXED -> s.getName();
@@ -186,7 +190,7 @@ public final class AvroSchemaDiff {
 		return s.getProp("logicalType");
 	}
 
-	/** Union dalı anahtarı: adlı tiplerde tam ad, diğerlerinde tip adı. */
+	/** Union branch key: the full name for named types, the type name otherwise. */
 	private static String key(Schema s) {
 		return switch (s.getType()) {
 			case RECORD, ENUM, FIXED -> s.getFullName();
@@ -194,7 +198,7 @@ public final class AvroSchemaDiff {
 		};
 	}
 
-	/** Avro tip yükseltmesi: writer tipiyle yazılmış veri reader tipiyle okunabilir mi. */
+	/** Avro type promotion: can data written with the writer type be read with the reader type? */
 	private static boolean promotable(Type writer, Type reader) {
 		if (writer == reader) {
 			return true;
@@ -210,8 +214,8 @@ public final class AvroSchemaDiff {
 	}
 
 	/**
-	 * Sığ Avro okuma kuralı: writer ile yazılmış veri reader ile okunabilir mi (union dalları, tip yükseltmesi, ad/alias
-	 * ve fixed boyutu; kayıt alanları ve enum sembollerine bakılmaz).
+	 * Shallow Avro reading rule: can data written with writer be read with reader (union branches, type promotion,
+	 * name/alias and fixed size; record fields and enum symbols are not checked).
 	 */
 	static boolean readable(Schema writer, Schema reader) {
 		if (writer.getType() == Type.UNION) {
@@ -231,7 +235,7 @@ public final class AvroSchemaDiff {
 		};
 	}
 
-	/** Avro varsayılan değerini JSON metnine çevirir (null → "null"). */
+	/** Converts an Avro default value to JSON text (null → "null"). */
 	static String json(Object defaultValue) {
 		try {
 			return MAPPER.writeValueAsString(plain(defaultValue));
@@ -283,7 +287,7 @@ public final class AvroSchemaDiff {
 			}
 			if (ta == Type.UNION) {
 				add(path, "TYPE_CHANGED",
-						"Union tek tipe çevrildi: " + typeName(a) + " → " + typeName(b) + readNote(a, b), typeName(a),
+						"Union changed to a single type: " + typeName(a) + " → " + typeName(b) + readNote(a, b), typeName(a),
 						typeName(b));
 				Schema match = branch(a, key(b));
 				if (match != null) {
@@ -293,7 +297,7 @@ public final class AvroSchemaDiff {
 			}
 			if (tb == Type.UNION) {
 				add(path, "TYPE_CHANGED",
-						"Tip union'a çevrildi: " + typeName(a) + " → " + typeName(b) + readNote(a, b), typeName(a),
+						"Type changed to a union: " + typeName(a) + " → " + typeName(b) + readNote(a, b), typeName(a),
 						typeName(b));
 				Schema match = branch(b, key(a));
 				if (match != null) {
@@ -302,7 +306,7 @@ public final class AvroSchemaDiff {
 				return;
 			}
 			if (ta != tb) {
-				add(path, "TYPE_CHANGED", "Tip değişti: " + typeName(a) + " → " + typeName(b) + promotionNote(ta, tb),
+				add(path, "TYPE_CHANGED", "Type changed: " + typeName(a) + " → " + typeName(b) + promotionNote(ta, tb),
 						typeName(a), typeName(b));
 				return;
 			}
@@ -316,7 +320,7 @@ public final class AvroSchemaDiff {
 				case FIXED -> {
 					compareNames(path, a, b);
 					if (a.getFixedSize() != b.getFixedSize()) {
-						add(path, "FIXED_SIZE_CHANGED", "fixed boyutu değişti (uyumsuz)", a.getFixedSize(),
+						add(path, "FIXED_SIZE_CHANGED", "fixed size changed (incompatible)", a.getFixedSize(),
 								b.getFixedSize());
 					}
 					compareLogical(path, a, b);
@@ -349,14 +353,15 @@ public final class AvroSchemaDiff {
 				String fp = path + "." + fb.name();
 				if (fa == null) {
 					add(fp, "FIELD_ADDED",
-							fb.hasDefaultValue() ? "Alan eklendi (varsayılan: " + json(fb.defaultVal()) + ")"
-									: "Alan eklendi, varsayılanı yok (yeni şema eski veriyi okuyamaz → BACKWARD uyumsuz)",
+							fb.hasDefaultValue() ? "Field added (default: " + json(fb.defaultVal()) + ")"
+									: "Field added without a default (the new schema cannot read old data → BACKWARD "
+											+ "incompatible)",
 							null, typeName(fb.schema()));
 					continue;
 				}
 				matched.add(fa.name());
 				if (renamedFrom != null) {
-					add(fp, "FIELD_RENAMED", "Alan yeniden adlandırıldı (alias ile): " + renamedFrom + " → " + fb.name(),
+					add(fp, "FIELD_RENAMED", "Field renamed (via alias): " + renamedFrom + " → " + fb.name(),
 							renamedFrom, fb.name());
 				}
 				compare(fp, fa.schema(), fb.schema());
@@ -365,8 +370,9 @@ public final class AvroSchemaDiff {
 			for (Field fa : a.getFields()) {
 				if (!matched.contains(fa.name())) {
 					add(path + "." + fa.name(), "FIELD_REMOVED", fa.hasDefaultValue()
-							? "Alan silindi (eski şemada varsayılanı vardı)"
-							: "Alan silindi, eski şemada varsayılanı yoktu (eski okuyucular yeni veriyi okuyamaz → FORWARD uyumsuz)",
+							? "Field removed (it had a default in the old schema)"
+							: "Field removed; it had no default in the old schema (old readers cannot read new data "
+									+ "→ FORWARD incompatible)",
 							typeName(fa.schema()), null);
 				}
 			}
@@ -376,16 +382,16 @@ public final class AvroSchemaDiff {
 			boolean ha = fa.hasDefaultValue();
 			boolean hb = fb.hasDefaultValue();
 			if (ha && !hb) {
-				add(path, "DEFAULT_REMOVED", "Varsayılan değer kaldırıldı", json(fa.defaultVal()), null);
+				add(path, "DEFAULT_REMOVED", "Default value removed", json(fa.defaultVal()), null);
 			}
 			else if (!ha && hb) {
-				add(path, "DEFAULT_ADDED", "Varsayılan değer eklendi", null, json(fb.defaultVal()));
+				add(path, "DEFAULT_ADDED", "Default value added", null, json(fb.defaultVal()));
 			}
 			else if (ha) {
 				String da = json(fa.defaultVal());
 				String db = json(fb.defaultVal());
 				if (!da.equals(db)) {
-					add(path, "DEFAULT_CHANGED", "Varsayılan değer değişti", da, db);
+					add(path, "DEFAULT_CHANGED", "Default value changed", da, db);
 				}
 			}
 		}
@@ -395,16 +401,16 @@ public final class AvroSchemaDiff {
 			List<String> removed = a.getEnumSymbols().stream().filter(s -> !b.getEnumSymbols().contains(s)).toList();
 			List<String> added = b.getEnumSymbols().stream().filter(s -> !a.getEnumSymbols().contains(s)).toList();
 			if (!removed.isEmpty()) {
-				add(path, "ENUM_SYMBOLS_REMOVED", "Enum sembolü silindi" + (b.getEnumDefault() != null
-						? " (yeni şemada enum varsayılanı var: " + b.getEnumDefault() + ")"
-						: " (bu sembollerle yazılmış eski veri okunamaz → BACKWARD uyumsuz)"), removed, null);
+				add(path, "ENUM_SYMBOLS_REMOVED", "Enum symbols removed" + (b.getEnumDefault() != null
+						? " (the new schema has an enum default: " + b.getEnumDefault() + ")"
+						: " (old data written with these symbols cannot be read → BACKWARD incompatible)"), removed, null);
 			}
 			if (!added.isEmpty()) {
-				add(path, "ENUM_SYMBOLS_ADDED", "Enum sembolü eklendi" + (a.getEnumDefault() != null ? ""
-						: " (eski okuyucular yeni sembolleri okuyamaz → FORWARD uyumsuz)"), null, added);
+				add(path, "ENUM_SYMBOLS_ADDED", "Enum symbols added" + (a.getEnumDefault() != null ? ""
+						: " (old readers cannot read the new symbols → FORWARD incompatible)"), null, added);
 			}
 			if (!Objects.equals(a.getEnumDefault(), b.getEnumDefault())) {
-				add(path, "ENUM_DEFAULT_CHANGED", "Enum varsayılanı değişti", a.getEnumDefault(), b.getEnumDefault());
+				add(path, "ENUM_DEFAULT_CHANGED", "Enum default changed", a.getEnumDefault(), b.getEnumDefault());
 			}
 		}
 
@@ -416,31 +422,36 @@ public final class AvroSchemaDiff {
 			boolean nullable = ma.containsKey("null") && mb.containsKey("null");
 			if (nonNullA.size() == 1 && nonNullB.size() == 1 && ma.size() == mb.size()
 					&& !key(nonNullA.get(0)).equals(key(nonNullB.get(0)))) {
-				// ["null", X] → ["null", Y]: dal ekleme/silme yerine tip değişikliği olarak göster
+				// ["null", X] → ["null", Y]: report it as a type change instead of a branch addition/removal
 				compare(path, nonNullA.get(0), nonNullB.get(0));
 				return;
 			}
 			for (String k : ma.keySet()) {
 				if (!mb.containsKey(k)) {
 					Schema reader = readingBranch(ma.get(k), b);
-					add(path, "UNION_BRANCH_REMOVED", "Union dalı silindi: " + k + (reader != null
-							? " (bu dalla yazılmış eski veri " + typeName(reader) + " dalıyla okunur → BACKWARD uyumlu)"
-							: " (bu dalla yazılmış eski veri okunamaz → BACKWARD uyumsuz)"), typeName(ma.get(k)), null);
+					add(path, "UNION_BRANCH_REMOVED", "Union branch removed: " + k + (reader != null
+							? " (old data written with this branch is read by the " + typeName(reader)
+									+ " branch → BACKWARD compatible)"
+							: " (old data written with this branch cannot be read → BACKWARD incompatible)"),
+							typeName(ma.get(k)), null);
 				}
 			}
 			for (String k : mb.keySet()) {
 				if (!ma.containsKey(k)) {
 					Schema reader = readingBranch(mb.get(k), a);
-					add(path, "UNION_BRANCH_ADDED", "Union dalı eklendi: " + k + (reader != null
-							? " (eski okuyucular bu dalı " + typeName(reader) + " dalıyla okur → FORWARD uyumlu)"
-							: " (eski okuyucular bu dalı okuyamaz → FORWARD uyumsuz)"), null, typeName(mb.get(k)));
+					add(path, "UNION_BRANCH_ADDED", "Union branch added: " + k + (reader != null
+							? " (old readers read this branch with the " + typeName(reader)
+									+ " branch → FORWARD compatible)"
+							: " (old readers cannot read this branch → FORWARD incompatible)"), null,
+							typeName(mb.get(k)));
 				}
 			}
 			String firstA = key(a.getTypes().get(0));
 			String firstB = key(b.getTypes().get(0));
 			if (!firstA.equals(firstB) && ma.containsKey(firstB) && mb.containsKey(firstA)) {
-				add(path, "UNION_ORDER_CHANGED", "Union'un ilk dalı değişti (alan varsayılanı ilk dalın tipinde olmalı)",
-						firstA, firstB);
+				add(path, "UNION_ORDER_CHANGED",
+						"First union branch changed (a field default must match the type of the first branch)", firstA,
+						firstB);
 			}
 			boolean single = nullable && nonNullA.size() == 1 && nonNullB.size() == 1;
 			for (Map.Entry<String, Schema> e : ma.entrySet()) {
@@ -457,12 +468,12 @@ public final class AvroSchemaDiff {
 				return;
 			}
 			boolean aliased = b.getAliases().contains(a.getFullName());
-			String note = aliased ? " (eski ad alias olarak tanımlı)" : " (alias yok: Avro okumasında ad uyuşmazlığı)";
+			String note = aliased ? " (old name defined as an alias)" : " (no alias: name mismatch when Avro reads the data)";
 			if (Objects.equals(a.getName(), b.getName())) {
-				add(path, "NAMESPACE_CHANGED", "Namespace değişti" + note, nz(a.getNamespace()), nz(b.getNamespace()));
+				add(path, "NAMESPACE_CHANGED", "Namespace changed" + note, nz(a.getNamespace()), nz(b.getNamespace()));
 			}
 			else {
-				add(path, "NAME_CHANGED", "Tip adı değişti" + note, a.getFullName(), b.getFullName());
+				add(path, "NAME_CHANGED", "Type name changed" + note, a.getFullName(), b.getFullName());
 			}
 		}
 
@@ -470,8 +481,8 @@ public final class AvroSchemaDiff {
 			String la = logicalName(a);
 			String lb = logicalName(b);
 			if (!Objects.equals(la, lb)) {
-				add(path, "LOGICAL_TYPE_CHANGED", "Mantıksal tip değişti (fiziksel tip aynı: " + a.getType().getName()
-						+ ")", la == null ? "(yok)" : la, lb == null ? "(yok)" : lb);
+				add(path, "LOGICAL_TYPE_CHANGED", "Logical type changed (physical type unchanged: " + a.getType().getName()
+						+ ")", la == null ? "(none)" : la, lb == null ? "(none)" : lb);
 			}
 		}
 
@@ -493,30 +504,31 @@ public final class AvroSchemaDiff {
 		}
 
 		private static String nz(String s) {
-			return s == null || s.isEmpty() ? "(yok)" : s;
+			return s == null || s.isEmpty() ? "(none)" : s;
 		}
 
 		/**
-		 * Union'a/union'dan tip değişikliği için BACKWARD/FORWARD notu: Avro okuma kuralları (tip yükseltmesi ve ad
-		 * eşleşmesi dahil) dal dal uygulanır; iç içe alanlar ayrı değişiklik olarak raporlandığından bakılmaz.
+		 * BACKWARD/FORWARD note for a type change to or from a union: the Avro reading rules (including type promotion
+		 * and name matching) are applied branch by branch; nested fields are not checked since they are reported as
+		 * separate changes.
 		 */
 		private static String readNote(Schema from, Schema to) {
 			List<String> oldLost = unreadable(from, to);
 			List<String> newLost = unreadable(to, from);
-			String back = oldLost.isEmpty() ? "BACKWARD uyumlu" + (promoted(from, to) ? ", tip yükseltmesiyle" : "")
-					: "BACKWARD uyumsuz: " + String.join(", ", oldLost) + " ile yazılmış eski veri okunamaz";
-			String fwd = newLost.isEmpty() ? "FORWARD uyumlu" + (promoted(to, from) ? ", tip yükseltmesiyle" : "")
-					: "FORWARD uyumsuz: eski okuyucular " + String.join(", ", newLost)
-							+ " ile yazılmış yeni veriyi okuyamaz";
+			String back = oldLost.isEmpty() ? "BACKWARD compatible" + (promoted(from, to) ? ", via type promotion" : "")
+					: "BACKWARD incompatible: old data written with " + String.join(", ", oldLost) + " cannot be read";
+			String fwd = newLost.isEmpty() ? "FORWARD compatible" + (promoted(to, from) ? ", via type promotion" : "")
+					: "FORWARD incompatible: old readers cannot read new data written with "
+							+ String.join(", ", newLost);
 			return " (" + back + "; " + fwd + ")";
 		}
 
-		/** writer'ın (union ise dallarının) reader ile okunamayan kısımları (kısa tip adlarıyla). */
+		/** The parts of writer (its branches if it is a union) that reader cannot read (as short type names). */
 		private static List<String> unreadable(Schema writer, Schema reader) {
 			return branchesOf(writer).stream().filter(w -> !readable(w, reader)).map(AvroSchemaDiff::typeName).toList();
 		}
 
-		/** writer'ın en az bir primitif dalı reader'da birebir karşılığı olmadan tip yükseltmesiyle mi okunuyor. */
+		/** Is at least one primitive branch of writer read via type promotion, without an exact match in reader? */
 		private static boolean promoted(Schema writer, Schema reader) {
 			Set<String> exact = new HashSet<>();
 			branchesOf(reader).forEach(r -> exact.add(key(r)));
@@ -524,7 +536,10 @@ public final class AvroSchemaDiff {
 				.anyMatch(w -> !exact.contains(key(w)) && !isComplex(w.getType()) && readable(w, reader));
 		}
 
-		/** writer dalıyla yazılmış veriyi okuyan ilk reader dalı (reader union değilse kendisi); yoksa null. */
+		/**
+		 * First reader branch that reads data written with the writer branch (reader itself if not a union); null if
+		 * none.
+		 */
 		private static Schema readingBranch(Schema writer, Schema reader) {
 			return branchesOf(reader).stream().filter(r -> readable(writer, r)).findFirst().orElse(null);
 		}
@@ -544,12 +559,12 @@ public final class AvroSchemaDiff {
 			boolean back = promotable(from, to);
 			boolean fwd = promotable(to, from);
 			if (back) {
-				return " (Avro tip yükseltmesi: BACKWARD uyumlu" + (fwd ? ", FORWARD uyumlu)" : ", FORWARD değil)");
+				return " (Avro type promotion: BACKWARD compatible" + (fwd ? ", FORWARD compatible)" : ", not FORWARD)");
 			}
 			if (fwd) {
-				return " (FORWARD uyumlu, BACKWARD değil)";
+				return " (FORWARD compatible, not BACKWARD)";
 			}
-			return " (uyumsuz tip değişikliği)";
+			return " (incompatible type change)";
 		}
 
 	}

@@ -11,7 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 
-/** schemas_compatibility_get / _set / _check (subject ve global seviye). */
+/** schemas_compatibility_get / _set / _check (subject and global level). */
 class CompatibilityToolsTest extends SchemaRegistryIntegrationTest {
 
 	@Test
@@ -60,7 +60,7 @@ class CompatibilityToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(SrRest.globalLevel()).isEqualTo(global);
 
 		assertThat(error("schemas_compatibility_set", args("subject", s, "level", "SIDEWAYS")))
-			.contains("Geçersiz compatibility");
+			.contains("Invalid compatibility level");
 	}
 
 	@Test
@@ -102,15 +102,15 @@ class CompatibilityToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(messages).anySatisfy(m -> assertThat(m).contains("TYPE_MISMATCH"));
 		assertThat(messages).anySatisfy(m -> assertThat(m).contains("READER_FIELD_MISSING_DEFAULT_VALUE"));
 		assertThat(messages).noneSatisfy(m -> assertThat(m).startsWith("{oldSchema:"));
-		// test kaydetmez
+		// the check does not register the schema
 		assertThat(SrRest.versions(s, false)).containsExactly(1);
 
 		JsonNode fresh = ok("schemas_compatibility_check", args("subject", unique("fresh"), "schema", SrRest.V1));
 		assertThat(fresh.get("compatible").asBoolean()).isTrue();
-		assertThat(fresh.get("note").asText()).contains("aktif versiyon yok");
+		assertThat(fresh.get("note").asText()).contains("no active versions");
 
 		assertThat(error("schemas_compatibility_check", args("subject", s, "schema", "{not json")))
-			.contains("Geçersiz şema");
+			.contains("Schema is invalid").contains("Invalid schema");
 		assertThat(error("schemas_compatibility_check", args("subject", s, "schema", SrRest.V2, "schemaType", "XML")))
 			.contains("schemaType");
 	}

@@ -6,15 +6,15 @@ import org.junit.jupiter.api.Test;
 
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 
-/** schemaRegistryUrl tanımlı olmayan cluster'larda schemaregistry araçları listelenmez ve çağrılamaz. */
+/** On clusters without a schemaRegistryUrl the schemaregistry tools are neither listed nor callable. */
 class SchemaRegistryAvailabilityTest extends KafkaIntegrationTest {
 
 	@Test
 	void toolsAreNotOfferedWithoutSchemaRegistryUrl() {
 		assertThat(registry.tools()).noneMatch(t -> t.toolset().equals("schemaregistry"));
-		assertThat(error("subjects_list", args())).contains("Bilinmeyen ya da kapalı araç");
+		assertThat(error("subjects_list", args())).contains("Unknown or disabled tool");
 		assertThat(error("schemas_register", args("subject", "x-value", "schema", SrRest.V1)))
-			.contains("Bilinmeyen ya da kapalı araç");
+			.contains("Unknown or disabled tool");
 	}
 
 }
