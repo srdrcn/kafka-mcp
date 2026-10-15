@@ -1,0 +1,311 @@
+package io.github.srdrcn.kafkamcp.toolsets.core;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+
+import org.apache.kafka.clients.admin.ProducerState;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.admin.TransactionDescription;
+import org.apache.kafka.clients.admin.TransactionListing;
+import org.apache.kafka.common.TopicPartition;
+import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+import io.github.srdrcn.kafkamcp.connect.ConnectClient;
+import io.github.srdrcn.kafkamcp.kafka.ConsumerGroups;
+import io.github.srdrcn.kafkamcp.kafka.Format;
+import io.github.srdrcn.kafkamcp.kafka.Futures;
+import io.github.srdrcn.kafkamcp.kafka.Producers;
+import io.github.srdrcn.kafkamcp.kafka.Topics;
+import io.github.srdrcn.kafkamcp.mcp.P;
+import io.github.srdrcn.kafkamcp.mcp.Results;
+import io.github.srdrcn.kafkamcp.mcp.ToolCall;
+import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
+
+/** Topic'in istemcileri: consumer group'lar, Connect connector'ları, producer'lar, transaction'lar. */
+@Component
+public class TopicClientTools {
+
+	/** Connect REST'e aynı anda en fazla bu kadar istek. */
+	private static final int CONNECT_PARALLELISM = 8;
+
+	private final ConnectClient connect;
+
+	public TopicClientTools(ConnectClient connect) {
+		this.connect = connect;
+	}
+
+	public List<ToolSpec> tools() {
+		return List.of(
+				ToolSpec.read("topics_consumers",
+						"Topic'te commit'li offset'i olan consumer group'lar: durum, üye sayısı, bu topic'teki lag")
+					.required("topic", P.string("Topic adı"))
+					.listParams()
+					.handler(this::topicsConsumers),
+				ToolSpec.read("topics_connectors",
+						"Topic'i kullanan Connect connector'ları (aktif topic'ler ya da config'teki topic/topics/regex/prefix)")
+					.connect()
+					.required("topic", P.string("Topic adı"))
+					.handler(this::topicsConnectors),
+				ToolSpec.read("topics_producers",
+						"Topic partition'larındaki aktif producer'lar: producerId, epoch, son sequence/zaman, açık transaction")
+					.required("topic", P.string("Topic adı"))
+					.param("limit", Params.limit(ToolSpec.DEFAULT_LIST_LIMIT))
+					.handler(this::topicsProducers),
+				ToolSpec.read("topics_transactions",
+						"Topic'e dokunan açık transaction'lar ve askıda kalmış (hanging) olabilecek transaction ipuçları")
+					.required("topic", P.string("Topic adı"))
+					.handler(this::topicsTransactions));
+	}
+
+	Object topicsConsumers(ToolCall call) {
+		String topic = call.str("topic");
+		TopicDescription d = Topics.describeOne(call, topic);
+		ConsumerGroups.TopicConsumers tc = ConsumerGroups.forTopic(call, d);
+		List<Map<String, Object>> rows = new ArrayList<>();
+		long totalLag = 0;
+		for (ConsumerGroups.TopicLag g : tc.groups()) {
+			if (!call.matches(g.groupId())) {
+				continue;
+			}
+			totalLag += g.lag();
+			rows.add(Results.map("groupId", g.groupId(), "state", g.state(), "members", g.members(), "lag", g.lag(),
+					"partitions", g.partitions()));
+		}
+		Map<String, Object> out = Results.map("topic", topic, "groupsScanned", tc.groupsScanned(), "totalLag",
+				totalLag, "failedGroups", tc.errors().isEmpty() ? null : tc.errors().size(), "lagUnknownPartitions",
+				tc.lagUnknownPartitions() > 0 ? tc.lagUnknownPartitions() : null);
+		if (!tc.errors().isEmpty() || tc.lagUnknownPartitions() > 0) {
+			out.put("partial", true);
+		}
+		out.putAll(Results.page("groups", rows, call.limit()));
+		return out;
+	}
+
+	Object topicsConnectors(ToolCall call) throws Exception {
+		String topic = call.str("topic");
+		String cluster = call.cluster();
+		JsonNode all = connect.get(cluster, "/connectors?expand=info&expand=status");
+		Map<String, Map<String, Object>> found = new LinkedHashMap<>();
+		Map<String, List<String>> matchedBy = new LinkedHashMap<>();
+		List<String> names = new ArrayList<>();
+		Iterator<Map.Entry<String, JsonNode>> it = all.fields();
+		while (it.hasNext()) {
+			Map.Entry<String, JsonNode> e = it.next();
+			String name = e.getKey();
+			names.add(name);
+			JsonNode info = e.getValue().path("info");
+			JsonNode status = e.getValue().path("status");
+			found.put(name, Results.map("name", name, "type", text(info.path("type")), "state",
+					text(status.path("connector").path("state")), "tasks", status.path("tasks").size()));
+			matchedBy.put(name, new ArrayList<>(configMatches(info.path("config"), topic)));
+		}
+		int activeErrors = 0;
+		int unchecked = 0;
+		try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+			Semaphore permits = new Semaphore(CONNECT_PARALLELISM);
+			Map<String, Future<JsonNode>> futures = new LinkedHashMap<>();
+			for (String name : names) {
+				futures.put(name, pool.submit(() -> {
+					permits.acquire();
+					try {
+						return connect.get(cluster, "/connectors/" + ConnectClient.enc(name) + "/topics");
+					}
+					finally {
+						permits.release();
+					}
+				}));
+			}
+			for (Map.Entry<String, Future<JsonNode>> f : futures.entrySet()) {
+				try {
+					JsonNode active = f.getValue().get(Math.max(1, call.waitMillis() - 500), TimeUnit.MILLISECONDS);
+					for (JsonNode t : active.path(f.getKey()).path("topics")) {
+						if (topic.equals(t.asText())) {
+							matchedBy.get(f.getKey()).add(0, "activeTopics");
+						}
+					}
+				}
+				catch (TimeoutException e) {
+					f.getValue().cancel(true);
+					unchecked++;
+				}
+				catch (ExecutionException e) {
+					activeErrors++;
+				}
+			}
+			pool.shutdownNow();
+		}
+		List<Map<String, Object>> rows = new ArrayList<>();
+		matchedBy.forEach((name, by) -> {
+			if (!by.isEmpty()) {
+				Map<String, Object> row = found.get(name);
+				row.put("matchedBy", by);
+				rows.add(row);
+			}
+		});
+		return Results.map("topic", topic, "connectorsScanned", names.size(), "activeTopicsErrors",
+				activeErrors > 0 ? activeErrors : null, "partial", unchecked > 0 ? true : null,
+				"activeTopicsUnchecked", unchecked > 0 ? unchecked : null, "connectors", rows);
+	}
+
+	/**
+	 * Config'te topic'e referans veren anahtarlar: adında "topic" geçen ve değeri (virgülle ayrılmış) topic
+	 * olan, *regex/*pattern ile eşleşen ya da *prefix ile başlayan.
+	 */
+	static List<String> configMatches(JsonNode config, String topic) {
+		List<String> out = new ArrayList<>();
+		Iterator<Map.Entry<String, JsonNode>> it = config.fields();
+		while (it.hasNext()) {
+			Map.Entry<String, JsonNode> e = it.next();
+			String key = e.getKey().toLowerCase();
+			String value = e.getValue().asText("").trim();
+			if (!key.contains("topic") || value.isEmpty()) {
+				continue;
+			}
+			boolean match = false;
+			if (key.endsWith("regex") || key.endsWith("pattern")) {
+				try {
+					match = Pattern.compile(value).matcher(topic).matches();
+				}
+				catch (PatternSyntaxException ignored) {
+					// geçersiz regex: eşleşme yok
+				}
+			}
+			else if (key.endsWith("prefix")) {
+				match = topic.startsWith(value);
+			}
+			else {
+				for (String part : value.split(",")) {
+					if (part.trim().equals(topic)) {
+						match = true;
+						break;
+					}
+				}
+			}
+			if (match) {
+				out.add("config:" + e.getKey());
+			}
+		}
+		return out;
+	}
+
+	Object topicsProducers(ToolCall call) {
+		String topic = call.str("topic");
+		TopicDescription d = Topics.describeOne(call, topic);
+		List<TopicPartition> online = Topics.onlinePartitions(List.of(d));
+		Futures.Each<TopicPartition, List<ProducerState>> each = Producers.describe(call, online).requireAny();
+		List<Map.Entry<TopicPartition, ProducerState>> states = new ArrayList<>();
+		each.values().forEach((tp, list) -> list.forEach(s -> states.add(Map.entry(tp, s))));
+		states.sort(Comparator.comparingLong((Map.Entry<TopicPartition, ProducerState> e) -> e.getValue().lastTimestamp())
+			.reversed());
+		Set<Long> ids = new HashSet<>();
+		Set<TopicPartition> openTxnPartitions = new HashSet<>();
+		List<Map<String, Object>> rows = new ArrayList<>();
+		for (Map.Entry<TopicPartition, ProducerState> e : states) {
+			ids.add(e.getValue().producerId());
+			if (e.getValue().currentTransactionStartOffset().isPresent()) {
+				openTxnPartitions.add(e.getKey());
+			}
+			rows.add(Producers.row(e.getKey(), e.getValue()));
+		}
+		Map<String, Object> out = Results.map("topic", topic, "partitionsScanned", online.size(), "producerCount",
+				ids.size(), "partitionsWithOpenTransaction", openTxnPartitions.size(), "failedPartitions",
+				each.errors().isEmpty() ? null : each.errors().size());
+		out.putAll(Results.page("producers", rows, call.limit()));
+		return out;
+	}
+
+	Object topicsTransactions(ToolCall call) {
+		String topic = call.str("topic");
+		TopicDescription d = Topics.describeOne(call, topic);
+		// önce partition'lar, sonra coordinator: arada başlayan transaction coordinator'da açık görünür
+		Futures.Each<TopicPartition, List<ProducerState>> producers = Producers
+			.describe(call, Topics.onlinePartitions(List.of(d)));
+		Producers.OpenTransactions open = Producers.listOpen(call);
+		Set<Long> openProducerIds = new HashSet<>();
+		List<String> ids = new ArrayList<>();
+		for (TransactionListing l : open.listings()) {
+			openProducerIds.add(l.producerId());
+			ids.add(l.transactionalId());
+		}
+		Futures.Each<String, TransactionDescription> described = Producers.describeTransactions(call, ids);
+		List<Map<String, Object>> txns = new ArrayList<>();
+		described.values().forEach((id, t) -> {
+			List<Integer> parts = t.topicPartitions()
+				.stream()
+				.filter(tp -> tp.topic().equals(topic))
+				.map(TopicPartition::partition)
+				.sorted()
+				.toList();
+			if (parts.isEmpty()) {
+				return;
+			}
+			long start = t.transactionStartTimeMs().orElse(-1);
+			Long age = Format.ageSeconds(start);
+			txns.add(Results.map("transactionalId", id, "state", String.valueOf(t.state()), "producerId",
+					t.producerId(), "producerEpoch", t.producerEpoch(), "startTime", Format.iso(start), "ageSeconds",
+					age, "timeoutMs", t.transactionTimeoutMs(), "timedOut",
+					age != null && age * 1000 > t.transactionTimeoutMs() ? true : null, "partitions", parts));
+		});
+		Map<TopicPartition, List<ProducerState>> byPartition = new TreeMap<>(
+				Comparator.comparingInt(TopicPartition::partition));
+		byPartition.putAll(producers.values());
+		// eşik sadece coordinator'da bulunmayan açık transaction varsa okunur (ek describeConfigs)
+		boolean candidates = byPartition.values()
+			.stream()
+			.flatMap(List::stream)
+			.anyMatch(s -> s.currentTransactionStartOffset().isPresent() && !openProducerIds.contains(s.producerId()));
+		Long thresholdMs = candidates ? Producers.maxTransactionTimeoutMs(call) : null;
+		long now = System.currentTimeMillis();
+		List<Map<String, Object>> partitions = new ArrayList<>();
+		int hanging = 0;
+		for (Map.Entry<TopicPartition, List<ProducerState>> e : byPartition.entrySet()) {
+			for (ProducerState s : e.getValue()) {
+				if (s.currentTransactionStartOffset().isEmpty()) {
+					continue;
+				}
+				boolean suspect = thresholdMs != null && Producers.hangingSuspect(s, openProducerIds, thresholdMs, now);
+				hanging += suspect ? 1 : 0;
+				partitions.add(Results.map("partition", e.getKey().partition(), "producerId", s.producerId(),
+						"producerEpoch", s.producerEpoch(), "startOffset", s.currentTransactionStartOffset().getAsLong(),
+						"lastTimestamp", Format.iso(s.lastTimestamp()), "ageSeconds", Format.ageSeconds(s.lastTimestamp()),
+						"hangingSuspect", suspect ? true : null));
+			}
+		}
+		Map<String, Object> out = Results.map("topic", topic, "openTransactionsInCluster", open.listings().size(),
+				"openTransactions", txns, "partitionsWithOpenTransaction", partitions, "hangingSuspects", hanging,
+				"hangingThresholdMs", thresholdMs);
+		if (hanging > 0) {
+			out.put("hint", "hangingSuspect: partition'daki transaction transaction.max.timeout.ms'den uzun süredir "
+					+ "açık ve coordinator'da karşılığı yok; askıda olabilir (kafka-transactions.sh find-hanging ile doğrulayın)");
+		}
+		if (!described.errors().isEmpty() || !producers.errors().isEmpty() || !open.errors().isEmpty()) {
+			out.put("errors", Results.map("transactions", described.errors().isEmpty() ? null : described.errors(),
+					"partitions", producers.errors().isEmpty() ? null : producers.errors().size(), "coordinators",
+					open.errors().isEmpty() ? null : open.errors()));
+		}
+		return out;
+	}
+
+	private static String text(JsonNode n) {
+		return n.isMissingNode() || n.isNull() ? null : n.asText();
+	}
+
+}
