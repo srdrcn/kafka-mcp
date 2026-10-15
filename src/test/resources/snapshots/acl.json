@@ -61,7 +61,7 @@
   }
 }, {
   "name" : "acls_explain",
-  "description" : "Principal'ın kaynakta bir işlemi yapıp yapamayacağını StandardAuthorizer kurallarıyla açıklar (ALLOW/DENY ve nedeni)",
+  "description" : "Principal'ın kaynakta bir işlemi yapıp yapamayacağını Kafka authorizer kurallarıyla (KRaft StandardAuthorizer, ZooKeeper AclAuthorizer) açıklar (ALLOW/DENY ve nedeni)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -98,6 +98,10 @@
         "items" : {
           "type" : "string"
         }
+      },
+      "allowEveryoneIfNoAclFound" : {
+        "type" : "boolean",
+        "description" : "Broker'ın allow.everyone.if.no.acl.found değeri; broker gizli döndürdüğünde kullanılır (verilmezse false varsayılır)"
       }
     },
     "required" : [ "cluster", "principal", "operation", "resourceType", "resourceName" ]
@@ -132,6 +136,10 @@
         "items" : {
           "type" : "string"
         }
+      },
+      "allowEveryoneIfNoAclFound" : {
+        "type" : "boolean",
+        "description" : "Broker'ın allow.everyone.if.no.acl.found değeri; broker gizli döndürdüğünde kullanılır (verilmezse false varsayılır)"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -313,7 +321,7 @@
   }
 }, {
   "name" : "security_summary",
-  "description" : "Güvenlik özeti: listener/SASL/authorizer ayarları, ACL/SCRAM/kota/token sayıları, bu sunucunun bağlantısı",
+  "description" : "Güvenlik özeti: metadata modu (KRaft/ZooKeeper), listener/SASL/authorizer ayarları, ACL/SCRAM/kota/token sayıları, bu sunucunun bağlantısı",
   "inputSchema" : {
     "type" : "object",
     "properties" : {

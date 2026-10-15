@@ -13,6 +13,7 @@ import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
 import org.apache.kafka.common.errors.SecurityDisabledException;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.ResourceType;
 
@@ -169,9 +170,10 @@ public final class Acls {
 	}
 
 	/**
-	 * createAcls/deleteAcls sonrası broker'ın ACL önbelleği (KRaft'ta controller'dan biraz geç gelir)
-	 * güncellenene kadar kısa süre bekler. {@code present=true}: hepsi görünene; false: filtreye uyan
-	 * hiçbiri kalmayana kadar. Zamanında görünürse true.
+	 * createAcls/deleteAcls sonrası broker'ın ACL önbelleği güncellenene kadar kısa süre bekler (KRaft'ta
+	 * ACL'ler metadata log'u ile, ZooKeeper'da diğer broker'lara ZooKeeper değişiklik bildirimiyle biraz geç
+	 * ulaşır; describeAcls herhangi bir broker'a gidebilir). {@code present=true}: hepsi görünene; false:
+	 * filtreye uyan hiçbiri kalmayana kadar. Zamanında görünürse true.
 	 */
 	public static boolean awaitVisible(ToolCall call, AclBindingFilter filter, Collection<AclBinding> expected,
 			boolean present) {
@@ -190,6 +192,22 @@ public final class Acls {
 			}
 			call.sleep(100);
 		}
+	}
+
+	/**
+	 * Eski broker API'yi desteklemiyorsa (UnsupportedVersionException) kısa Türkçe not, değilse null.
+	 * @param requirement gereken sürüm açıklaması (ör. "SCRAM kullanıcılarını listelemek Kafka 2.7+ gerektirir")
+	 */
+	public static String unsupportedNote(Throwable error, String requirement) {
+		if (!causedBy(error, UnsupportedVersionException.class)) {
+			return null;
+		}
+		return "Broker bu işlemi desteklemiyor (sürüm): " + requirement;
+	}
+
+	/** Desteklenmeyen işlem için standart sonuç: {supported: false, note}. */
+	public static Map<String, Object> unsupported(String note) {
+		return Results.map("supported", false, "note", note);
 	}
 
 	/** Hata zincirinde SecurityDisabledException (authorizer yok) var mı? */

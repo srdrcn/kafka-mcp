@@ -78,8 +78,9 @@ public class AclWriteTools {
 		String principal = Acls.principal(call, "principal");
 		String host = call.str("host", Acls.WILDCARD);
 		String preset = call.str("preset", null);
+		List<String> notes = new ArrayList<>();
 		List<AclBinding> bindings = preset == null ? List.of(single(call, principal, host))
-				: preset(call, preset, principal, host);
+				: preset(call, preset, principal, host, notes);
 		Collection<AclBinding> created;
 		try {
 			call.await(call.admin().createAcls(bindings).all());
@@ -94,7 +95,7 @@ public class AclWriteTools {
 		boolean visible = Acls.awaitVisible(call, new AclBindingFilter(ResourcePatternFilter.ANY,
 				new AccessControlEntryFilter(principal, null, AclOperation.ANY, AclPermissionType.ANY)), created, true);
 		return Results.map("created", created.size(), "preset", preset, "bindings", Acls.render(created), "note",
-				visible ? null : PROPAGATION_NOTE);
+				visible ? null : PROPAGATION_NOTE, "notes", notes.isEmpty() ? null : notes);
 	}
 
 	private AclBinding single(ToolCall call, String principal, String host) {
@@ -125,7 +126,8 @@ public class AclWriteTools {
 		return binding(type, name, pattern, principal, host, op, permission);
 	}
 
-	private List<AclBinding> preset(ToolCall call, String presetValue, String principal, String host) {
+	private List<AclBinding> preset(ToolCall call, String presetValue, String principal, String host,
+			List<String> notes) {
 		String preset = presetValue.toLowerCase(Locale.ROOT);
 		if (!PRESETS.contains(preset)) {
 			throw new ToolException("Geçersiz preset: " + presetValue + " (geçerli: " + String.join(", ", PRESETS) + ")");
@@ -183,7 +185,37 @@ public class AclWriteTools {
 				}
 			}
 		}
+		// Transactional producer TRANSACTIONAL_ID WRITE ile yetkilendirilir; diğerleri (streams at_least_once
+		// dahil) 3.0+ client'ta varsayılan olarak idempotent.
+		if ("streams".equals(preset) || ("producer".equals(preset) && !call.has("transactionalId"))) {
+			idempotentWrite(call, out, principal, host, notes);
+		}
 		return out;
+	}
+
+	/**
+	 * Kafka 2.8 öncesi (ZooKeeper) broker'lar idempotent producer'dan CLUSTER IDEMPOTENT_WRITE ister; 2.8+
+	 * (KIP-679, KRaft dahil) herhangi bir topic'te WRITE yeterli sayar. Eski/bilinmeyen IBP'de binding eklenir
+	 * (2.8+'da WRITE'ın zaten verdiği yetki, ek ayrıcalık değil); mod okunamazsa sadece not.
+	 */
+	private static void idempotentWrite(ToolCall call, List<AclBinding> out, String principal, String host,
+			List<String> notes) {
+		BrokerSecurity broker = BrokerSecurity.tryLoad(call);
+		Boolean required = broker.idempotentWriteRequired();
+		if (Boolean.TRUE.equals(required)) {
+			add(out, ResourceType.CLUSTER, Acls.CLUSTER_NAME, PatternType.LITERAL, principal, host,
+					AclOperation.IDEMPOTENT_WRITE);
+			String ibp = broker.value(BrokerSecurity.INTER_BROKER_PROTOCOL_VERSION);
+			notes.add("ZooKeeper broker'ı Kafka 2.8 öncesi olabilir (inter.broker.protocol.version="
+					+ (ibp == null ? "okunamadı" : ibp) + "): idempotent producer (3.0+ client varsayılanı) için "
+					+ "CLUSTER " + Acls.CLUSTER_NAME + " IDEMPOTENT_WRITE de eklendi");
+		}
+		else if (required == null) {
+			notes.add("Broker modu/sürümü okunamadı"
+					+ (broker.error() == null ? "" : " (" + broker.error() + ")")
+					+ ": Kafka 2.8 öncesi ZooKeeper broker'larında idempotent producer CLUSTER " + Acls.CLUSTER_NAME
+					+ " IDEMPOTENT_WRITE ister; gerekiyorsa ekleyin ya da producer'da enable.idempotence=false kullanın");
+		}
 	}
 
 	private static void requireOnly(ToolCall call, String preset, String param, String allowedPreset) {
