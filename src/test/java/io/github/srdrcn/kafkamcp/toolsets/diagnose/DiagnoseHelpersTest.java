@@ -48,6 +48,10 @@ class DiagnoseHelpersTest {
 		assertThat(d.status()).isEqualTo("critical");
 		assertThat(d.findings()).extracting(Finding::code).containsExactly("A_CRIT", "Z_WARN", "B_INFO");
 		assertThat(d.summary()).isEqualTo("Findings: 1 critical, 1 warning, 1 info");
+		Diagnosis two = new Diagnosis();
+		two.warning("W1", "warning", null, null);
+		two.warning("W2", "warning", null, null);
+		assertThat(two.summary()).isEqualTo("Findings: 2 warnings");
 		Map<String, Object> r = d.result(Map.of("topic", "t"), Map.of("x", 1));
 		assertThat(r).containsEntry("topic", "t").containsEntry("status", "critical").doesNotContainKey("partial");
 		@SuppressWarnings("unchecked")

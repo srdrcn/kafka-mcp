@@ -331,7 +331,8 @@ public class DiagnoseConnectivityTools {
 		List<String> problems = k.get("problems") instanceof List<?> l ? (List<String>) l : List.of();
 		Map<String, Object> principal = k.get("principal") instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
 		boolean keytabUnset = keytab.get("path") == null;
-		boolean principalUnset = principal.get("name") == null;
+		Object principalName = principal.get("name");
+		boolean principalUnset = principalName == null || principalName.toString().isBlank();
 		boolean keytabMissing = false;
 		for (String p : problems) {
 			boolean keytabProblem = p.startsWith("keytab");

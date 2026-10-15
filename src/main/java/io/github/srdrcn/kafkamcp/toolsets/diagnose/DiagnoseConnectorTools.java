@@ -660,7 +660,7 @@ public class DiagnoseConnectorTools {
 					"Increase tasks.max up to the partition count; check the write capacity of the target system and the batch settings");
 		}
 		else if (p.lag() >= HIGH_LAG && !stalled) {
-			dx.info("SINK_LAG_HIGH", "Sink lag is " + p.lag(), evidence("lag", p.lag()), "Follow the trend");
+			dx.info("SINK_LAG_HIGH", "Sink lag is " + p.lag(), evidence("lag", p.lag()), "Monitor the trend");
 		}
 	}
 

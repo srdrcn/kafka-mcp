@@ -319,7 +319,7 @@ public class DiagnoseTopicTools {
 					evidence("partitions", partitionNumbers(urpOnly), "omitted", omitted(urpOnly), "missingBrokers",
 							h.missingBrokers().isEmpty() ? null : List.copyOf(h.missingBrokers())),
 					"Check the health, disks and network of the replica brokers; if a reassignment is in progress, "
-							+ "follow it with partition_reassignments_list");
+							+ "monitor it with partition_reassignments_list");
 		}
 		if (!h.nonPreferredLeader().isEmpty()) {
 			dx.warning("LEADER_NOT_PREFERRED",
@@ -657,7 +657,7 @@ public class DiagnoseTopicTools {
 		if (!high.isEmpty()) {
 			dx.info("CONSUMER_LAG_HIGH", high.size() + " consumer group(s) have a lag of " + HIGH_LAG + "+ (not growing)",
 					evidence("groups", first(high, MAX_EVIDENCE), "omitted", omitted(high)),
-					"Follow the trend with consumer_groups_lag_trend");
+					"Monitor the trend with consumer_groups_lag_trend");
 		}
 		if (!beforeStart.isEmpty()) {
 			dx.warning("COMMITTED_BEFORE_LOG_START",

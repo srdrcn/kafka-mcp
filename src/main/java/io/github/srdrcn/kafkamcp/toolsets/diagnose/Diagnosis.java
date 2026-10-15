@@ -77,7 +77,7 @@ public final class Diagnosis {
 		return OK;
 	}
 
-	/** Short summary: "Findings: 1 critical, 2 warning, 1 info" or "No issues found". */
+	/** Short summary: "Findings: 1 critical, 2 warnings, 1 info" or "No issues found". */
 	public synchronized String summary() {
 		long c = count(Severity.CRITICAL);
 		long w = count(Severity.WARNING);
@@ -90,7 +90,7 @@ public final class Diagnosis {
 			parts.add(c + " critical");
 		}
 		if (w > 0) {
-			parts.add(w + " warning");
+			parts.add(w + (w == 1 ? " warning" : " warnings"));
 		}
 		if (i > 0) {
 			parts.add(i + " info");

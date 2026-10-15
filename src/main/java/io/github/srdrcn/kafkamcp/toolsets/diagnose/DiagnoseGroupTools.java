@@ -170,7 +170,8 @@ public class DiagnoseGroupTools {
 		Set<String> missing = new TreeSet<>();
 		Map<String, String> errors = new TreeMap<>();
 		described.errors().forEach((t, e) -> {
-			if (e.contains(UnknownTopicOrPartitionException.class.getSimpleName()) || e.contains("not found")) {
+			if (e.contains(UnknownTopicOrPartitionException.class.getSimpleName())
+					|| e.startsWith("Topic or partition not found")) {
 				missing.add(t);
 			}
 			else {
@@ -443,7 +444,7 @@ public class DiagnoseGroupTools {
 		else if (p.lag() >= HIGH_LAG && !stalled) {
 			dx.info("HIGH_LAG", "Total lag " + p.lag() + (p.etaSeconds() != null
 					? " (shrinking, estimated catch-up in " + p.etaSeconds() + " s)" : ""), evidence("lag", p.lag()),
-					"Follow it with consumer_groups_lag_trend");
+					"Monitor it with consumer_groups_lag_trend");
 		}
 		if (p.resetDetected()) {
 			dx.info("OFFSET_RESET_DETECTED", "The commit went backwards during the measurement (offset reset or reprocessing)", null,

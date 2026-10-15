@@ -186,7 +186,7 @@ public final class Checks implements AutoCloseable {
 				diagnosis.warning(CHECK_TIMEOUT, "Sub-check did not finish within the time limit: " + name,
 						Diagnosis.evidence("check", name, "waitedMs", waited, "reason",
 								message.startsWith(DEPENDENCY_PREFIX) ? message : null),
-						"Result is incomplete; run the tool again or use the tool dedicated to this topic");
+						"Result is incomplete; run the tool again or use the dedicated tool for this check");
 			}
 			else {
 				diagnosis.warning(CHECK_FAILED, "Sub-check could not run: " + name,

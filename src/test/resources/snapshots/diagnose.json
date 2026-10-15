@@ -105,7 +105,7 @@
   }
 }, {
   "name" : "diagnose_access",
-  "description" : "Check whether a principal is authorized for an intent (produce/consume/transactional-produce/admin-topic); suggests missing ACLs for acls_create",
+  "description" : "Check if a principal can produce/consume/transactional-produce/admin-topic on a topic; suggests missing ACLs for acls_create",
   "inputSchema" : {
     "type" : "object",
     "properties" : {

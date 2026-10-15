@@ -45,7 +45,7 @@ public class DiagnoseAccessTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("diagnose_access",
-					"Check whether a principal is authorized for an intent (produce/consume/transactional-produce/admin-topic); suggests missing ACLs for acls_create")
+					"Check if a principal can produce/consume/transactional-produce/admin-topic on a topic; suggests missing ACLs for acls_create")
 			.required("principal", P.string("Principal (e.g. User:alice; a bare name gets the User: prefix)"))
 			.required("intent", P.enumOf("Intent", INTENTS))
 			.required("topic", P.string("Topic name"))
