@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -33,13 +36,18 @@ import org.apache.kafka.clients.admin.QuorumInfo;
 import org.apache.kafka.clients.admin.ReplicaInfo;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.admin.TransactionListing;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.errors.ClusterAuthorizationException;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
+import org.apache.kafka.common.record.TimestampType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -118,21 +126,68 @@ class OldBrokerCompatTest {
 
 	@Test
 	void topicsLastWriteTimeNotesMissingMaxTimestamp() {
-		when(admin.listOffsets(anyMap())).thenAnswer(i -> {
-			@SuppressWarnings("unchecked")
-			Map<TopicPartition, OffsetSpec> specs = (Map<TopicPartition, OffsetSpec>) i.getArgument(0);
-			Map<TopicPartition, KafkaFuture<ListOffsetsResultInfo>> futures = new LinkedHashMap<>();
-			specs.forEach((tp, spec) -> futures.put(tp, spec instanceof OffsetSpec.MaxTimestampSpec ? unsupported()
-					: KafkaFuture.completedFuture(new ListOffsetsResultInfo(0, -1, Optional.empty()))));
-			ListOffsetsResult r = mock(ListOffsetsResult.class);
-			when(r.partitionResult(any())).thenAnswer(a -> futures.get(a.getArgument(0)));
-			return r;
-		});
+		// iki partition da boş: okunacak son kayıt yok, not "son kayıt okundu" dememeli
+		stubOffsets(Map.of());
 
 		@SuppressWarnings("unchecked")
 		Map<String, Object> r = (Map<String, Object>) new TopicDataTools().topicsLastWriteTime(call(TOPIC));
 		assertThat(r.get("emptyPartitions")).isEqualTo(2);
-		assertThat((String) r.get("note")).startsWith(KafkaErrors.UNSUPPORTED).contains("maxTimestamp");
+		assertThat(r.get("method")).isEqualTo("maxTimestamp");
+		assertThat((String) r.get("note")).startsWith(KafkaErrors.UNSUPPORTED)
+			.contains("maxTimestamp")
+			.doesNotContain("son kayıt okundu");
+		assertThat(r).doesNotContainKey("lastWriteTime");
+	}
+
+	@Test
+	void topicsLastWriteTimeReadsLastRecordWhenMaxTimestampUnsupported() {
+		// p0'da 5 kayıt (0..4), p1 boş; maxTimestamp desteklenmiyor → p0'ın son kaydı consumer'la okunur
+		stubOffsets(Map.of(0, 5L));
+		long ts = 1_700_000_000_000L;
+		TopicPartition p0 = new TopicPartition(TOPIC, 0);
+		@SuppressWarnings("unchecked")
+		KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+		ConsumerRecord<byte[], byte[]> last = new ConsumerRecord<>(TOPIC, 0, 4L, ts, TimestampType.CREATE_TIME, 0, 0,
+				null, new byte[] { 1 }, new RecordHeaders(), Optional.empty());
+		when(consumer.poll(any(Duration.class))).thenReturn(new ConsumerRecords<>(Map.of(p0, List.of(last)), Map.of()))
+			.thenReturn(ConsumerRecords.empty());
+		when(consumer.position(eq(p0), any(Duration.class))).thenReturn(5L);
+		when(clients.newConsumer("old", null)).thenReturn(consumer);
+
+		@SuppressWarnings("unchecked")
+		Map<String, Object> r = (Map<String, Object>) new TopicDataTools().topicsLastWriteTime(call(TOPIC));
+		assertThat(r.get("method")).isEqualTo("maxTimestamp+lastRecord");
+		assertThat((String) r.get("note")).startsWith(KafkaErrors.UNSUPPORTED).contains("son kayıt okundu");
+		assertThat(r.get("lastWriteTime")).isEqualTo(Instant.ofEpochMilli(ts).toString());
+		assertThat(r.get("partition")).isEqualTo(0);
+		assertThat(r.get("emptyPartitions")).isEqualTo(1);
+		@SuppressWarnings("unchecked")
+		List<Map<String, Object>> rows = (List<Map<String, Object>>) r.get("partitions");
+		assertThat(rows.get(0)).containsEntry("source", "lastRecord")
+			.containsEntry("offset", 4L)
+			.containsEntry("lastWriteTime", Instant.ofEpochMilli(ts).toString());
+		assertThat(rows.get(1)).containsEntry("empty", true);
+		verify(consumer).seek(p0, 0L);
+	}
+
+	/**
+	 * listOffsets: maxTimestamp desteklenmiyor (Kafka &lt; 3.0); earliest 0, latest {@code latest}'teki değer (yoksa
+	 * 0 = boş partition).
+	 */
+	private void stubOffsets(Map<Integer, Long> latest) {
+		when(admin.listOffsets(anyMap())).thenAnswer(i -> {
+			@SuppressWarnings("unchecked")
+			Map<TopicPartition, OffsetSpec> specs = (Map<TopicPartition, OffsetSpec>) i.getArgument(0);
+			Map<TopicPartition, KafkaFuture<ListOffsetsResultInfo>> futures = new LinkedHashMap<>();
+			specs.forEach((tp, spec) -> {
+				long offset = spec instanceof OffsetSpec.LatestSpec ? latest.getOrDefault(tp.partition(), 0L) : 0;
+				futures.put(tp, spec instanceof OffsetSpec.MaxTimestampSpec ? unsupported()
+						: KafkaFuture.completedFuture(new ListOffsetsResultInfo(offset, -1, Optional.empty())));
+			});
+			ListOffsetsResult r = mock(ListOffsetsResult.class);
+			when(r.partitionResult(any())).thenAnswer(a -> futures.get(a.getArgument(0)));
+			return r;
+		});
 	}
 
 	@Test

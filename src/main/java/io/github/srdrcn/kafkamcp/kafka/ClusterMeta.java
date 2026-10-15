@@ -7,12 +7,16 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.DescribeClusterResult;
+import org.apache.kafka.clients.admin.DescribeConfigsOptions;
 import org.apache.kafka.clients.admin.FeatureMetadata;
 import org.apache.kafka.clients.admin.FinalizedVersionRange;
 import org.apache.kafka.clients.admin.QuorumInfo;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
+import org.apache.kafka.common.config.ConfigResource;
 
 import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
@@ -31,6 +35,10 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
  * <p>
  * Aktif controller: KRaft'ta quorum lideri (broker'lar describeCluster'da rastgele bir canlı broker'ı
  * "controller" diye döndürür; client'lar controller'lara erişemez), ZooKeeper'da describeCluster controller'ı.
+ * ZooKeeper→KRaft geçişinde ({@value #MIGRATION_ENABLE}=true) KRaft controller'ı devraldıktan sonra ZooKeeper
+ * broker'ları da rastgele broker döndürür; bu yüzden ZooKeeper modunda controller broker'ının bu bayrağına bakılır
+ * ve geçiş açıksa controller raporlanmaz ({@link Info#zkMigration()}). Geçiş sırasında (bazı broker'lar KRaft)
+ * mod, isteği yanıtlayan broker'a göre değişebilir.
  */
 public final class ClusterMeta {
 
@@ -54,6 +62,12 @@ public final class ClusterMeta {
 
 	/** describeFeatures (ApiVersions) için en fazla bekleme. */
 	static final long FEATURES_WAIT_MS = 4_000;
+
+	/** ZooKeeper→KRaft geçiş bayrağı (broker config'i); ZooKeeper ve geçişteki KRaft broker'larında true. */
+	public static final String MIGRATION_ENABLE = "zookeeper.metadata.migration.enable";
+
+	/** ZooKeeper modunda geçiş bayrağı için controller broker'ının config'ini en fazla bekleme. */
+	static final long MIGRATION_WAIT_MS = 4_000;
 
 	private ClusterMeta() {
 	}
@@ -113,18 +127,34 @@ public final class ClusterMeta {
 
 	/**
 	 * describeCluster sonucu. {@code controllerId} KRaft'ta quorum lideri, ZooKeeper'da describeCluster
-	 * controller'ıdır; quorum sorgulanmadıysa ya da KRaft'ta quorum sorgusu başarısızsa null (KRaft broker'ları
-	 * describeCluster'da rastgele bir broker'ı controller diye döndürür). {@code mode} quorum sorgulanmadıysa ya
-	 * da belirlenemediyse null. {@code finalizedFeatures} finalize edilmiş feature'lar (ad → en yüksek seviye;
-	 * ZooKeeper'da boş), sorgulanmadıysa ya da sorgu başarısızsa null.
+	 * controller'ıdır; quorum sorgulanmadıysa, KRaft'ta quorum sorgusu başarısızsa ya da ZooKeeper→KRaft geçişi
+	 * açıksa null (bu durumlarda broker'lar describeCluster'da rastgele bir broker'ı controller diye döndürür).
+	 * {@code mode} quorum sorgulanmadıysa ya da belirlenemediyse null. {@code finalizedFeatures} finalize edilmiş
+	 * feature'lar (ad → en yüksek seviye; ZooKeeper'da boş), sorgulanmadıysa ya da sorgu başarısızsa null.
+	 * {@code zkMigration} ZooKeeper modunda controller broker'ının {@value #MIGRATION_ENABLE} değeri; KRaft'ta,
+	 * sorgulanmadıysa ya da config okunamadıysa null.
 	 */
 	public record Info(String clusterId, List<Node> brokers, Integer controllerId, String mode, QuorumInfo quorum,
-			String quorumError, Map<String, Short> finalizedFeatures) {
+			String quorumError, Map<String, Short> finalizedFeatures, Boolean zkMigration) {
+
+		/** Geçiş bilgisi olmadan (geriye uyumluluk). */
+		public Info(String clusterId, List<Node> brokers, Integer controllerId, String mode, QuorumInfo quorum,
+				String quorumError, Map<String, Short> finalizedFeatures) {
+			this(clusterId, brokers, controllerId, mode, quorum, quorumError, finalizedFeatures, null);
+		}
 
 		/** Feature bilgisi olmadan (geriye uyumluluk). */
 		public Info(String clusterId, List<Node> brokers, Integer controllerId, String mode, QuorumInfo quorum,
 				String quorumError) {
-			this(clusterId, brokers, controllerId, mode, quorum, quorumError, null);
+			this(clusterId, brokers, controllerId, mode, quorum, quorumError, null, null);
+		}
+
+		/**
+		 * ZooKeeper→KRaft geçişi açık mı? true ise describeCluster controller'ı güvenilmez (KRaft controller'ı
+		 * devraldıysa ZooKeeper broker'ları rastgele broker döndürür) ve {@link #controllerId()} null'dır.
+		 */
+		public boolean migration() {
+			return Boolean.TRUE.equals(zkMigration);
 		}
 
 		/** Broker id'leri (sıralı). */
@@ -186,7 +216,7 @@ public final class ClusterMeta {
 		nodes.sort(Comparator.comparingInt(Node::id));
 		Node controller = call.await(dc.controller());
 		if (!withQuorum) {
-			return new Info(clusterId, List.copyOf(nodes), null, null, null, null, null);
+			return new Info(clusterId, List.copyOf(nodes), null, null, null, null, null, null);
 		}
 		QuorumInfo quorum = null;
 		String quorumError = null;
@@ -205,20 +235,51 @@ public final class ClusterMeta {
 			quorumError = null;
 		}
 		Integer controllerId = null;
+		Boolean migration = null;
 		if (quorum != null) {
 			controllerId = quorum.leaderId() >= 0 ? quorum.leaderId() : null;
 		}
 		else if (mode == Mode.ZOOKEEPER && controller != null && !controller.isEmpty()) {
-			controllerId = controller.id();
+			// geçişte KRaft controller'ı devraldıysa bu rastgele bir broker'dır: bayrak açıksa raporlanmaz
+			migration = zkMigration(call, admin, controller.id(), MIGRATION_WAIT_MS);
+			controllerId = Boolean.TRUE.equals(migration) ? null : controller.id();
 		}
 		return new Info(clusterId, List.copyOf(nodes), controllerId, mode.isKnown() ? mode.label() : null, quorum,
-				quorumError, features);
+				quorumError, features, migration);
+	}
+
+	/**
+	 * Broker config'inde ZooKeeper→KRaft geçişi açık mı ({@value #MIGRATION_ENABLE}=true)? Geçişte hem ZooKeeper
+	 * hem KRaft'a taşınmış broker'larda açıktır (geçiş sonlandırılınca kaldırılır).
+	 */
+	public static boolean migrationEnabled(Config brokerConfig) {
+		ConfigEntry e = brokerConfig == null ? null : brokerConfig.get(MIGRATION_ENABLE);
+		return e != null && !e.isSensitive() && "true".equalsIgnoreCase(e.value());
+	}
+
+	/**
+	 * Broker'ın {@value #MIGRATION_ENABLE} değeri (tek describeConfigs, en fazla {@code maxMillis}); config
+	 * okunamazsa (yetki yok, zaman aşımı) null. Hata fırlatmaz.
+	 */
+	public static Boolean zkMigration(ToolCall call, Admin admin, int brokerId, long maxMillis) {
+		try {
+			ConfigResource r = Configs.broker(brokerId);
+			int timeout = (int) Math.max(1, Math.min(maxMillis, call.waitMillis()));
+			KafkaFuture<Config> f = admin.describeConfigs(List.of(r), new DescribeConfigsOptions().timeoutMs(timeout))
+				.values()
+				.get(r);
+			return f == null ? null : migrationEnabled(Futures.awaitAtMost(call, f, maxMillis));
+		}
+		catch (RuntimeException e) {
+			return null;
+		}
 	}
 
 	/**
 	 * Seçilen cluster'ın modu; araçlar (report/diagnose/acl...) moda göre davranmak için çağırır. Önce
 	 * describeFeatures (yetki istemez, broker cache'ten yanıtlar), başarısızsa describeMetadataQuorum denenir.
 	 * Her istek en fazla birkaç saniye beklenir; ikisi de yanıtsızsa {@link Mode#UNKNOWN}. Hata fırlatmaz.
+	 * ZooKeeper→KRaft geçişinde (bazı broker'lar KRaft) sonuç yanıtlayan broker'ın modudur.
 	 */
 	public static Mode mode(ToolCall call) {
 		Admin admin;

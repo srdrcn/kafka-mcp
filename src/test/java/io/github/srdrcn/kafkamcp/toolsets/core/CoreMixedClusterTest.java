@@ -102,6 +102,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zk.get("mode").asText()).isEqualTo("ZooKeeper");
 		// ZooKeeper'da describeCluster controller'ı gerçek controller'dır
 		assertThat(zk.get("controllerId").asInt()).isEqualTo(1);
+		assertThat(zk.has("zkMigration")).isFalse();
 		assertThat(zk.get("brokerCount").asInt()).isEqualTo(1);
 		for (String kraft : List.of("test", "test-ro")) {
 			JsonNode k = byName.get(kraft);
@@ -125,9 +126,14 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zk.get("mode").asText()).isEqualTo("ZooKeeper");
 		assertThat(zk.get("controllerId").asInt()).isEqualTo(1);
 		assertThat(zk.has("controllerNote")).isFalse();
-		// ZooKeeper'da metadata.version yok: sürüm IBP'den
-		assertThat(zk.get("kafkaVersion").asText()).isEqualTo("3.9");
+		// ZooKeeper'da metadata.version yok: sürüm IBP'den; IBP varsayılan (sabitlenmemiş) = broker yazılımı
+		assertThat(zk.get("minKafkaVersion").asText()).isEqualTo("3.9");
+		assertThat(zk.has("kafkaVersion")).isFalse();
 		assertThat(zk.get("versionSource").asText()).startsWith("inter.broker.protocol.version=3.9");
+		assertThat(zk.has("versionPinned")).isFalse();
+		assertThat(zk.has("versionNote")).isFalse();
+		assertThat(zk.has("zkMigration")).isFalse();
+		assertThat(zk.has("modeNote")).isFalse();
 		assertThat(zk.has("quorum")).isFalse();
 		assertThat(zk.has("quorumError")).as("ZooKeeper'da DescribeQuorum yokluğu hata değildir").isFalse();
 		assertThat(zk.has("features")).isFalse();
@@ -146,8 +152,11 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(kraft.get("mode").asText()).isEqualTo("KRaft");
 		// KRaft'ta aktif controller quorum lideridir
 		assertThat(kraft.get("controllerId").asInt()).isEqualTo(kraft.at("/quorum/leaderId").asInt()).isEqualTo(1);
-		assertThat(kraft.get("kafkaVersion").asText()).isEqualTo("4.1");
+		assertThat(kraft.get("minKafkaVersion").asText()).isEqualTo("4.1");
 		assertThat(kraft.get("versionSource").asText()).startsWith("metadata.version=");
+		// metadata.version yükseltmeden sonra artar: yazılım sürümünün gerisinde kalabilir
+		assertThat(kraft.get("versionNote").asText()).contains("broker yazılımı daha yeni olabilir");
+		assertThat(kraft.has("zkMigration")).isFalse();
 		assertThat(kraft.at("/features/metadata.version").asInt()).isGreaterThanOrEqualTo(27);
 		assertThat(kraft.get("features").has("group.version")).isTrue();
 		assertThat(kraft.has("zookeeper")).isFalse();
@@ -162,6 +171,8 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 
 		ClusterMeta.Info zk = ClusterMeta.describe(call(clients, ZK_CLUSTER), true);
 		assertThat(zk.mode()).isEqualTo(ClusterMeta.ZOOKEEPER);
+		// controller broker'ının config'i okundu: ZooKeeper→KRaft geçişi kapalı, describeCluster controller'ı gerçek
+		assertThat(zk.zkMigration()).isFalse();
 		assertThat(zk.controllerId()).isEqualTo(1);
 		assertThat(zk.quorum()).isNull();
 		assertThat(zk.quorumError()).isNull();
@@ -171,6 +182,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		ClusterMeta.Info kraft = ClusterMeta.describe(call(clients, "test"), true);
 		assertThat(kraft.clusterMode()).isEqualTo(ClusterMeta.Mode.KRAFT);
 		assertThat(kraft.controllerId()).isEqualTo(kraft.quorum().leaderId());
+		assertThat(kraft.zkMigration()).isNull();
 		assertThat(kraft.metadataVersionLevel()).isNotNull();
 
 		// alice'in Cluster:Describe yetkisi yok: KRaft'ta quorum reddedilir, mod feature'lardan bulunur
@@ -183,6 +195,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		// ZooKeeper'da da yetkisiz kullanıcıyla mod ve controller belli
 		ClusterMeta.Info zkAlice = ClusterMeta.describe(call(aliceClients, "zk-alice"), true);
 		assertThat(zkAlice.clusterMode()).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
+		assertThat(zkAlice.migration()).isFalse();
 		assertThat(zkAlice.controllerId()).isEqualTo(1);
 		assertThat(ClusterMeta.mode(call(aliceClients, "zk-alice"))).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
 	}

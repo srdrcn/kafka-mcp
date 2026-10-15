@@ -55,6 +55,15 @@ public class BrokerTools {
 			"controller.listener.names", "inter.broker.protocol.version", "log.message.format.version",
 			"broker.id.generation.enable", "reserved.broker.max.id", "process.roles");
 
+	static final String AUTHORIZER = "authorizer.class.name";
+
+	/** ZooKeeper broker'larının ACL authorizer'ları (AclAuthorizer ve öncülü SimpleAclAuthorizer). */
+	static final Set<String> ZK_AUTHORIZERS = Set.of("kafka.security.authorizer.AclAuthorizer",
+			"kafka.security.auth.SimpleAclAuthorizer");
+
+	/** KRaft broker'larının ACL authorizer'ı. */
+	static final String KRAFT_AUTHORIZER = "org.apache.kafka.metadata.authorizer.StandardAuthorizer";
+
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("brokers_list", "Broker'ları listeler: host, port, rack, controller mı, lider ve replika sayıları")
@@ -107,7 +116,8 @@ public class BrokerTools {
 			rows.add(row);
 		}
 		Map<String, Object> out = Results.map("controllerId", info.controllerId(), "mode",
-				info.clusterMode().label(), "controllerNote", ClusterTools.controllerNote(info));
+				info.clusterMode().label(), "controllerNote", ClusterTools.controllerNote(info), "zkMigration",
+				info.migration() ? true : null, "modeNote", info.migration() ? ClusterTools.MIGRATION_MODE_NOTE : null);
 		out.putAll(Results.page("brokers", rows, call.limit()));
 		return out;
 	}
@@ -135,14 +145,17 @@ public class BrokerTools {
 		Map<Integer, Config> byBroker = byBrokerId(configs.values());
 		Map<String, List<Integer>> modes = brokerModes(byBroker);
 		boolean mixedModes = modes.size() > 1;
-		Drift drift = drift(byBroker, name -> !PER_BROKER_KEYS.contains(name) && call.matches(name)
-				&& !(mixedModes && modeSpecific(name)));
+		boolean authorizerByMode = mixedModes && authorizerMatchesModes(byBroker);
+		Drift drift = drift(byBroker, compared(byBroker, call::matches));
 		Map<String, Object> out = Results.map("brokersCompared", List.copyOf(byBroker.keySet()), "excludedKeys",
 				PER_BROKER_KEYS);
 		if (mixedModes) {
 			out.put("brokerModes", modes);
 			out.put("modeNote", "Broker'lar farklı modda (ZooKeeper→KRaft geçişi?): moda özgü anahtarlar ("
-					+ String.join(", ", MODE_SPECIFIC_KEYS) + ") karşılaştırılmadı");
+					+ String.join(", ", MODE_SPECIFIC_KEYS) + ") karşılaştırılmadı"
+					+ (authorizerByMode
+							? "; authorizer.class.name her broker'da moduna uygun (ZooKeeper: AclAuthorizer, KRaft: StandardAuthorizer)"
+							: ""));
 		}
 		if (!drift.presenceOnly().isEmpty()) {
 			out.put("keysOnlyOnSomeBrokers", drift.presenceOnly().size());
@@ -157,6 +170,36 @@ public class BrokerTools {
 		}
 		out.putAll(Results.page("differences", drift.differences(), call.limit()));
 		return out;
+	}
+
+	/**
+	 * Karşılaştırılacak anahtarlar: broker'a özgü olmayan ve {@code matches}'e uyan; broker'lar farklı moddaysa
+	 * moda özgü anahtarlar ve (her broker kendi modunun authorizer'ını kullanıyorsa) authorizer.class.name hariç.
+	 */
+	static Predicate<String> compared(Map<Integer, Config> byBroker, Predicate<String> matches) {
+		boolean mixedModes = brokerModes(byBroker).size() > 1;
+		boolean authorizerByMode = mixedModes && authorizerMatchesModes(byBroker);
+		return name -> !PER_BROKER_KEYS.contains(name) && matches.test(name) && !(mixedModes && modeSpecific(name))
+				&& !(authorizerByMode && AUTHORIZER.equals(name));
+	}
+
+	/**
+	 * Geçişte beklenen authorizer farkı mı: her ZooKeeper broker'ı AclAuthorizer (ya da SimpleAclAuthorizer), her
+	 * KRaft broker'ı StandardAuthorizer kullanıyor. Modu belirlenemeyen broker ya da başka bir kombinasyon (ör.
+	 * bir tarafta authorizer yok) gerçek fark sayılır.
+	 */
+	static boolean authorizerMatchesModes(Map<Integer, Config> byBroker) {
+		for (Config c : byBroker.values()) {
+			ClusterMeta.Mode mode = brokerMode(c);
+			String authorizer = Configs.value(c.get(AUTHORIZER));
+			// Set.of null kabul etmez: authorizer yoksa (ACL kapalı) beklenen kombinasyon değil
+			boolean expected = authorizer != null && (mode.isZooKeeper() ? ZK_AUTHORIZERS.contains(authorizer)
+					: mode.isKraft() && KRAFT_AUTHORIZER.equals(authorizer));
+			if (!expected) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** Anahtar moda özgü mü ({@link #MODE_SPECIFIC_KEYS})? */

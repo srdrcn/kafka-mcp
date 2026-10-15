@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
@@ -69,6 +71,22 @@ class ClusterModeTest {
 		assertThat(zk.defaultBrokerId()).isEqualTo(2);
 		assertThat(zk.metadataVersionLevel()).isNull();
 		assertThat(new ClusterMeta.Info("c", List.of(b1), null, null, null, "x").clusterMode()).isEqualTo(Mode.UNKNOWN);
+		// eski kurucular geçiş bilgisi taşımaz (bilinmiyor)
+		assertThat(zk.zkMigration()).isNull();
+		assertThat(zk.migration()).isFalse();
+		assertThat(dedicated.migration()).isFalse();
+		assertThat(new ClusterMeta.Info("c", List.of(b1), null, ClusterMeta.ZOOKEEPER, null, null, Map.of(), true)
+			.migration()).isTrue();
+	}
+
+	@Test
+	void migrationFlagFromBrokerConfig() {
+		assertThat(ClusterMeta.migrationEnabled(null)).isFalse();
+		assertThat(ClusterMeta.migrationEnabled(new Config(List.of()))).isFalse();
+		assertThat(ClusterMeta.migrationEnabled(new Config(List.of(new ConfigEntry(ClusterMeta.MIGRATION_ENABLE, "false")))))
+			.isFalse();
+		assertThat(ClusterMeta.migrationEnabled(new Config(List.of(new ConfigEntry(ClusterMeta.MIGRATION_ENABLE, "true")))))
+			.isTrue();
 	}
 
 	@Test

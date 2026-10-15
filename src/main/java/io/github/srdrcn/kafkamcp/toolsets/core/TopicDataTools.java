@@ -199,13 +199,13 @@ public class TopicDataTools {
 			rows.add(Results.map("partition", p.partition(), "lastWriteTime", Format.iso(ts), "ageSeconds",
 					Format.ageSeconds(ts), "offset", offset, "source", source));
 		}
+		// "son kayıt okundu" sadece fallback gerçekten çalıştıysa (boş partition'larda okunacak kayıt yok)
+		String note = !maxTsUnsupported ? null
+				: KafkaErrors.UNSUPPORTED + ": ListOffsets maxTimestamp Kafka 3.0+ broker gerektirir"
+						+ (fallback.isEmpty() ? "" : "; son kayıt okundu");
 		return Results.map("topic", topic, "lastWriteTime", Format.iso(topicMax), "ageSeconds",
 				Format.ageSeconds(topicMax), "partition", topicMaxPartition, "emptyPartitions", empty, "method",
-				fallback.isEmpty() ? "maxTimestamp" : "maxTimestamp+lastRecord", "note",
-				maxTsUnsupported
-						? KafkaErrors.UNSUPPORTED + ": ListOffsets maxTimestamp Kafka 3.0+ broker gerektirir; son kayıt okundu"
-						: null,
-				"partitions", rows);
+				fallback.isEmpty() ? "maxTimestamp" : "maxTimestamp+lastRecord", "note", note, "partitions", rows);
 	}
 
 	Object topicsWriteRate(ToolCall call) {

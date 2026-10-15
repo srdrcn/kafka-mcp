@@ -82,6 +82,59 @@ class BrokerConfigDriftTest {
 	}
 
 	@Test
+	void mixedModesSkipAuthorizerOnlyWhenEachBrokerUsesItsModesAuthorizer() {
+		// geçiş kılavuzu: KRaft'a taşınan broker StandardAuthorizer'a geçer, ZooKeeper broker'ları AclAuthorizer'da kalır
+		Map<Integer, Config> expected = new TreeMap<>();
+		expected.put(1, zkBroker("kafka.security.authorizer.AclAuthorizer"));
+		expected.put(2, zkBroker("kafka.security.auth.SimpleAclAuthorizer"));
+		expected.put(3, kraftBroker("org.apache.kafka.metadata.authorizer.StandardAuthorizer"));
+		assertThat(BrokerTools.authorizerMatchesModes(expected)).isTrue();
+		assertThat(BrokerTools.differences(expected, BrokerTools.compared(expected, name -> true)))
+			.extracting(d -> d.get("name"))
+			.containsExactly("num.io.threads");
+
+		// KRaft broker'ında authorizer yok (ACL kapalı): gerçek güvenlik farkı, raporlanır
+		Map<Integer, Config> noAcl = new TreeMap<>();
+		noAcl.put(1, zkBroker("kafka.security.authorizer.AclAuthorizer"));
+		noAcl.put(2, kraftBroker(""));
+		assertThat(BrokerTools.authorizerMatchesModes(noAcl)).isFalse();
+		assertThat(BrokerTools.differences(noAcl, BrokerTools.compared(noAcl, name -> true)))
+			.extracting(d -> d.get("name"))
+			.contains(BrokerTools.AUTHORIZER);
+
+		// ZooKeeper broker'ında özel authorizer: beklenen kombinasyon değil, raporlanır
+		Map<Integer, Config> custom = new TreeMap<>();
+		custom.put(1, zkBroker("com.example.CustomAuthorizer"));
+		custom.put(2, kraftBroker("org.apache.kafka.metadata.authorizer.StandardAuthorizer"));
+		assertThat(BrokerTools.differences(custom, BrokerTools.compared(custom, name -> true)))
+			.extracting(d -> d.get("name"))
+			.contains(BrokerTools.AUTHORIZER);
+
+		// aynı modda farklı authorizer her zaman drift
+		Map<Integer, Config> sameMode = new TreeMap<>();
+		sameMode.put(1, zkBroker("kafka.security.authorizer.AclAuthorizer"));
+		sameMode.put(2, zkBroker("kafka.security.auth.SimpleAclAuthorizer"));
+		assertThat(BrokerTools.differences(sameMode, BrokerTools.compared(sameMode, name -> true)))
+			.extracting(d -> d.get("name"))
+			.containsExactly(BrokerTools.AUTHORIZER);
+	}
+
+	private static Config zkBroker(String authorizer) {
+		return config(entry("zookeeper.connect", "zk:2181", ConfigSource.STATIC_BROKER_CONFIG),
+				entry("process.roles", "", ConfigSource.DEFAULT_CONFIG),
+				entry(BrokerTools.AUTHORIZER, authorizer, ConfigSource.STATIC_BROKER_CONFIG),
+				entry("num.io.threads", "8", ConfigSource.DEFAULT_CONFIG));
+	}
+
+	private static Config kraftBroker(String authorizer) {
+		return config(entry("process.roles", "broker", ConfigSource.STATIC_BROKER_CONFIG),
+				entry("controller.quorum.voters", "3000@c:9093", ConfigSource.STATIC_BROKER_CONFIG),
+				entry(BrokerTools.AUTHORIZER, authorizer,
+						authorizer.isEmpty() ? ConfigSource.DEFAULT_CONFIG : ConfigSource.STATIC_BROKER_CONFIG),
+				entry("num.io.threads", "16", ConfigSource.STATIC_BROKER_CONFIG));
+	}
+
+	@Test
 	void keysMissingOnSomeBrokersWithOnlyDefaultsAreNotDrift() {
 		// 3.9 broker'ında olan ama 4.x'te hiç olmayan anahtar (varsayılan değerli): sürüm farkı, drift değil
 		Map<Integer, Config> byBroker = new TreeMap<>();

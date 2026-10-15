@@ -33,7 +33,7 @@
   }
 }, {
   "name" : "clusters_get",
-  "description" : "Cluster özeti: id, mod (KRaft/ZooKeeper), aktif controller/quorum, Kafka sürümü, KRaft feature'ları ya da ZooKeeper bağlantısı, authorizer, broker/topic/partition sayıları, URP ve offline partition'lar",
+  "description" : "Cluster özeti: id, mod (KRaft/ZooKeeper, geçiş), aktif controller/quorum, en düşük Kafka sürümü (IBP/metadata.version), KRaft feature'ları ya da ZooKeeper bağlantısı, authorizer, broker/topic/partition sayıları, URP ve offline partition'lar",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
