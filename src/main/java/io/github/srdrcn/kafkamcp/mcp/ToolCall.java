@@ -191,8 +191,8 @@ public final class ToolCall {
 		}
 		String s = String.valueOf(v).trim().toLowerCase();
 		return switch (s) {
-			case "true", "1", "yes", "evet" -> true;
-			case "false", "0", "no", "hayir", "hayır" -> false;
+			case "true", "1", "yes" -> true;
+			case "false", "0", "no" -> false;
 			default -> defaultValue;
 		};
 	}
