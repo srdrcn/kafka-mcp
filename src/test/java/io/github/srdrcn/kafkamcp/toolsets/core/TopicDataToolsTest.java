@@ -25,7 +25,7 @@ import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
 class TopicDataToolsTest extends KafkaIntegrationTest {
 
-	/** p0'a yazılan mesajların zamanı (p1'den yeni). */
+	/** Timestamp of the messages written to p0 (newer than p1). */
 	private static final long TS0 = Instant.parse("2026-01-02T03:04:05Z").toEpochMilli();
 
 	private static final long TS1 = TS0 - 3_600_000;
@@ -44,7 +44,7 @@ class TopicDataToolsTest extends KafkaIntegrationTest {
 		prefix = unique("td");
 		topic = prefix + "-data";
 		empty = prefix + "-empty";
-		// sabit (eski) zaman damgaları retention'a takılmasın
+		// keep the fixed (old) timestamps from being removed by retention
 		TestData.createTopic(testAdmin(), topic, 3, Map.of("retention.ms", "-1"));
 		TestData.createTopic(testAdmin(), empty, 1, Map.of());
 		TestData.produce(topic, 0, 6, TS0);
@@ -63,7 +63,7 @@ class TopicDataToolsTest extends KafkaIntegrationTest {
 		assertThat(p0.get("latest").asLong()).isEqualTo(6);
 		assertThat(p0.get("count").asLong()).isEqualTo(6);
 		assertThat(r.at("/partitions/2/count").asLong()).isZero();
-		assertThat(error("topics_offsets", args("topic", prefix + "-yok"))).contains("Topic bulunamadı");
+		assertThat(error("topics_offsets", args("topic", prefix + "-missing"))).contains("Topic not found");
 	}
 
 	@Test

@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** core: cluster, broker ve topic araçları (varsayılan açık). */
+/** core: cluster, broker and topic tools (enabled by default). */
 @Component
 public class CoreToolset implements Toolset {
 
@@ -48,7 +48,7 @@ public class CoreToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Cluster, broker ve topic araçları";
+		return "Cluster, broker and topic tools";
 	}
 
 	@Override

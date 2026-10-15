@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import io.github.srdrcn.kafkamcp.kafka.Configs;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** core paketindeki saf yardımcıların birim testleri (Kafka gerektirmez). */
+/** Unit tests of the pure helpers in the core package (no Kafka needed). */
 class CoreHelpersTest {
 
 	@Test
@@ -27,10 +27,10 @@ class CoreHelpersTest {
 	@Test
 	void failedBrokersAreKeyedByBrokerId() {
 		Map<ConfigResource, String> errors = new LinkedHashMap<>();
-		errors.put(Configs.broker(3), "zaman aşımı");
-		errors.put(Configs.broker(1), "yetki yok");
-		assertThat(BrokerTools.byBrokerId(errors)).containsExactly(Map.entry(1, "yetki yok"),
-				Map.entry(3, "zaman aşımı"));
+		errors.put(Configs.broker(3), "No response (timeout)");
+		errors.put(Configs.broker(1), "Not authorized (ACL)");
+		assertThat(BrokerTools.byBrokerId(errors)).containsExactly(Map.entry(1, "Not authorized (ACL)"),
+				Map.entry(3, "No response (timeout)"));
 	}
 
 	@Test
@@ -43,7 +43,7 @@ class CoreHelpersTest {
 		assertThat(Params.intList(List.of(), "replicas")).isEmpty();
 		assertThat(Params.intList("[]", "replicas")).isEmpty();
 		assertThatThrownBy(() -> Params.intList("abc", "replicas")).isInstanceOf(ToolException.class)
-			.hasMessageContaining("Tamsayı bekleniyordu");
+			.hasMessageContaining("Expected an integer");
 		assertThatThrownBy(() -> Params.intList(Arrays.asList(1, null), "replicas")).isInstanceOf(ToolException.class);
 		assertThatThrownBy(() -> Params.intList(Map.of("a", 1), "replicas")).isInstanceOf(ToolException.class);
 	}

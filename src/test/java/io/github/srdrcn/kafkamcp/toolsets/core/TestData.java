@@ -17,19 +17,19 @@ import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
-/** core testleri için topic oluşturma ve veri üretme yardımcıları. */
+/** Helpers for the core tests that create topics and produce data. */
 final class TestData {
 
 	private TestData() {
 	}
 
-	/** Topic'i oluşturur ve tüm partition'ların lideri görünene kadar bekler. */
+	/** Creates the topic and waits until every partition has a visible leader. */
 	static void createTopic(Admin admin, String topic, int partitions, Map<String, String> configs) throws Exception {
 		admin.createTopics(List.of(new NewTopic(topic, partitions, (short) 1).configs(configs))).all().get();
 		awaitTopic(admin, topic, partitions);
 	}
 
-	/** Topic'in metadata'sı (verilen partition sayısıyla, liderli) görünene kadar bekler. */
+	/** Waits until the topic metadata is visible (with the given partition count and leaders). */
 	static void awaitTopic(Admin admin, String topic, int partitions) throws Exception {
 		long end = System.currentTimeMillis() + Duration.ofSeconds(20).toMillis();
 		while (true) {
@@ -45,15 +45,15 @@ final class TestData {
 				}
 			}
 			if (System.currentTimeMillis() > end) {
-				throw new IllegalStateException("topic hazır olmadı: " + topic);
+				throw new IllegalStateException("topic not ready: " + topic);
 			}
 			Thread.sleep(100);
 		}
 	}
 
 	/**
-	 * Topic henüz broker metadata'sına yansımadıysa (UnknownTopicOrPartition) en çok 20 sn tekrar dener;
-	 * CreateTopics yanıtı ile broker'ın metadata'yı uygulaması arasında kısa bir pencere vardır.
+	 * Retries for at most 20 s while the topic is not yet in the broker metadata (UnknownTopicOrPartition); there
+	 * is a short window between the CreateTopics response and the broker applying the metadata.
 	 */
 	static <T> T retryUnknownTopic(Callable<T> action) throws Exception {
 		long end = System.currentTimeMillis() + Duration.ofSeconds(20).toMillis();
@@ -70,21 +70,21 @@ final class TestData {
 		}
 	}
 
-	/** Belirli partition'a, verilen zaman damgasıyla (null = şimdi) n mesaj yazar. */
+	/** Writes n messages to the given partition with the given timestamp (null = now). */
 	static void produce(String topic, int partition, int count, Long timestamp) throws Exception {
 		try (KafkaProducer<byte[], byte[]> p = KafkaTestCluster.producer(null)) {
 			produce(p, topic, partition, count, timestamp);
 		}
 	}
 
-	/** {@link #produce(String, int, int, Long)}; ZooKeeper modlu test cluster'ına. */
+	/** {@link #produce(String, int, int, Long)} against the ZooKeeper-mode test cluster. */
 	static void produceZk(String topic, int partition, int count, Long timestamp) throws Exception {
 		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
 			produce(p, topic, partition, count, timestamp);
 		}
 	}
 
-	/** Verilen producer ile n mesaj yazar (zaman damgası null ise şimdi). */
+	/** Writes n messages with the given producer (null timestamp = now). */
 	static void produce(KafkaProducer<byte[], byte[]> p, String topic, int partition, int count, Long timestamp)
 			throws Exception {
 		for (int i = 0; i < count; i++) {

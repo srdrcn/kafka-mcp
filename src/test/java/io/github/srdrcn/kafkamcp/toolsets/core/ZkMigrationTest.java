@@ -48,10 +48,10 @@ import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
- * ZooKeeper→KRaft geçişi (zookeeper.metadata.migration.enable=true): KRaft controller'ı devraldıktan sonra
- * ZooKeeper broker'ları describeCluster'da rastgele bir canlı broker'ı controller diye döndürür; mod ZooKeeper
- * görünse de bu id aktif controller olarak raporlanmamalı. Gerçek geçiş ortamı kurulamadığı için Admin mock'lanır
- * (DescribeQuorum desteklenmiyor, finalize edilmiş feature yok = ZooKeeper broker'ı yanıtlıyor).
+ * ZooKeeper→KRaft migration (zookeeper.metadata.migration.enable=true): once the KRaft controller has taken over,
+ * ZooKeeper brokers return a random live broker as the controller in describeCluster; even though the mode looks
+ * like ZooKeeper, that id must not be reported as the active controller. A real migration setup cannot be built
+ * here, so Admin is mocked (DescribeQuorum unsupported, no finalized features = a ZooKeeper broker answers).
  */
 class ZkMigrationTest {
 
@@ -79,16 +79,16 @@ class ZkMigrationTest {
 		config.setClusters(List.of(c));
 		when(clients.config()).thenReturn(config);
 
-		// describeCluster: geçişte rastgele broker (3) controller diye döner
+		// describeCluster: during the migration a random broker (3) is returned as the controller
 		DescribeClusterResult cluster = mock(DescribeClusterResult.class);
 		when(cluster.clusterId()).thenReturn(KafkaFuture.completedFuture("mig-cluster"));
 		when(cluster.nodes()).thenReturn(KafkaFuture.completedFuture(List.of(b1, b2, b3)));
 		when(cluster.controller()).thenReturn(KafkaFuture.completedFuture(b3));
 		when(admin.describeCluster()).thenReturn(cluster);
 		when(admin.describeCluster(any(DescribeClusterOptions.class))).thenReturn(cluster);
-		// ZooKeeper broker'ı: DescribeQuorum yok, metadata.version finalize edilmemiş
+		// ZooKeeper broker: no DescribeQuorum, metadata.version not finalized
 		DescribeMetadataQuorumResult quorum = mock(DescribeMetadataQuorumResult.class);
-		when(quorum.quorumInfo()).thenReturn(failed(new UnsupportedVersionException("DESCRIBE_QUORUM yok")));
+		when(quorum.quorumInfo()).thenReturn(failed(new UnsupportedVersionException("DESCRIBE_QUORUM not supported")));
 		when(admin.describeMetadataQuorum()).thenReturn(quorum);
 		FeatureMetadata fm = mock(FeatureMetadata.class);
 		when(fm.finalizedFeatures()).thenReturn(Map.<String, FinalizedVersionRange>of());
@@ -120,7 +120,7 @@ class ZkMigrationTest {
 		assertThat(info.clusterMode()).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
 		assertThat(info.zkMigration()).isTrue();
 		assertThat(info.migration()).isTrue();
-		assertThat(info.controllerId()).as("rastgele broker controller diye raporlanmamalı").isNull();
+		assertThat(info.controllerId()).as("a random broker must not be reported as the controller").isNull();
 		assertThat(info.controllerIsBroker()).isFalse();
 		assertThat(ClusterTools.controllerNote(info)).isEqualTo(ClusterTools.MIGRATION_CONTROLLER_NOTE);
 		assertThat(info.quorumError()).isNull();
@@ -134,14 +134,14 @@ class ZkMigrationTest {
 		assertThat(plain.controllerId()).isEqualTo(3);
 		assertThat(ClusterTools.controllerNote(plain)).isNull();
 
-		// DESCRIBE_CONFIGS yetkisi yok: geçiş bilinmiyor; çoğu ZooKeeper cluster'ı geçişte olmadığından controller kalır
+		// no DESCRIBE_CONFIGS permission: migration unknown; most ZooKeeper clusters are not migrating, keep controller
 		stubBrokerConfigs(failed(new ClusterAuthorizationException("denied")));
 		ClusterMeta.Info denied = ClusterMeta.describe(call(), true);
 		assertThat(denied.zkMigration()).isNull();
 		assertThat(denied.migration()).isFalse();
 		assertThat(denied.controllerId()).isEqualTo(3);
 
-		// KRaft yanıtı (geçişte KRaft'a taşınmış broker): controller quorum'dan, config'e bakılmaz
+		// KRaft answer (a broker already moved to KRaft): controller from the quorum, the config is not checked
 		FeatureMetadata kraft = mock(FeatureMetadata.class);
 		when(kraft.finalizedFeatures())
 			.thenReturn(Map.of("metadata.version", new FinalizedVersionRange((short) 21, (short) 21)));
@@ -163,11 +163,11 @@ class ZkMigrationTest {
 		assertThat(r).doesNotContainKey("controllerId");
 		assertThat(r.get("controllerNote")).isEqualTo(ClusterTools.MIGRATION_CONTROLLER_NOTE);
 		assertThat(r.get("zkMigration")).isEqualTo(true);
-		assertThat((String) r.get("modeNote")).contains("geçiş").contains("brokers_config_drift");
+		assertThat((String) r.get("modeNote")).contains("migration").contains("brokers_config_drift");
 		@SuppressWarnings("unchecked")
 		Map<String, Object> zk = (Map<String, Object>) r.get("zookeeper");
 		assertThat(zk).containsEntry("connect", "zk:2181").containsEntry("migrationEnabled", true);
-		// IBP açıkça verilmiş (sabitlenmiş): en düşük sürüm, yazılım daha yeni olabilir
+		// IBP set explicitly (pinned): minimum version, the software may be newer
 		assertThat(r.get("minKafkaVersion")).isEqualTo("3.4");
 		assertThat(r).doesNotContainKey("kafkaVersion");
 		assertThat(r.get("versionPinned")).isEqualTo(true);
@@ -221,7 +221,7 @@ class ZkMigrationTest {
 		return rows.get(0);
 	}
 
-	/** Her broker kaynağı için aynı config sonucu (iki describeConfigs overload'u). */
+	/** The same config result for every broker resource (both describeConfigs overloads). */
 	private void stubBrokerConfigs(KafkaFuture<Config> config) {
 		Map<ConfigResource, KafkaFuture<Config>> values = new LinkedHashMap<>();
 		for (Node n : List.of(b1, b2, b3)) {

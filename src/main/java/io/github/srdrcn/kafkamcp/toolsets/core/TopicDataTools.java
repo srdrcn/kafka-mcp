@@ -29,31 +29,31 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Topic veri metrikleri: boyut, offset'ler, son yazma zamanı, yazma hızı. */
+/** Topic data metrics: size, offsets, last write time, write rate. */
 @Component
 public class TopicDataTools {
 
 	public List<ToolSpec> tools() {
-		Map<String, Object> interval = P.integer("Örnekler arası saniye (varsayılan 5, 1-10)", 1, 10);
+		Map<String, Object> interval = P.integer("Sampling interval in seconds (default 5, 1-10)", 1, 10);
 		interval.put("default", 5);
 		return List.of(
 				ToolSpec.read("topics_size",
-						"Topic boyutu: lider replikalar (mantıksal) ve tüm replikalar; topic yoksa en büyük topic'ler")
-					.param("topic", P.string("Topic adı (boşsa en büyük topic'ler listelenir)"))
-					.param("includeInternal", P.bool("Topic verilmediğinde iç topic'leri de say (varsayılan false)"))
+						"Topic size: leader replicas (logical) and all replicas; without a topic, the largest topics")
+					.param("topic", P.string("Topic name (default: list the largest topics)"))
+					.param("includeInternal", P.bool("Also count internal topics when no topic is given (default false)"))
 					.listParams()
 					.handler(this::topicsSize),
 				ToolSpec.read("topics_offsets",
-						"Partition başına earliest/latest offset ve yaklaşık mesaj sayısı (latest - earliest), toplamlar")
-					.required("topic", P.string("Topic adı"))
+						"Earliest/latest offsets and approximate message count (latest - earliest) per partition, with totals")
+					.required("topic", P.string("Topic name"))
 					.handler(this::topicsOffsets),
 				ToolSpec.read("topics_last_write_time",
-						"Topic'e son yazılma zamanı (partition bazında ve topic geneli, ISO-8601 ve yaş)")
-					.required("topic", P.string("Topic adı"))
+						"Last write time of a topic (per partition and overall, as ISO-8601 and age)")
+					.required("topic", P.string("Topic name"))
 					.handler(this::topicsLastWriteTime),
 				ToolSpec.read("topics_write_rate",
-						"Yazma hızı (mesaj/sn): iki offset örneği arasındaki fark; topic yoksa en hızlı topic'ler")
-					.param("topic", P.string("Topic adı (boşsa en hızlı topic'ler)"))
+						"Write rate (messages/s) from two offset samples; without a topic, the busiest topics")
+					.param("topic", P.string("Topic name (default: the busiest topics)"))
 					.param("intervalSeconds", interval)
 					.listParams()
 					.handler(this::topicsWriteRate));
@@ -127,7 +127,7 @@ public class TopicDataTools {
 			Offsets.Range r = ranges.get(new TopicPartition(topic, p.partition()));
 			if (r == null) {
 				rows.add(Results.map("partition", p.partition(), "error",
-						Topics.offline(p) ? "offline (lider yok)" : "offset alınamadı"));
+						Topics.offline(p) ? "Offline (no leader)" : "Could not read offsets"));
 				continue;
 			}
 			earliest += r.earliest();
@@ -148,7 +148,7 @@ public class TopicDataTools {
 		Map<TopicPartition, Offsets.Range> ranges = Offsets.ranges(call, online);
 		Futures.Each<TopicPartition, ListOffsetsResultInfo> maxEach = Offsets.awaitEach(call, online, maxTs);
 		Map<TopicPartition, ListOffsetsResultInfo> max = maxEach.values();
-		// maxTimestamp Kafka 3.0+ ister; eski broker'larda son kayıt okunur (aşağıdaki fallback)
+		// maxTimestamp requires Kafka 3.0+; on older brokers the last record is read (fallback below)
 		boolean maxTsUnsupported = maxEach.errors().values().stream().anyMatch(KafkaErrors::isUnsupported);
 		Map<TopicPartition, Offsets.Range> fallback = new LinkedHashMap<>();
 		ranges.forEach((tp, r) -> {
@@ -167,7 +167,7 @@ public class TopicDataTools {
 			Offsets.Range r = ranges.get(tp);
 			if (r == null) {
 				rows.add(Results.map("partition", p.partition(), "error",
-						Topics.offline(p) ? "offline (lider yok)" : "offset alınamadı"));
+						Topics.offline(p) ? "Offline (no leader)" : "Could not read offsets"));
 				continue;
 			}
 			if (r.count() == 0) {
@@ -181,7 +181,7 @@ public class TopicDataTools {
 			if (fallback.containsKey(tp)) {
 				LastRecords.Last l = last.get(tp);
 				if (l == null || l.timestamp() < 0) {
-					rows.add(Results.map("partition", p.partition(), "error", "son kayıt okunamadı"));
+					rows.add(Results.map("partition", p.partition(), "error", "Could not read the last record"));
 					continue;
 				}
 				ts = l.timestamp();
@@ -199,10 +199,10 @@ public class TopicDataTools {
 			rows.add(Results.map("partition", p.partition(), "lastWriteTime", Format.iso(ts), "ageSeconds",
 					Format.ageSeconds(ts), "offset", offset, "source", source));
 		}
-		// "son kayıt okundu" sadece fallback gerçekten çalıştıysa (boş partition'larda okunacak kayıt yok)
+		// "last record read" only if the fallback actually ran (empty partitions have no record to read)
 		String note = !maxTsUnsupported ? null
-				: KafkaErrors.UNSUPPORTED + ": ListOffsets maxTimestamp Kafka 3.0+ broker gerektirir"
-						+ (fallback.isEmpty() ? "" : "; son kayıt okundu");
+				: KafkaErrors.UNSUPPORTED + ": ListOffsets maxTimestamp requires Kafka 3.0+ brokers"
+						+ (fallback.isEmpty() ? "" : "; last record read instead");
 		return Results.map("topic", topic, "lastWriteTime", Format.iso(topicMax), "ageSeconds",
 				Format.ageSeconds(topicMax), "partition", topicMaxPartition, "emptyPartitions", empty, "method",
 				fallback.isEmpty() ? "maxTimestamp" : "maxTimestamp+lastRecord", "note", note, "partitions", rows);
@@ -230,7 +230,7 @@ public class TopicDataTools {
 		long available = call.remainingMillis() - 1_300 - Math.max(1_000, 2 * sampleMs);
 		long sleepMs = Math.min(intervalMs, available);
 		if (sleepMs < 500) {
-			throw new ToolException("İki örnek için yeterli süre kalmadı; daha dar filtre ya da tek topic deneyin");
+			throw new ToolException("Not enough time left for two samples; try a narrower filter or a single topic");
 		}
 		call.sleep(sleepMs);
 		Map<TopicPartition, Long> second = Offsets.latest(call, tps);
