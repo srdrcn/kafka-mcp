@@ -14,6 +14,7 @@ import org.apache.kafka.clients.admin.PartitionReassignment;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.springframework.stereotype.Component;
 
 import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
@@ -152,9 +153,15 @@ public class TopicWriteTools {
 		call.await(r.all());
 		Map<String, Object> out = Results.map("topic", topic);
 		try {
-			out.put("topicId", String.valueOf(call.await(r.topicId(topic))));
-			out.put("partitions", call.await(r.numPartitions(topic)));
-			out.put("replicationFactor", call.await(r.replicationFactor(topic)));
+			// eski broker'lar (CreateTopics v5/v7 öncesi) topic id ve partition/RF döndürmez: sıfır UUID / -1
+			Uuid id = call.await(r.topicId(topic));
+			if (id != null && !Uuid.ZERO_UUID.equals(id)) {
+				out.put("topicId", id.toString());
+			}
+			int created = call.await(r.numPartitions(topic));
+			int createdRf = call.await(r.replicationFactor(topic));
+			out.putAll(Results.map("partitions", created > 0 ? Integer.valueOf(created) : partitions,
+					"replicationFactor", createdRf > 0 ? Integer.valueOf(createdRf) : rf));
 		}
 		catch (ToolException e) {
 			// topic oluştu; ayrıntılar okunamadı (ör. DESCRIBE_CONFIGS yetkisi yok ya da eski broker)

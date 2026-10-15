@@ -77,7 +77,7 @@ class DegradedClusterTest {
 		assertThat(r).doesNotContainKey("controllerId");
 		assertThat(r.get("controllerNote")).asString().contains("belirlenemedi");
 		assertThat(r.get("mode")).isEqualTo(ClusterMeta.KRAFT);
-		assertThat(r.get("kafkaVersion")).isNotNull();
+		assertThat(r.get("minKafkaVersion")).isNotNull();
 		assertThat(r.get("brokerCount")).isEqualTo(1);
 		assertThat(r.get("reassignmentsError")).isNotNull();
 

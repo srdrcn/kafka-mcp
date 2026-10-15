@@ -16,6 +16,7 @@ import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
@@ -179,6 +180,25 @@ public final class Topics {
 		catch (ToolException e) {
 			return new Reassignments(Map.of(), e.getMessage());
 		}
+	}
+
+	/**
+	 * Eligible leader replicas (KIP-966) id'leri; sadece KRaft'ta (ELR açıkken) dolu olabilir. ZooKeeper
+	 * broker'ları bu alanı döndürmez (client null verir): null döner, NPE yok.
+	 */
+	public static List<Integer> elr(TopicPartitionInfo p) {
+		return p.elr() == null ? null : ids(p.elr());
+	}
+
+	/** Son bilinen ELR id'leri (KRaft); ZooKeeper'da null. */
+	public static List<Integer> lastKnownElr(TopicPartitionInfo p) {
+		return p.lastKnownElr() == null ? null : ids(p.lastKnownElr());
+	}
+
+	/** Topic id'si; bilinmiyorsa (eski broker'lar sıfır UUID döndürür) null. */
+	public static String topicId(TopicDescription d) {
+		Uuid id = d.topicId();
+		return id == null || Uuid.ZERO_UUID.equals(id) ? null : id.toString();
 	}
 
 	/** Node listesini id listesine çevirir. */
