@@ -46,6 +46,7 @@ public class SchemaTools {
 					.read("serdes_list",
 							"List supported message formats (string/json/hex/long/avro) and avro support per cluster")
 					.clusterOptional()
+					.listParams()
 					.handler(this::serdesList));
 	}
 
@@ -103,9 +104,14 @@ public class SchemaTools {
 	Object serdesList(ToolCall call) {
 		List<Map<String, Object>> formats = new ArrayList<>();
 		for (MessageFormat f : MessageFormat.values()) {
-			formats.add(Results.map("name", f.id(), "description", f.description(), "requiresSchemaRegistry",
-					f.needsSchemaRegistry() ? true : null));
+			if (call.matches(f.id())) {
+				formats.add(Results.map("name", f.id(), "description", f.description(), "requiresSchemaRegistry",
+						f.needsSchemaRegistry() ? true : null));
+			}
 		}
+		int limit = call.limit();
+		boolean truncated = formats.size() > limit;
+		formats = formats.subList(0, Math.min(limit, formats.size()));
 		String only = call.clusterOrNull();
 		List<Map<String, Object>> clusters = new ArrayList<>();
 		for (ClusterConfig c : clients.config().getClusters()) {
@@ -113,7 +119,7 @@ public class SchemaTools {
 				clusters.add(Results.map("name", c.getName(), "avro", c.hasSchemaRegistry()));
 			}
 		}
-		return Results.map("formats", formats, "clusters", clusters, "usage",
+		return Results.map("formats", formats, "truncated", truncated ? true : null, "clusters", clusters, "usage",
 				"messages_consume/messages_get: format (value) and keyFormat (key); messages_sample_schema: format json|avro");
 	}
 

@@ -668,7 +668,7 @@ public class DiagnoseConnectivityTools {
 		String detail = Net.ERROR.equals(type) ? err : Net.explain(type, url, REST_TIMEOUT_MS, null);
 		dx.warning(code, what + " unreachable: " + detail, evidence("error", err),
 				err.contains("401") || err.contains("403")
-						? "Credentials/authorization required: check the user info in the URL or the proxy settings"
+						? "The endpoint requires authentication, which kafka-mcp does not send: allow this client without credentials (or check the proxy settings)"
 						: "Check the URL, that the service is up and that this pod can reach it (NetworkPolicy/egress)");
 	}
 

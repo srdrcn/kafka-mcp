@@ -14,6 +14,8 @@ spec:
       labels:
         app: kafka-mcp
     spec:
+      # the server never talks to the Kubernetes API
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         seccompProfile:

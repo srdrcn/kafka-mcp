@@ -1,5 +1,7 @@
 # Multi-stage: build with Maven, run as non-root on the UBI9 OpenJDK 21 runtime.
 # OpenShift restricted-v2 SCC: random UID + GID 0 (chgrp 0 / g=u), read-only root fs, /tmp emptyDir.
+# For reproducible builds pin both base images to a version tag or digest, e.g.
+#   make image BUILD_ARGS="--build-arg RUNTIME_IMAGE=registry.access.redhat.com/ubi9/openjdk-21-runtime@sha256:<digest>"
 ARG BUILDER_IMAGE=registry.access.redhat.com/ubi9/openjdk-21:latest
 ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi9/openjdk-21-runtime:latest
 
@@ -24,5 +26,6 @@ ENV JAVA_TOOL_OPTIONS="-Djava.security.krb5.conf=/etc/kafka-mcp/krb5/krb5.conf -
 WORKDIR /deployments
 USER 185
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "/deployments/kafka-mcp.jar"]
+# Exit on OutOfMemoryError so that OpenShift restarts the pod instead of keeping a half-broken JVM
+ENTRYPOINT ["java", "-XX:+ExitOnOutOfMemoryError", "-jar", "/deployments/kafka-mcp.jar"]
 CMD ["--config", "/etc/kafka-mcp/config/kafka-mcp.yaml"]

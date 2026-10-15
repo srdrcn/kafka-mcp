@@ -142,7 +142,7 @@ public class LagTools {
 	Object withLag(ToolCall call) {
 		long threshold = Math.max(0, call.longValue("threshold", DEFAULT_THRESHOLD));
 		Pattern topicRe = call.regex("topic");
-		Predicate<String> topicFilter = topicRe == null ? null : t -> topicRe.matcher(t).find();
+		Predicate<String> topicFilter = topicRe == null ? null : t -> call.find(topicRe, t);
 		GroupList list = ConsumerGroups.list(call, ConsumerGroups.LIST_RESERVE_MS, call::matches);
 		List<GroupSummary> groups = list.groups();
 		GroupLag.Snapshot snapshot = GroupLag.lagSnapshot(call, groups.stream().map(GroupSummary::groupId).toList(),

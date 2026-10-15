@@ -264,7 +264,20 @@ public final class ToolCall {
 	/** True if there is no filter; otherwise a partial match (find). */
 	public boolean matches(String value) {
 		Pattern p = filter();
-		return p == null || (value != null && p.matcher(value).find());
+		return p == null || (value != null && find(p, value));
+	}
+
+	/**
+	 * Partial match of a user-supplied regex that stops (with a {@link ToolException}) when the call is cancelled or
+	 * its deadline passes.
+	 */
+	public boolean find(Pattern pattern, String value) {
+		return Regexes.find(pattern, value, deadline);
+	}
+
+	/** Full match of a user-supplied regex; stops like {@link #find(Pattern, String)}. */
+	public boolean fullMatch(Pattern pattern, String value) {
+		return Regexes.matches(pattern, value, deadline);
 	}
 
 	public int limit() {
@@ -317,6 +330,14 @@ public final class ToolCall {
 	/** Remaining time for Kafka waits (minus the margin), at least 1 ms. */
 	public long waitMillis() {
 		return Math.max(1, remainingMillis() - MARGIN_MS);
+	}
+
+	/**
+	 * The instant at which {@link #nearDeadline(long)} becomes true for the same reserve: work that is stopped then
+	 * still leaves time to build a (partial) result.
+	 */
+	public Instant softDeadline(long reserveMillis) {
+		return deadline.minusMillis(MARGIN_MS + reserveMillis);
 	}
 
 	/** Is the remaining time used up (margin included)? For leaving loops early. */

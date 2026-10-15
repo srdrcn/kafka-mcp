@@ -52,7 +52,10 @@ public final class ConnectJson {
 		return className.substring(className.lastIndexOf('.') + 1);
 	}
 
-	/** First {@value #TRACE_LINES} non-blank lines of the stack trace (each at most 300 characters); null if none. */
+	/**
+	 * First {@value #TRACE_LINES} non-blank lines of the stack trace (each at most 300 characters, credentials removed
+	 * with {@link ConnectSecrets#scrub(String)}); null if none.
+	 */
 	public static String traceSummary(String trace) {
 		if (trace == null || trace.isBlank()) {
 			return null;
@@ -63,6 +66,8 @@ public final class ConnectJson {
 			if (l.isEmpty()) {
 				continue;
 			}
+			// credentials are removed before the cut, so a cut never leaves part of one
+			l = ConnectSecrets.scrub(l.length() > 4 * TRACE_LINE_MAX ? l.substring(0, 4 * TRACE_LINE_MAX) : l);
 			lines.add(l.length() > TRACE_LINE_MAX ? l.substring(0, TRACE_LINE_MAX) + "…" : l);
 			if (lines.size() == TRACE_LINES) {
 				break;

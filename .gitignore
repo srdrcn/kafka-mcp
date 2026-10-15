@@ -3,5 +3,11 @@ target/
 *.iml
 .vscode/
 .DS_Store
+# real config files (apiKey, principal, KDCs) and keytabs never go into the repo; the *.example files do
 *.keytab
-kafka-mcp.local.yaml
+*.local.yaml
+/kafka-mcp.yaml
+/krb5.conf
+/conf.d/
+deploy/openshift/kafka-mcp.yaml
+deploy/openshift/krb5.conf

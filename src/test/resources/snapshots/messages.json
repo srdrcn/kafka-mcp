@@ -34,11 +34,11 @@
       },
       "keyRegex" : {
         "type" : "string",
-        "description" : "Key regex filter (partial match on the decoded text)"
+        "description" : "Key regex filter (partial match on the first 262144 characters of the decoded text)"
       },
       "valueRegex" : {
         "type" : "string",
-        "description" : "Value regex filter (partial match on the decoded text)"
+        "description" : "Value regex filter (partial match on the first 262144 characters of the decoded text)"
       },
       "headerKey" : {
         "type" : "string",
@@ -329,6 +329,17 @@
         "type" : "string",
         "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "Maximum number of items to return (default 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
       }
     },
     "required" : [ ]

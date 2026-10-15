@@ -1,6 +1,7 @@
 package io.github.srdrcn.kafkamcp.toolsets.messages;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -20,6 +21,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
+import io.github.srdrcn.kafkamcp.mcp.Regexes;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Next;
 import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Window;
@@ -95,6 +97,60 @@ class RecordScannerTest {
 				rec -> Next.CONTINUE);
 		assertThat(empty.completed()).isTrue();
 		assertThat(empty.positions()).containsEntry(TP, 7L);
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void slowVisitorStopsAtTheDeadlineWithinABatch() {
+		KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+		when(consumer.poll(any(Duration.class))).thenReturn(batch(0, 10));
+		// reserve 2000 + margin 300: about two 250 ms records fit before the scan has to stop
+		RecordScanner.Result r = RecordScanner.scan(call(2_800), consumer, List.of(new Window(TP, 0, 10)), rec -> {
+			try {
+				Thread.sleep(250);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			return Next.CONTINUE;
+		});
+		assertThat(r.deadlineReached()).isTrue();
+		assertThat(r.completed()).isFalse();
+		assertThat(r.scanned()).isBetween(1L, 6L);
+		assertThat(r.positions()).containsEntry(TP, r.scanned());
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void regexTimeoutEndsTheScanAsDeadlineReached() {
+		KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+		when(consumer.poll(any(Duration.class))).thenReturn(batch(0, 5));
+		RecordScanner.Result r = RecordScanner.scan(call(10_000), consumer, List.of(new Window(TP, 0, 5)), rec -> {
+			if (rec.offset() == 2) {
+				throw new Regexes.RegexTimeoutException("slow regex");
+			}
+			return Next.CONTINUE;
+		});
+		assertThat(r.deadlineReached()).isTrue();
+		assertThat(r.scanned()).isEqualTo(2);
+		// the record whose match was stopped counts as not read
+		assertThat(r.positions()).containsEntry(TP, 2L);
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void cancelledRegexIsRethrown() {
+		KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+		when(consumer.poll(any(Duration.class))).thenReturn(batch(0, 5));
+		try {
+			assertThatThrownBy(() -> RecordScanner.scan(call(10_000), consumer, List.of(new Window(TP, 0, 5)), rec -> {
+				Thread.currentThread().interrupt();
+				throw new Regexes.RegexTimeoutException("cancelled");
+			})).isInstanceOf(Regexes.RegexTimeoutException.class);
+		}
+		finally {
+			Thread.interrupted();
+		}
 	}
 
 }

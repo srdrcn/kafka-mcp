@@ -18,19 +18,29 @@ import io.github.srdrcn.kafkamcp.KafkaMcpApplication;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** API key: correct → 200, wrong/missing → 401, empty apiKey → no auth. Health is always open. */
+/**
+ * API key: correct → 200, wrong/missing → 401 (also on /mcp/ and /mcp;params), empty apiKey → no auth. Health is
+ * always open and the only exposed actuator endpoint. Requests with an Origin header (browsers) get 403.
+ */
 class ApiKeyHttpTest {
 
 	static final String INIT = """
 			{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}""";
 
 	static HttpResponse<String> post(int port, String key) throws Exception {
-		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mcp"))
+		return post(port, "/mcp", key, null);
+	}
+
+	static HttpResponse<String> post(int port, String path, String key, String origin) throws Exception {
+		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
 			.header("Content-Type", "application/json")
 			.header("Accept", "application/json, text/event-stream")
 			.POST(HttpRequest.BodyPublishers.ofString(INIT));
 		if (key != null) {
 			b.header("X-Authorization", key);
+		}
+		if (origin != null) {
+			b.header("Origin", origin);
 		}
 		return HttpClient.newHttpClient().send(b.build(), HttpResponse.BodyHandlers.ofString());
 	}
@@ -89,6 +99,27 @@ class ApiKeyHttpTest {
 			assertThat(get(port, "/actuator/health/readiness").statusCode()).isEqualTo(200);
 		}
 
+		@Test
+		void pathVariantsNeedTheKeyToo() throws Exception {
+			for (String path : new String[] { "/mcp/", "/mcp;x=y", "/mcp/anything" }) {
+				assertThat(post(port, path, null, null).statusCode()).as(path).isEqualTo(401);
+				assertThat(post(port, path, "wrong", null).statusCode()).as(path).isEqualTo(401);
+			}
+		}
+
+		@Test
+		void onlyHealthIsExposed() throws Exception {
+			for (String path : new String[] { "/actuator/env", "/actuator/configprops", "/actuator/heapdump",
+					"/actuator/beans", "/actuator/loggers", "/actuator/threaddump" }) {
+				assertThat(get(port, path).statusCode()).as(path).isEqualTo(404);
+			}
+		}
+
+		@Test
+		void browserOriginIsRejectedEvenWithTheKey() throws Exception {
+			assertThat(post(port, "/mcp", "s3cr3t-key", "https://evil.example.com").statusCode()).isEqualTo(403);
+		}
+
 	}
 
 	@Nested
@@ -115,6 +146,14 @@ class ApiKeyHttpTest {
 		void noAuthWhenApiKeyEmpty() throws Exception {
 			assertThat(post(port, null).statusCode()).isEqualTo(200);
 			assertThat(post(port, "anything").statusCode()).isEqualTo(200);
+		}
+
+		@Test
+		void browserOriginIsRejected() throws Exception {
+			// a web page (CSRF or DNS rebinding) cannot drive the tools of a server without an API key
+			assertThat(post(port, "/mcp", null, "http://evil.example.com").statusCode()).isEqualTo(403);
+			assertThat(post(port, "/mcp", null, "http://localhost:" + port).statusCode()).isEqualTo(403);
+			assertThat(post(port, "/mcp", null, null).statusCode()).isEqualTo(200);
 		}
 
 	}

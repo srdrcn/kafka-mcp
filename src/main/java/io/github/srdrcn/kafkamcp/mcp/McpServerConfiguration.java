@@ -2,6 +2,8 @@ package io.github.srdrcn.kafkamcp.mcp;
 
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.info.BuildProperties;
@@ -19,6 +21,7 @@ import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpStatelessServerFeatures;
 import io.modelcontextprotocol.server.McpStatelessSyncServer;
+import io.modelcontextprotocol.server.transport.DefaultServerTransportSecurityValidator;
 import io.modelcontextprotocol.server.transport.HttpServletStatelessServerTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 
@@ -28,6 +31,8 @@ import io.modelcontextprotocol.spec.McpSchema;
  */
 @Configuration(proxyBeanMethods = false)
 public class McpServerConfiguration {
+
+	private static final Logger log = LoggerFactory.getLogger(McpServerConfiguration.class);
 
 	public static final String ENDPOINT = "/mcp";
 
@@ -53,7 +58,13 @@ public class McpServerConfiguration {
 	@Bean
 	@ConditionalOnProperty(name = "kafka-mcp.transport", havingValue = "http")
 	HttpServletStatelessServerTransport mcpTransport(McpJsonMapper jsonMapper) {
-		return HttpServletStatelessServerTransport.builder().jsonMapper(jsonMapper).messageEndpoint(ENDPOINT).build();
+		// No allowed origins: a request that carries an Origin header (i.e. comes from a web page) is rejected with
+		// 403, which stops browser CSRF and DNS rebinding against /mcp. MCP clients such as Claude Code send no Origin.
+		return HttpServletStatelessServerTransport.builder()
+			.jsonMapper(jsonMapper)
+			.messageEndpoint(ENDPOINT)
+			.securityValidator(DefaultServerTransportSecurityValidator.builder().build())
+			.build();
 	}
 
 	@Bean(destroyMethod = "close")
@@ -89,6 +100,13 @@ public class McpServerConfiguration {
 	@Bean
 	@ConditionalOnProperty(name = "kafka-mcp.transport", havingValue = "http")
 	FilterRegistrationBean<ApiKeyFilter> apiKeyFilter(KafkaMcpConfig config) {
+		if (config.isApiKeyEnabled()) {
+			log.info("API key authentication enabled for {} (header {})", ENDPOINT, ApiKeyFilter.HEADER);
+		}
+		else {
+			log.warn("API key authentication DISABLED (apiKey is empty): anyone who can reach {} can call the tools",
+					ENDPOINT);
+		}
 		FilterRegistrationBean<ApiKeyFilter> reg = new FilterRegistrationBean<>(new ApiKeyFilter(config.getApiKey()));
 		reg.addUrlPatterns(ENDPOINT, ENDPOINT + "/*");
 		reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
