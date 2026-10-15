@@ -31,7 +31,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryTestCluster;
 
-/** format=avro: Confluent wire format kayıtları Schema Registry'deki yazar şemasıyla çözülür. */
+/** format=avro: Confluent wire format records are decoded with the writer schema from Schema Registry. */
 class MessagesAvroTest extends SchemaRegistryIntegrationTest {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -61,15 +61,15 @@ class MessagesAvroTest extends SchemaRegistryIntegrationTest {
 		for (int i = 0; i < 4; i++) {
 			GenericRecord r = new GenericData.Record(schema);
 			r.put("id", (long) i);
-			r.put("customer", "müşteri-" + i);
+			r.put("customer", "customer-" + i);
 			r.put("amount", ByteBuffer.wrap(new BigDecimal("12.3" + i).unscaledValue().toByteArray()));
-			r.put("note", i % 2 == 0 ? null : "not-" + i);
+			r.put("note", i % 2 == 0 ? null : "note-" + i);
 			r.put("createdAt", 1_700_000_000_000L + i);
 			r.put("status", new GenericData.EnumSymbol(schema.getField("status").schema(), i < 2 ? "NEW" : "PAID"));
 			r.put("tags", List.of("t" + i));
 			records.add(new ProducerRecord<>(topic, 0, null, TestData.utf8("order-" + i), wire(schemaId, schema, r)));
 		}
-		records.add(new ProducerRecord<>(topic, 0, null, null, TestData.utf8("düz metin")));
+		records.add(new ProducerRecord<>(topic, 0, null, null, TestData.utf8("plain text")));
 		records.add(new ProducerRecord<>(topic, 0, null, null, new byte[] { 0, 0, 0x0f, 0x42, 0x3f, 2 }));
 		TestData.send(records);
 	}
@@ -105,21 +105,21 @@ class MessagesAvroTest extends SchemaRegistryIntegrationTest {
 		assertThat(first.get("valueSchemaId").asInt()).isEqualTo(schemaId);
 		JsonNode v = first.get("value");
 		assertThat(v.get("id").asLong()).isZero();
-		assertThat(v.get("customer").asText()).isEqualTo("müşteri-0");
+		assertThat(v.get("customer").asText()).isEqualTo("customer-0");
 		assertThat(v.get("amount").decimalValue()).isEqualByComparingTo("12.30");
 		assertThat(v.has("note")).isTrue();
 		assertThat(v.get("note").isNull()).isTrue();
 		assertThat(v.get("createdAt").asText()).isEqualTo(Instant.ofEpochMilli(1_700_000_000_000L).toString());
 		assertThat(v.get("status").asText()).isEqualTo("NEW");
 		assertThat(v.get("tags").get(0).asText()).isEqualTo("t0");
-		assertThat(r.get("records").get(1).get("value").get("note").asText()).isEqualTo("not-1");
+		assertThat(r.get("records").get(1).get("value").get("note").asText()).isEqualTo("note-1");
 
 		JsonNode plain = r.get("records").get(4);
 		assertThat(plain.get("valueError").asText()).contains("wire format");
-		assertThat(plain.get("value").asText()).isEqualTo(RecordDecoder.hex(TestData.utf8("düz metin")));
+		assertThat(plain.get("value").asText()).isEqualTo(RecordDecoder.hex(TestData.utf8("plain text")));
 		JsonNode unknown = r.get("records").get(5);
 		assertThat(unknown.get("valueSchemaId").asInt()).isEqualTo(999_999);
-		assertThat(unknown.get("valueError").asText()).contains("999999").contains("alınamadı");
+		assertThat(unknown.get("valueError").asText()).contains("999999").contains("Could not fetch");
 
 		JsonNode filtered = ok("messages_consume", args("topic", topic, "format", "avro", "valueRegex", "\"PAID\""));
 		assertThat(filtered.get("matched").asInt()).isEqualTo(2);

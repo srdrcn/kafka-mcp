@@ -17,7 +17,7 @@ import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 /** messages_offset_for_timestamp, messages_count, messages_partition_for_key. */
 class MessagesOffsetsTest extends KafkaIntegrationTest {
 
-	/** 2 partition; p0: 10 kayıt (BASE+i sn), p1: 4 kayıt (BASE+100+i sn). */
+	/** 2 partitions; p0: 10 records (BASE+i s), p1: 4 records (BASE+100+i s). */
 	private static String topic;
 
 	@BeforeAll
@@ -51,8 +51,8 @@ class MessagesOffsetsTest extends KafkaIntegrationTest {
 		JsonNode row = late.get("partitions").get(0);
 		assertThat(row.get("offset").isNull()).isTrue();
 		assertThat(row.get("latestOffset").asLong()).isEqualTo(10);
-		assertThat(error("messages_offset_for_timestamp", args("topic", topic, "timestamp", "geçen hafta")))
-			.contains("Geçersiz zaman");
+		assertThat(error("messages_offset_for_timestamp", args("topic", topic, "timestamp", "last week")))
+			.contains("Invalid time");
 	}
 
 	@Test
@@ -70,20 +70,20 @@ class MessagesOffsetsTest extends KafkaIntegrationTest {
 
 		JsonNode times = ok("messages_count", args("topic", topic, "fromTimestamp", Timestamps.iso(TestData.BASE_TS + 3_000L),
 				"toTimestamp", Timestamps.iso(TestData.BASE_TS + 102_000L)));
-		// p0: offset 3..9 (7 kayıt), p1: 100 ve 101 sn (2 kayıt)
+		// p0: offsets 3..9 (7 records), p1: 100 and 101 s (2 records)
 		assertThat(times.get("partitions").get(0).get("count").asLong()).isEqualTo(7);
 		assertThat(times.get("partitions").get(1).get("count").asLong()).isEqualTo(2);
 		assertThat(times.get("total").asLong()).isEqualTo(9);
 
 		assertThat(error("messages_count", args("topic", topic, "fromOffset", 1, "toTimestamp", "2024-01-01")))
-			.contains("birlikte kullanılamaz");
+			.contains("cannot be used together");
 	}
 
 	@Test
 	void partitionForKeyMatchesDefaultPartitioner() throws Exception {
 		String t = unique("msg-keys");
 		TestData.createTopic(testAdmin(), t, 7);
-		List<String> keys = List.of("order-1", "order-2", "müşteri-42", "x", "a-much-longer-key-value-123456");
+		List<String> keys = List.of("order-1", "order-2", "price-€42", "x", "a-much-longer-key-value-123456");
 		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
 		for (String k : keys) {
 			records.add(new ProducerRecord<>(t, TestData.utf8(k), TestData.utf8("v")));
@@ -110,7 +110,7 @@ class MessagesOffsetsTest extends KafkaIntegrationTest {
 	void partitionForKeyHashesKeyBytesExactlyWithoutTrimming() throws Exception {
 		String t = unique("msg-keys-ws");
 		TestData.createTopic(testAdmin(), t, 11);
-		// sabit genişlikli/boşluklu key'ler ve boş string (null olmayan geçerli key) olduğu gibi hash'lenir
+		// fixed-width/padded keys and the empty string (a valid non-null key) are hashed as is
 		List<String> keys = List.of("ACC123   ", "ACC123", " order-1", "order-1", "", "   ");
 		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
 		for (String k : keys) {
@@ -123,10 +123,10 @@ class MessagesOffsetsTest extends KafkaIntegrationTest {
 			assertThat(r.get("key").asText()).isEqualTo(keys.get(i));
 			assertThat(r.get("keyBytes").asInt()).isEqualTo(keys.get(i).length());
 		}
-		// trim edilseydi aynı partition'a düşerlerdi: en az bir çift gerçekten farklı partition'da olmalı
+		// trimmed, they would map to the same partition: at least one pair must really be on different partitions
 		assertThat(sent.get(0).partition() != sent.get(1).partition() || sent.get(2).partition() != sent.get(3).partition()
 				|| sent.get(4).partition() != sent.get(5).partition())
-			.as("test verisi trim farkını göstermeli")
+			.as("the test data must show the trim difference")
 			.isTrue();
 		assertThat(error("messages_partition_for_key", args("topic", t))).contains("key");
 		assertThat(error("messages_partition_for_key", args("topic", t, "key", "  ", "keyFormat", "long")))

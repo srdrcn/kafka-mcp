@@ -24,7 +24,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Next;
 import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Window;
 
-/** RecordScanner'ın pencere sınırları, durdurma ve deadline davranışı (mock consumer, zamanlamadan bağımsız). */
+/** RecordScanner window bounds, stopping and deadline behaviour (mock consumer, independent of timing). */
 class RecordScannerTest {
 
 	private static final TopicPartition TP = new TopicPartition("t", 0);

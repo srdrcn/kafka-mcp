@@ -22,12 +22,13 @@ import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
 import org.junit.jupiter.api.Test;
 
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Mod farkları (ağa çıkmadan): ZooKeeper broker'larında ELR yok (null), KRaft'ta liste (boş olabilir);
- * eski broker'ın desteklemediği zaman araması partition başına not olur, diğer hatalar aracı düşürür.
+ * Mode differences (without network access): ZooKeeper brokers have no ELR (null), KRaft has a list (possibly
+ * empty); a time lookup the old broker does not support becomes a per-partition note, other errors fail the tool.
  */
 class PartitionOffsetsModeTest {
 
@@ -43,7 +44,7 @@ class PartitionOffsetsModeTest {
 
 	@Test
 	void zookeeperOfflinePartitionHasNullElrAndNoKraftHint() {
-		// ZooKeeper (Metadata API): 4 argümanlı TopicPartitionInfo, elr/lastKnownElr null
+		// ZooKeeper (Metadata API): 4-argument TopicPartitionInfo, elr/lastKnownElr null
 		TopicPartitionInfo offline = new TopicPartitionInfo(0, null, List.of(N1), List.of());
 		assertThat(offline.elr()).isNull();
 		assertThat(offline.lastKnownElr()).isNull();
@@ -65,8 +66,8 @@ class PartitionOffsetsModeTest {
 			.hasMessageContaining("Partition 0 offline")
 			.hasMessageContaining("KRaft")
 			.hasMessageContaining("ELR: [2]")
-			.hasMessageContaining("son bilinen ELR: [3]");
-		// ELR açık ama boş: ek bilgi yok
+			.hasMessageContaining("last known ELR: [3]");
+		// ELR enabled but empty: no extra details
 		TopicDescription empty = topic(new TopicPartitionInfo(0, Node.noNode(), List.of(N1), List.of(), List.of(),
 				List.of()));
 		assertThatThrownBy(() -> PartitionOffsets.select(empty, 0)).hasMessageNotContaining("ELR");
@@ -95,16 +96,16 @@ class PartitionOffsetsModeTest {
 				new ListOffsetsResult(futures));
 		assertThat(l.offsets()).containsOnlyKeys(p0);
 		assertThat(l.offsets().get(p0).offset()).isEqualTo(7);
-		assertThat(l.unsupported().get(p1)).contains("desteklemiyor").contains("mesaj formatı");
-		assertThat(l.unsupported().get(p2)).isEqualTo("broker bu işlemi desteklemiyor (sürüm)");
+		assertThat(l.unsupported().get(p1)).contains("does not support").contains("message format");
+		assertThat(l.unsupported().get(p2)).isEqualTo(KafkaErrors.UNSUPPORTED);
 		assertThat(l.unsupportedByReason().values()).containsExactly(List.of(1), List.of(2));
 
-		// yetki gibi diğer hatalar eskisi gibi tüm aracı Türkçe hatayla düşürür
+		// other errors such as authorization still fail the whole tool with an explained error
 		Map<TopicPartition, KafkaFuture<ListOffsetsResultInfo>> denied = Map.of(p0,
 				failed(new TopicAuthorizationException("denied")));
 		assertThatThrownBy(() -> PartitionOffsets.awaitEach(call(), List.of(p0), new ListOffsetsResult(denied)))
 			.isInstanceOf(ToolException.class)
-			.hasMessageContaining("Topic yetkisi yok");
+			.hasMessageContaining("Not authorized for the topic");
 	}
 
 }

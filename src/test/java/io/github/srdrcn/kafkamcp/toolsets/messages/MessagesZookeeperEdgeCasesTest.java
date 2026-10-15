@@ -37,15 +37,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * ZooKeeper modlu cluster'da ({@code zk}) gerçekçi veri durumları: transaction marker'ları, deleteRecords ile
- * ileri alınmış log başlangıcı, LogAppendTime + zstd topic'i; ve zamana göre aramayı desteklemeyen eski
- * ZooKeeper broker'ı (v0 mesaj formatı / eski protokol) simülasyonu: araç düşmez, partition başına not verir.
+ * Realistic data situations on the ZooKeeper-mode cluster ({@code zk}): transaction markers, a log start moved
+ * forward with deleteRecords, a LogAppendTime + zstd topic; and a simulated old ZooKeeper broker that does not support
+ * time lookups (v0 message format / old protocol): the tool does not fail, it gives a note per partition.
  */
 class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 
@@ -72,7 +73,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 	void transactionMarkersOnZookeeperCluster() throws Exception {
 		String topic = unique("mx-tx");
 		createZkTopic(new NewTopic(topic, 1, (short) 1));
-		// offset'ler: c0..c4 = 0..4, commit marker 5, a0..a2 = 6..8 (abort), abort marker 9, c5..c6 = 10..11,
+		// offsets: c0..c4 = 0..4, commit marker 5, a0..a2 = 6..8 (aborted), abort marker 9, c5..c6 = 10..11,
 		// commit marker 12; latest = 13
 		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster
 			.producer(Map.of(ProducerConfig.TRANSACTIONAL_ID_CONFIG, unique("mx-txid")))) {
@@ -108,12 +109,12 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		assertThat(error("messages_get", zkArgs("topic", topic, "partition", 0, "offset", 12)))
 			.contains("transaction marker");
 
-		// okuma read_uncommitted: abort edilen kayıtlar da görünür, marker'lar görünmez
+		// reads are read_uncommitted: aborted records are visible too, markers are not
 		JsonNode all = ok("messages_consume", zkArgs("topic", topic, "from", "earliest", "maxRecords", 50));
 		assertThat(values(all)).containsExactly("c0", "c1", "c2", "c3", "c4", "a0", "a1", "a2", "c5", "c6");
 		assertThat(all.get("reachedEnd").asBoolean()).isTrue();
 
-		// latest: marker'lar offset kapladığı için pencere geriye genişletilir, yine tam maxRecords kayıt döner
+		// latest: markers take up offsets, so the window is extended backwards and exactly maxRecords records come back
 		JsonNode last = ok("messages_consume", zkArgs("topic", topic, "maxRecords", 3));
 		assertThat(values(last)).containsExactly("a2", "c5", "c6");
 		assertThat(last.has("approximate")).isFalse();
@@ -141,7 +142,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		assertThat(count.get("total").asLong()).isEqualTo(6);
 		assertThat(count.get("partitions").get(0).get("start").asLong()).isEqualTo(4);
 		assertThat(error("messages_get", zkArgs("topic", topic, "partition", 0, "offset", 2)))
-			.contains("aralık dışında")
+			.contains("out of range")
 			.contains("earliest=4");
 		JsonNode got = ok("messages_get", zkArgs("topic", topic, "partition", 0, "offset", 4));
 		assertThat(got.get("value").asText()).isEqualTo("d4");
@@ -149,7 +150,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		JsonNode fromZero = ok("messages_consume",
 				zkArgs("topic", topic, "partition", 0, "offset", 0, "maxRecords", 3));
 		assertThat(values(fromZero)).containsExactly("d4", "d5", "d6");
-		assertThat(fromZero.get("notes").get(0).asText()).contains("earliest'ten küçük");
+		assertThat(fromZero.get("notes").get(0).asText()).contains("below earliest");
 		assertThat(fromZero.get("nextOffset").asLong()).isEqualTo(7);
 
 		JsonNode at = ok("messages_offset_for_timestamp",
@@ -166,7 +167,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		Instant before = Instant.now().minus(10, ChronoUnit.MINUTES);
 		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
 		for (int i = 0; i < 3; i++) {
-			// producer'ın CreateTime'ı (2 saat önce) broker'da LogAppendTime ile ezilir
+			// the producer's CreateTime (2 hours ago) is overwritten by the broker's LogAppendTime
 			records.add(TestData.record(topic, 0, TestData.BASE_TS + i, "k" + i, "{\"n\":" + i + "}"));
 		}
 		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster
@@ -182,7 +183,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		}
 		assertThat(r.get("records").get(2).get("value").get("n").asInt()).isEqualTo(2);
 
-		// CreateTime'a göre (2 saat önce) değil, broker'ın ekleme zamanına göre aranır
+		// looked up by the broker's append time, not by CreateTime (2 hours ago)
 		JsonNode at = ok("messages_offset_for_timestamp",
 				zkArgs("topic", topic, "timestamp", Timestamps.iso(TestData.BASE_TS + 3_600_000L)));
 		assertThat(at.get("found").asInt()).isEqualTo(1);
@@ -190,9 +191,10 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * zk Admin'ini saran ve zamana göre listOffsets'i (OffsetSpec.forTimestamp) verilen partition'larda eski
-	 * broker gibi reddeden proxy: v0 mesaj formatlı topic (UNSUPPORTED_FOR_MESSAGE_FORMAT) ya da isteği
-	 * desteklemeyen protokol sürümü (UnsupportedVersionException). Diğer çağrılar gerçek Admin'e gider.
+	 * Proxy that wraps the zk Admin and, like an old broker, rejects time-based listOffsets
+	 * (OffsetSpec.forTimestamp) on the given partitions: a topic with the v0 message format
+	 * (UNSUPPORTED_FOR_MESSAGE_FORMAT) or a protocol version that does not support the request
+	 * (UnsupportedVersionException). All other calls go to the real Admin.
 	 */
 	@SuppressWarnings("unchecked")
 	private static Admin legacyZookeeperBroker(Admin real, Map<Integer, RuntimeException> failures) {
@@ -228,7 +230,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 				});
 	}
 
-	/** Aracı eski broker simülasyonlu zk Admin'iyle çağırır; deadline'dan önce bitmeli. */
+	/** Calls the tool with the zk Admin simulating an old broker; it must finish before the deadline. */
 	private JsonNode onLegacyBroker(Function<ToolCall, Object> handler, Map<String, Object> args) {
 		Admin legacy = legacyZookeeperBroker(zkAdmin(),
 				Map.of(1, new UnsupportedForMessageFormatException("Cannot search offsets based on timestamp because "
@@ -269,8 +271,8 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		assertThat(at.at("/partitions/0/offset").asLong()).isEqualTo(1);
 		assertThat(at.at("/partitions/1/offset").isNull()).isTrue();
 		assertThat(at.at("/partitions/1/latestOffset").asLong()).isEqualTo(4);
-		assertThat(at.at("/partitions/1/error").asText()).contains("desteklemiyor").contains("mesaj formatı");
-		assertThat(at.at("/partitions/2/error").asText()).isEqualTo("broker bu işlemi desteklemiyor (sürüm)");
+		assertThat(at.at("/partitions/1/error").asText()).contains("does not support").contains("message format");
+		assertThat(at.at("/partitions/2/error").asText()).isEqualTo(KafkaErrors.UNSUPPORTED);
 
 		JsonNode window = onLegacyBroker(offsetTools::count,
 				zkArgs("topic", topic, "fromTimestamp", Timestamps.iso(TestData.BASE_TS + 1_000L)));
@@ -279,8 +281,8 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		assertThat(window.get("unsupported").asInt()).isEqualTo(2);
 		assertThat(window.at("/partitions/0/count").asLong()).isEqualTo(3);
 		assertThat(window.at("/partitions/2/count").isNull()).isTrue();
-		assertThat(window.at("/partitions/2/error").asText()).contains("sürüm");
-		// zaman sınırı yoksa (earliest/latest) eski broker'da da tam sonuç
+		assertThat(window.at("/partitions/2/error").asText()).contains("version");
+		// without time bounds (earliest/latest) the result is complete on the old broker too
 		JsonNode plain = onLegacyBroker(offsetTools::count, zkArgs("topic", topic));
 		assertThat(plain.get("total").asLong()).isEqualTo(12);
 		assertThat(plain.has("partial")).isFalse();
@@ -291,12 +293,12 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		assertThat(consumed.get("partial").asBoolean()).isTrue();
 		assertThat(consumed.get("notes").toString()).contains("partition [1]")
 			.contains("partition [2]")
-			.contains("desteklemiyor");
-		// okunmayan partition'lar okunmuş/bitmiş sayılmaz: reachedEnd false, partitions sadece okunanlar
+			.contains("does not support");
+		// unread partitions do not count as read/finished: reachedEnd is false, partitions counts only those read
 		assertThat(consumed.get("reachedEnd").asBoolean()).isFalse();
 		assertThat(consumed.get("partitions").asInt()).isEqualTo(1);
 		assertThat(consumed.get("skippedPartitions").toString()).isEqualTo("[1,2]");
-		// tek partition istenip o partition okunamadıysa nextOffset null (latest'e atlanıp partition kaçırılmaz)
+		// a single requested partition that could not be read gets nextOffset null (no jump to latest that would miss it)
 		JsonNode skipped = onLegacyBroker(consumeTools::consume, zkArgs("topic", topic, "partition", 1, "from",
 				"timestamp", "timestamp", Timestamps.iso(TestData.BASE_TS + 1_000L)));
 		assertThat(skipped.get("returned").asInt()).isZero();
@@ -329,16 +331,16 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
 			MessagesMixedClusterTest.send(p, records);
 		}
-		// -1/-2/-3 listOffsets'te LATEST/EARLIEST/MAX_TIMESTAMP anlamına gelir: zaman olarak gönderilmemeli
+		// -1/-2/-3 mean LATEST/EARLIEST/MAX_TIMESTAMP in listOffsets: they must not be sent as times
 		for (String ts : List.of("-1", "-2", "-3", "1969-12-31T23:59:59.997Z")) {
 			assertThat(error("messages_offset_for_timestamp", zkArgs("topic", topic, "timestamp", ts)))
-				.contains("negatif")
+				.contains("negative")
 				.contains("1970");
 		}
-		assertThat(error("messages_count", zkArgs("topic", topic, "fromTimestamp", "-1"))).contains("negatif");
-		assertThat(error("messages_count", zkArgs("topic", topic, "toTimestamp", "-2"))).contains("negatif");
-		assertThat(error("messages_consume", zkArgs("topic", topic, "timestamp", "-3"))).contains("negatif");
-		// 0 (epoch başlangıcı) geçerli bir zamandır: ilk kayıt
+		assertThat(error("messages_count", zkArgs("topic", topic, "fromTimestamp", "-1"))).contains("negative");
+		assertThat(error("messages_count", zkArgs("topic", topic, "toTimestamp", "-2"))).contains("negative");
+		assertThat(error("messages_consume", zkArgs("topic", topic, "timestamp", "-3"))).contains("negative");
+		// 0 (the epoch start) is a valid time: the first record
 		JsonNode zero = ok("messages_offset_for_timestamp", zkArgs("topic", topic, "timestamp", "0"));
 		assertThat(zero.at("/partitions/0/offset").asLong()).isZero();
 		assertThat(zero.at("/partitions/0/timestamp").asText()).isEqualTo(Timestamps.iso(TestData.BASE_TS));
@@ -347,9 +349,10 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * Zaman damgasız kayıt: eski (v0) mesaj formatındaki kayıtlar consumer'a timestamp = -1 ile gelir. 3.x+
-	 * broker'lar v0 yazmadığından aynı durum timestamp = -1 (RecordBatch.NO_TIMESTAMP) taşıyan kayıtla kurulur;
-	 * ProducerRecord negatif zamanı reddettiği için alan doğrudan yazılır (broker NO_TIMESTAMP'ı kabul eder).
+	 * Record without a timestamp: records in the old (v0) message format reach the consumer with timestamp = -1.
+	 * Since 3.x+ brokers do not write v0, the same situation is set up with a record carrying timestamp = -1
+	 * (RecordBatch.NO_TIMESTAMP); ProducerRecord rejects negative times, so the field is set directly (the broker
+	 * accepts NO_TIMESTAMP).
 	 */
 	private static ProducerRecord<byte[], byte[]> untimed(String topic, int partition, String value) throws Exception {
 		ProducerRecord<byte[], byte[]> r = TestData.record(topic, partition, null, null, value);
@@ -376,17 +379,17 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 
 		JsonNode r = ok("messages_consume", zkArgs("topic", topic, "maxRecords", 6));
 		assertThat(r.at("/records/0").has("timestamp")).isFalse();
-		// en yüksek numaralı partition'ın son 6 kaydı değil, her partition'ın son 2 kaydı
+		// not the last 6 records of the highest-numbered partition, but the last 2 records of each partition
 		assertThat(values(r)).containsExactly("{\"p0\":8}", "{\"p0\":9}", "{\"p1\":8}", "{\"p1\":9}",
 				"{\"p2\":8}", "{\"p2\":9}");
 		assertThat(r.get("order").asText()).isEqualTo("partition,offset");
 		assertThat(r.get("approximate").asBoolean()).isTrue();
-		assertThat(r.get("notes").toString()).contains("zaman damgası yok");
+		assertThat(r.get("notes").toString()).contains("no timestamp");
 
 		JsonNode filtered = ok("messages_consume",
 				zkArgs("topic", topic, "maxRecords", 3, "valueRegex", ":[0-4]}$"));
 		assertThat(values(filtered)).containsExactly("{\"p0\":4}", "{\"p1\":4}", "{\"p2\":4}");
-		assertThat(filtered.get("notes").toString()).contains("zaman damgası yok");
+		assertThat(filtered.get("notes").toString()).contains("no timestamp");
 
 		JsonNode headers = ok("messages_headers", zkArgs("topic", topic, "maxRecords", 3));
 		assertThat(headers.at("/headers/0/key").asText()).isEqualTo("p");
@@ -397,7 +400,7 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		shape.get("paths").forEach(n -> paths.add(n.get("path").asText()));
 		assertThat(paths).containsExactlyInAnyOrder("p0", "p1", "p2");
 
-		// zamanlı kayıt zamansızlardan (eski formattan kalan) daha yeni sayılır
+		// a timed record counts as newer than the untimed ones (left over from the old format)
 		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
 			MessagesMixedClusterTest.send(p, List.of(TestData.record(topic, 0, TestData.BASE_TS, null, "timed")));
 		}

@@ -21,10 +21,10 @@ import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** messages_consume: başlangıç modları, sıralama, filtreler, formatlar; group/commit oluşmaz. */
+/** messages_consume: start modes, ordering, filters, formats; no group or commit is created. */
 class MessagesConsumeTest extends KafkaIntegrationTest {
 
-	/** 3 partition, 30 kayıt: i → partition i%3, zaman BASE+i sn, key k{i%5}, value v{i}. */
+	/** 3 partitions, 30 records: i → partition i%3, time BASE+i s, key k{i%5}, value v{i}. */
 	private static String topic;
 
 	@BeforeAll
@@ -34,7 +34,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
 		for (int i = 0; i < 30; i++) {
 			ProducerRecord<byte[], byte[]> r = TestData.record(topic, i % 3, TestData.BASE_TS + i * 1000L, "k" + (i % 5),
-					"v" + i + (i % 4 == 0 ? " ERROR disk dolu" : " ok"));
+					"v" + i + (i % 4 == 0 ? " ERROR disk full" : " ok"));
 			if (i % 2 == 0) {
 				r.headers().add(new RecordHeader("trace", ("t-" + i).getBytes(StandardCharsets.UTF_8)));
 			}
@@ -92,7 +92,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 		assertThat(values(r)).containsExactly("v10", "v13");
 		assertThat(r.get("nextOffset").asLong()).isEqualTo(5);
 
-		// from verilmezse offset'ten çıkarılır; latest'ten büyük offset okunacak kayıt bırakmaz
+		// without from it is inferred from offset; an offset beyond latest leaves no records to read
 		JsonNode beyond = ok("messages_consume", args("topic", topic, "partition", 1, "offset", 1000));
 		assertThat(beyond.get("from").asText()).isEqualTo("offset");
 		assertThat(beyond.get("returned").asInt()).isZero();
@@ -128,7 +128,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 
 		JsonNode h = ok("messages_consume", args("topic", topic, "headerKey", "trace", "headerValueRegex", "^t-1\\d$",
 				"maxRecords", 3));
-		// latest + filtre: eşleşenlerin (10..18 çiftleri) en yeni 3'ü
+		// latest + filter: the newest 3 of the matches (even numbers 10..18)
 		assertThat(values(h)).containsExactly("v14", "v16", "v18");
 		assertThat(h.get("matched").asInt()).isEqualTo(5);
 
@@ -144,7 +144,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 
 	@Test
 	void regexFiltersKeepSignificantWhitespace() {
-		// "v1 " sadece v1'i bulur; trim edilseydi "v1" v1 ve v10..v19'u da bulurdu
+		// "v1 " finds only v1; trimmed, "v1" would also find v10..v19
 		JsonNode r = ok("messages_consume", args("topic", topic, "from", "earliest", "valueRegex", "v1 "));
 		assertThat(values(r)).containsExactly("v1");
 		assertThat(r.get("filters").get("valueRegex").asText()).isEqualTo("v1 ");
@@ -158,7 +158,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 	void latestFillsMaxRecordsDespiteTransactionMarkers() throws Exception {
 		String t = unique("msg-tx");
 		TestData.createTopic(testAdmin(), t, 1);
-		// her transaction'da 1 kayıt: commit marker'ı da bir offset kaplar (60 kayıt, 120 offset)
+		// 1 record per transaction: the commit marker takes an offset too (60 records, 120 offsets)
 		try (KafkaProducer<byte[], byte[]> producer = KafkaTestCluster
 			.producer(Map.of(ProducerConfig.TRANSACTIONAL_ID_CONFIG, unique("tx")))) {
 			producer.initTransactions();
@@ -178,7 +178,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 		assertThat(r.has("approximate")).isFalse();
 		assertThat(r.get("reachedEnd").asBoolean()).isTrue();
 
-		// maxScan geriye genişletmeyi kısarsa eksik okuma sessiz kalmaz
+		// if maxScan cuts the backward extension short, the shortfall is not silent
 		JsonNode capped = ok("messages_consume", args("topic", t, "maxRecords", 50, "maxScan", 60));
 		assertThat(capped.get("returned").asInt()).isLessThan(50).isGreaterThan(25);
 		assertThat(capped.get("approximate").asBoolean()).isTrue();
@@ -194,7 +194,7 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 		TestData.createTopic(testAdmin(), t, 1);
 		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
 		records.add(new ProducerRecord<>(t, 0, null, TestData.longBytes(7L),
-				TestData.utf8("{\"id\":7,\"name\":\"ayşe\",\"opt\":null,\"tags\":[\"a\"]}")));
+				TestData.utf8("{\"id\":7,\"name\":\"Ωmega €\",\"opt\":null,\"tags\":[\"a\"]}")));
 		records.add(new ProducerRecord<>(t, 0, null, TestData.longBytes(8L), TestData.utf8("not json")));
 		records.add(new ProducerRecord<>(t, 0, null, new byte[] { 1, 2 }, new byte[] { (byte) 0xc3, (byte) 0x28 }));
 		records.add(new ProducerRecord<>(t, 0, null, null, TestData.utf8("x".repeat(100))));
@@ -204,14 +204,14 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 		JsonNode json = ok("messages_consume", args("topic", t, "from", "earliest", "format", "json", "keyFormat", "long"));
 		JsonNode r0 = json.get("records").get(0);
 		assertThat(r0.get("key").asLong()).isEqualTo(7L);
-		assertThat(r0.get("value").get("name").asText()).isEqualTo("ayşe");
-		assertThat(r0.get("value").has("opt")).as("JSON içindeki null alan korunur").isTrue();
+		assertThat(r0.get("value").get("name").asText()).isEqualTo("Ωmega €");
+		assertThat(r0.get("value").has("opt")).as("a null field inside the JSON is kept").isTrue();
 		assertThat(r0.get("value").get("tags").get(0).asText()).isEqualTo("a");
 		JsonNode r1 = json.get("records").get(1);
 		assertThat(r1.get("value").asText()).isEqualTo("not json");
-		assertThat(r1.get("valueError").asText()).startsWith("JSON değil");
+		assertThat(r1.get("valueError").asText()).startsWith("Not JSON");
 		JsonNode r2 = json.get("records").get(2);
-		assertThat(r2.get("keyError").asText()).contains("8 bayt");
+		assertThat(r2.get("keyError").asText()).contains("8 bytes");
 		assertThat(r2.get("key").asText()).isEqualTo("0102");
 		assertThat(r2.get("value").asText()).isEqualTo("c328");
 		assertThat(r2.get("valueError").asText()).contains("UTF-8");
@@ -238,9 +238,9 @@ class MessagesConsumeTest extends KafkaIntegrationTest {
 		assertThat(values(r)).containsExactly("v28", "v29");
 
 		assertThat(error("messages_consume", args("topic", topic, "format", "avro"))).contains("schemaRegistryUrl");
-		assertThat(error("messages_consume", args("topic", "yok-" + unique("x")))).contains("bulunamadı");
-		assertThat(error("messages_consume", args("topic", topic, "partition", 7))).contains("Partition 7 yok");
-		assertThat(error("messages_consume", args("topic", topic, "format", "xml"))).contains("Geçersiz format");
+		assertThat(error("messages_consume", args("topic", "missing-" + unique("x")))).contains("not found");
+		assertThat(error("messages_consume", args("topic", topic, "partition", 7))).contains("Partition 7 does not exist");
+		assertThat(error("messages_consume", args("topic", topic, "format", "xml"))).contains("Invalid format");
 	}
 
 }

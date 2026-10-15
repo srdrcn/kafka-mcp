@@ -15,14 +15,15 @@ import com.fasterxml.jackson.databind.node.TextNode;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Örnek değerlerden yapı çıkarır: JSON yolları (iç içe alanlar nokta, dizi elemanları {@code []}), görülen
- * tipler ve sayıları, eksik/null oranları ve kısaltılmış örnek değer. Kök nesne değilse yol {@code $}'dır.
+ * Infers a structure from sample values: JSON paths (nested fields with dots, array elements with {@code []}), the
+ * types seen and their counts, missing/null ratios and a shortened example value. If the root is not an object, the
+ * path is {@code $}.
  */
 public final class ShapeInference {
 
 	public static final int DEFAULT_MAX_PATHS = 200;
 
-	/** Dizi başına incelenen en fazla eleman. */
+	/** Maximum elements inspected per array. */
 	public static final int MAX_ARRAY_ELEMENTS = 100;
 
 	private static final int EXAMPLE_CHARS = 100;
@@ -134,22 +135,22 @@ public final class ShapeInference {
 		return n.getNodeType().name().toLowerCase(Locale.ROOT);
 	}
 
-	/** İncelenen kayıt sayısı. */
+	/** Number of records inspected. */
 	public int records() {
 		return records;
 	}
 
-	/** Sınır nedeniyle listelenmeyen farklı yol sayısı. */
+	/** Number of distinct paths not listed because of the limit. */
 	public int skippedPaths() {
 		return skipped.size();
 	}
 
-	/** Bazı dizilerin sadece ilk {@link #MAX_ARRAY_ELEMENTS} elemanı incelendi mi? */
+	/** Were only the first {@link #MAX_ARRAY_ELEMENTS} elements of some arrays inspected? */
 	public boolean arraysSampled() {
 		return arraysSampled;
 	}
 
-	/** Yol başına özet: path, types, presentIn, missingRatio, nullRatio, example. */
+	/** Summary per path: path, types, presentIn, missingRatio, nullRatio, example. */
 	public List<Map<String, Object>> paths() {
 		List<Map<String, Object>> out = new ArrayList<>();
 		paths.forEach((path, s) -> out.add(Results.map("path", path, "types", s.types, "presentIn", s.records,

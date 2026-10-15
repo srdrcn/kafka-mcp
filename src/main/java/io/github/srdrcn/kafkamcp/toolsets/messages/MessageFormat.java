@@ -6,18 +6,18 @@ import java.util.Locale;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Mesaj key/value çözme formatları; {@code format}/{@code keyFormat} parametrelerinin değerleri. */
+/** Message key/value decoding formats; the values of the {@code format}/{@code keyFormat} parameters. */
 public enum MessageFormat {
 
-	STRING("string", "UTF-8 metin; geçersiz UTF-8 baytlar hex gösterilir"),
+	STRING("string", "UTF-8 text; invalid UTF-8 bytes are shown as hex"),
 
-	JSON("json", "UTF-8 JSON, ayrıştırılmış nesne olarak; geçersizse ham metin döner"),
+	JSON("json", "UTF-8 JSON, returned as a parsed object; raw text if invalid"),
 
-	HEX("hex", "Ham baytlar hex olarak"),
+	HEX("hex", "Raw bytes as hex"),
 
-	LONG("long", "8 baytlık big-endian long (Kafka LongSerializer)"),
+	LONG("long", "8-byte big-endian long (Kafka LongSerializer)"),
 
-	AVRO("avro", "Confluent wire format (0x0 + 4 bayt şema id + Avro binary); cluster'da schemaRegistryUrl gerekir");
+	AVRO("avro", "Confluent wire format (0x0 + 4-byte schema id + Avro binary); requires schemaRegistryUrl on the cluster");
 
 	private final String id;
 
@@ -44,7 +44,7 @@ public enum MessageFormat {
 		return Arrays.stream(values()).map(MessageFormat::id).toList();
 	}
 
-	/** Parametre değerini çözer; boşsa varsayılan, bilinmiyorsa Türkçe hata. */
+	/** Parses the parameter value; the default if blank, an error if unknown. */
 	public static MessageFormat parse(String param, String value, MessageFormat defaultValue) {
 		if (value == null || value.isBlank()) {
 			return defaultValue;
@@ -55,7 +55,7 @@ public enum MessageFormat {
 				return f;
 			}
 		}
-		throw new ToolException("Geçersiz " + param + ": " + value + " (geçerli: " + String.join("|", ids()) + ")");
+		throw new ToolException("Invalid " + param + ": " + value + " (valid: " + String.join("|", ids()) + ")");
 	}
 
 }

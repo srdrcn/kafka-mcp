@@ -23,7 +23,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.toolsets.messages.MessageReader.From;
 
-/** Mesaj okuma araçları: messages_consume, messages_get, messages_headers. */
+/** Message reading tools: messages_consume, messages_get, messages_headers. */
 @Component
 public class ConsumeTools {
 
@@ -42,26 +42,26 @@ public class ConsumeTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("messages_consume",
-					"Topic'ten mesaj okur (group'suz, commit'siz): latest/earliest/offset/timestamp, key/value/header filtresi, format çözme")
+					"Read messages without a consumer group or commit: from latest/earliest/offset/timestamp, key/value/header filters, format decoding")
 			.required("topic", MessageParams.topic())
 			.param("partition", MessageParams.partition())
 			.param("from",
-					P.enumOf("Başlangıç (varsayılan latest = son maxRecords kayıt; yeni veri beklenmez)", "earliest",
+					P.enumOf("Start position (default latest = the last maxRecords records; does not wait for new data)", "earliest",
 							"latest", "offset", "timestamp"))
 			.param("offset",
-					MessageParams.nonNegative("from=offset için başlangıç offset'i (seçilen her partition'a uygulanır)"))
-			.param("timestamp", MessageParams.timestamp("from=timestamp için başlangıç zamanı"))
-			.param("keyRegex", P.string("Key regex filtresi (çözülmüş metinde kısmi eşleşme)"))
-			.param("valueRegex", P.string("Value regex filtresi (çözülmüş metinde kısmi eşleşme)"))
-			.param("headerKey", P.string("Sadece bu header'ı taşıyan kayıtlar"))
-			.param("headerValueRegex", P.string("headerKey değeri için regex (headerKey ile birlikte)"))
+					MessageParams.nonNegative("Start offset for from=offset (applied to every selected partition)"))
+			.param("timestamp", MessageParams.timestamp("Start time for from=timestamp"))
+			.param("keyRegex", P.string("Key regex filter (partial match on the decoded text)"))
+			.param("valueRegex", P.string("Value regex filter (partial match on the decoded text)"))
+			.param("headerKey", P.string("Only records that carry this header"))
+			.param("headerValueRegex", P.string("Regex for the headerKey value (requires headerKey)"))
 			.param("format", MessageParams.valueFormat())
 			.param("keyFormat", MessageParams.keyFormat())
 			.param("maxValueChars", MessageParams.maxValueChars())
 			.param("maxScan", MessageParams.maxScan())
 			.maxRecordsParam()
 			.handler(this::consume),
-				ToolSpec.read("messages_get", "Tek bir mesajı (topic/partition/offset) tam value'suyla getirir")
+				ToolSpec.read("messages_get", "Get a single message (topic/partition/offset) with its full value")
 					.required("topic", MessageParams.topic())
 					.required("partition", MessageParams.nonNegative("Partition"))
 					.required("offset", MessageParams.nonNegative("Offset"))
@@ -70,10 +70,10 @@ public class ConsumeTools {
 					.handler(this::get),
 				ToolSpec
 					.read("messages_headers",
-							"Okunan mesajlardaki header istatistikleri: anahtar başına sayı, farklı değer sayısı, örnek değerler")
+							"Summarize the headers of the messages read: count per key, distinct value count, sample values")
 					.required("topic", MessageParams.topic())
 					.param("partition", MessageParams.partition())
-					.param("from", P.enumOf("Başlangıç (varsayılan latest = son kayıtlar)", "earliest", "latest"))
+					.param("from", P.enumOf("Start position (default latest = the most recent records)", "earliest", "latest"))
 					.maxRecordsParam()
 					.handler(this::headers));
 	}
@@ -90,13 +90,13 @@ public class ConsumeTools {
 		if (from == From.OFFSET) {
 			offset = call.optLong("offset");
 			if (offset == null || offset < 0) {
-				throw new ToolException("from=offset için offset parametresi (>= 0) gerekli");
+				throw new ToolException("from=offset requires the offset parameter (>= 0)");
 			}
 		}
 		if (from == From.TIMESTAMP) {
 			timestamp = Timestamps.optional(call, "timestamp");
 			if (timestamp == null) {
-				throw new ToolException("from=timestamp için timestamp parametresi gerekli (ISO-8601 ya da epoch ms)");
+				throw new ToolException("from=timestamp requires the timestamp parameter (ISO-8601 or epoch ms)");
 			}
 		}
 		Integer partition = call.optInt("partition");
@@ -108,7 +108,7 @@ public class ConsumeTools {
 		for (ConsumerRecord<byte[], byte[]> rec : r.records()) {
 			records.add(RecordJson.render(rec, decoder, keyFormat, valueFormat, maxChars));
 		}
-		// hiçbirinde zaman damgası yoksa (v0 mesaj formatı) latest de partition/offset sırasıyla listelenir
+		// if no record has a timestamp (v0 message format), latest is also listed in partition/offset order
 		boolean allUntimed = !r.records().isEmpty() && r.records().stream().allMatch(MessageReader::untimed);
 		boolean byTime = from == From.LATEST && !allUntimed;
 		Map<String, Object> out = Results.map("topic", topic, "from", from.id(), "partition", partition,
@@ -125,7 +125,7 @@ public class ConsumeTools {
 			out.put("scanLimitReached", true);
 		}
 		if (partition != null && from != From.LATEST) {
-			// partition okunamadıysa (skippedPartitions) devam offset'i yok: latest verilirse partition atlanırdı
+			// if the partition could not be read (skippedPartitions) there is no next offset: returning latest would skip it
 			Long next = r.nextOffsets().get(new TopicPartition(topic, partition));
 			out.put("nextOffset", next == null ? NullNode.getInstance() : next);
 		}
@@ -135,9 +135,9 @@ public class ConsumeTools {
 	}
 
 	/**
-	 * Okuma/çözme durumunu çıktıya ekler: offlinePartitions, skippedPartitions, approximate, partial (okuma ya da
-	 * şema isteği zaman sınırına takıldıysa ya da okunmayan partition varsa), schemaLookupsSkipped ve notes.
-	 * {@code decoder} null olabilir.
+	 * Adds the read/decode status to the output: offlinePartitions, skippedPartitions, approximate, partial (if
+	 * reading or a schema lookup hit the time limit, or a partition was not read), schemaLookupsSkipped and notes.
+	 * {@code decoder} may be null.
 	 */
 	static void status(Map<String, Object> out, MessageReader.Result r, RecordDecoder decoder) {
 		if (!r.offlinePartitions().isEmpty()) {
@@ -172,10 +172,10 @@ public class ConsumeTools {
 			from = From.parse(f, From.LATEST);
 		}
 		if (from != From.OFFSET && call.has("offset")) {
-			throw new ToolException("offset parametresi sadece from=offset ile kullanılır");
+			throw new ToolException("The offset parameter can only be used with from=offset");
 		}
 		if (from != From.TIMESTAMP && call.has("timestamp")) {
-			throw new ToolException("timestamp parametresi sadece from=timestamp ile kullanılır");
+			throw new ToolException("The timestamp parameter can only be used with from=timestamp");
 		}
 		return from;
 	}
@@ -193,10 +193,10 @@ public class ConsumeTools {
 		long earliest = b.earliest(tp);
 		long latest = b.latest(tp);
 		if (earliest >= latest) {
-			throw new ToolException("Partition " + partition + " boş: okunacak kayıt yok (earliest=latest=" + latest + ")");
+			throw new ToolException("Partition " + partition + " is empty: no records to read (earliest=latest=" + latest + ")");
 		}
 		if (offset < earliest || offset >= latest) {
-			throw new ToolException("Offset " + offset + " aralık dışında: partition " + partition + " için geçerli offset'ler "
+			throw new ToolException("Offset " + offset + " is out of range: valid offsets for partition " + partition + " are "
 					+ earliest + ".." + (latest - 1) + " (earliest=" + earliest + ", latest=" + latest + ")");
 		}
 		List<ConsumerRecord<byte[], byte[]>> found = new ArrayList<>(1);
@@ -209,11 +209,11 @@ public class ConsumeTools {
 		}
 		if (found.isEmpty()) {
 			if (scan.deadlineReached()) {
-				throw new ToolException("Kayıt zaman sınırı içinde okunamadı (partition " + partition + ", offset "
-						+ offset + ")");
+				throw new ToolException("Could not read the record within the time limit (partition " + partition
+						+ ", offset " + offset + ")");
 			}
-			throw new ToolException("Offset " + offset + " ile latest (" + latest
-					+ ") arasında kayıt yok (compaction ya da transaction marker olabilir)");
+			throw new ToolException("No records between offset " + offset + " and latest (" + latest
+					+ ") (possibly compaction or transaction markers)");
 		}
 		ConsumerRecord<byte[], byte[]> rec = found.get(0);
 		RecordDecoder decoder = new RecordDecoder(registry, call);
@@ -222,7 +222,7 @@ public class ConsumeTools {
 		out.putAll(RecordJson.render(rec, decoder, keyFormat, valueFormat, MessageParams.FULL_VALUE_CHARS));
 		if (rec.offset() != offset) {
 			out.put("requestedOffset", offset);
-			out.put("note", "İstenen offset'te kayıt yok (compaction ya da transaction marker); sonraki kayıt döndü");
+			out.put("note", "No record at the requested offset (compaction or transaction marker); returned the next record");
 		}
 		if (decoder.timeLimited()) {
 			out.put("partial", true);
@@ -235,7 +235,7 @@ public class ConsumeTools {
 		Integer partition = call.optInt("partition");
 		From from = From.parse(call.str("from", null), From.LATEST);
 		if (from != From.LATEST && from != From.EARLIEST) {
-			throw new ToolException("from sadece earliest ya da latest olabilir");
+			throw new ToolException("from must be earliest or latest");
 		}
 		MessageReader.Result r = MessageReader.read(call, new MessageReader.Request(topic, partition, from, null, null,
 				call.maxRecords(), MessageReader.DEFAULT_MAX_SCAN, null));
@@ -286,7 +286,7 @@ public class ConsumeTools {
 			this.key = key;
 		}
 
-		/** {@code value}: tam (kesilmemiş) değer; farklı değer sayımı bunun üzerinden yapılır. */
+		/** {@code value}: the full (untruncated) value; distinct values are counted on it. */
 		void add(String value, boolean firstInRecord) {
 			count++;
 			if (firstInRecord) {

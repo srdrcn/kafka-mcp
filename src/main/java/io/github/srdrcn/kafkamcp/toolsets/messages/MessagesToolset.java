@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** messages: consumer group'suz mesaj okuma, offset hesapları ve format çözme araçları (hepsi okuma). */
+/** messages: reading messages without a consumer group, offset calculations and format decoding (all read-only). */
 @Component
 public class MessagesToolset implements Toolset {
 
@@ -31,7 +31,7 @@ public class MessagesToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Mesaj okuma (group'suz), offset/zaman hesapları ve format çözme";
+		return "Message reading (no consumer group), offset/time calculations and format decoding";
 	}
 
 	@Override
