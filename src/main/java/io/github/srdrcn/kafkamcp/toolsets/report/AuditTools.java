@@ -115,7 +115,7 @@ public class AuditTools {
 				withoutConfig++;
 				continue;
 			}
-			RetentionAudit.evaluate(t, c, scan.sizeBytes(t), scan.partitions(t), th, f);
+			RetentionAudit.evaluate(t, c, scan.sizeBytes(t), scan.sizeComplete(t), scan.partitions(t), th, f);
 		}
 		Map<String, Object> out = Results.map("thresholds", Results.map("largeSize", Format.bytes(largeBytes),
 				"shortMinutes", shortMs / 60_000));

@@ -110,19 +110,19 @@ public final class NameSimilarity {
 	}
 
 	/**
-	 * Benzer çift taraması sonucu: çiftler (mesafe, sonra ad sırası), yapılan karşılaştırma sayısı, sadece
-	 * rakamları farklı olduğu için atlanan çiftler, süre ({@code partial}) ya da çift sınırı ({@code capped})
-	 * nedeniyle yarım kaldı mı.
+	 * Benzer çift taraması sonucu: çiftler (mesafe, sonra ad sırası), sadece rakamları farklı çiftler (ayrı liste,
+	 * en fazla {@link #MAX_PAIRS}; {@code numericVariants} toplam sayı), yapılan karşılaştırma sayısı, süre
+	 * ({@code partial}) ya da çift sınırı ({@code capped}) nedeniyle yarım kaldı mı.
 	 */
-	public record Similar(List<Pair> pairs, long comparisons, int numericVariantsIgnored, boolean partial,
-			boolean capped) {
+	public record Similar(List<Pair> pairs, List<Pair> numericPairs, int numericVariants, long comparisons,
+			boolean partial, boolean capped) {
 	}
 
 	/**
 	 * Uzunluğu en az {@code minLength} olan adlar arasında mesafesi en fazla {@code max} olan çiftler. Adlar
 	 * uzunluğa göre sıralanıp sadece uzunluk farkı ≤ max olanlar karşılaştırılır; normalize adı aynı olanlar
-	 * (zaten çakışma grubunda) ve sadece rakamları farklı olanlar (ör. shard-01/shard-02) atlanır. {@code stop}
-	 * true dönerse (deadline) yarım sonuç döner.
+	 * (zaten çakışma grubunda) atlanır, sadece rakamları farklı olanlar (ör. shard-01/shard-02, x.v1.y/x.v2.y)
+	 * ayrı listede döner. {@code stop} true dönerse (deadline) yarım sonuç döner.
 	 */
 	public static Similar similarPairs(Collection<String> names, int max, int minLength, BooleanSupplier stop) {
 		List<String> sorted = names.stream()
@@ -133,6 +133,7 @@ public final class NameSimilarity {
 		List<String> normalized = sorted.stream().map(NameSimilarity::normalize).toList();
 		List<String> skeleton = lower.stream().map(s -> DIGITS.matcher(s).replaceAll("#")).toList();
 		List<Pair> pairs = new ArrayList<>();
+		List<Pair> numericPairs = new ArrayList<>();
 		long comparisons = 0;
 		int numeric = 0;
 		boolean partial = false;
@@ -157,6 +158,9 @@ public final class NameSimilarity {
 				}
 				if (skeleton.get(i).equals(skeleton.get(j))) {
 					numeric++;
+					if (numericPairs.size() < MAX_PAIRS) {
+						numericPairs.add(new Pair(a, b, d));
+					}
 					continue;
 				}
 				pairs.add(new Pair(a, b, d));
@@ -166,8 +170,10 @@ public final class NameSimilarity {
 				}
 			}
 		}
-		pairs.sort(Comparator.comparingInt(Pair::distance).thenComparing(Pair::a).thenComparing(Pair::b));
-		return new Similar(pairs, comparisons, numeric, partial, capped);
+		Comparator<Pair> order = Comparator.comparingInt(Pair::distance).thenComparing(Pair::a).thenComparing(Pair::b);
+		pairs.sort(order);
+		numericPairs.sort(order);
+		return new Similar(pairs, numericPairs, numeric, comparisons, partial, capped);
 	}
 
 }

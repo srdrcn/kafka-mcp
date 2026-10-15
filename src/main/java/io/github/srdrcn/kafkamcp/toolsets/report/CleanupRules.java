@@ -50,14 +50,15 @@ public final class CleanupRules {
 
 	/**
 	 * Topic adayı: boş (hiç yazılmamış), boşta (son yazma eşikten eski) ya da consumer'sız. Risk: veri yok ve
-	 * consumer yoksa low; veri yok ama consumer varsa medium; sadece consumer'sız ve yakın zamanda yazılmışsa
-	 * high (aktif producer var). Aday değilse null.
+	 * consumer yoksa low; veri yok ama consumer varsa (ya da grup taraması başarısız olduğu için consumer sayısı
+	 * {@code null}, bilinmiyorsa) medium; sadece consumer'sız ve yakın zamanda yazılmışsa high (aktif producer
+	 * var). Aday değilse null.
 	 */
-	public static Candidate topic(String name, TopicActivity a, long thresholdMs, int consumerGroups,
+	public static Candidate topic(String name, TopicActivity a, long thresholdMs, Integer consumerGroups,
 			Map<String, Object> details) {
 		boolean empty = Boolean.TRUE.equals(a.empty());
 		Boolean idle = a.idleSince(thresholdMs);
-		boolean noConsumers = consumerGroups == 0;
+		boolean noConsumers = consumerGroups != null && consumerGroups == 0;
 		List<String> reasons = new ArrayList<>();
 		if (empty) {
 			reasons.add(a.neverWritten() ? "never_written" : "empty");
@@ -80,7 +81,12 @@ public final class CleanupRules {
 			risk = Boolean.FALSE.equals(idle) ? HIGH : MEDIUM;
 		}
 		Map<String, Object> d = new LinkedHashMap<>(details);
-		d.put("consumerGroups", consumerGroups);
+		if (consumerGroups == null) {
+			d.put("consumersUnknown", true);
+		}
+		else {
+			d.put("consumerGroups", consumerGroups);
+		}
 		return new Candidate("topic", name, reasons, risk, d);
 	}
 
@@ -154,7 +160,9 @@ public final class CleanupRules {
 			out.add(new Candidate("acl", first.pattern().name(),
 					List.of(topic ? "orphan_topic_acl" : "orphan_group_acl"), topic ? LOW : MEDIUM,
 					Results.map("resourceType", first.pattern().resourceType().name(), "patternType", "LITERAL",
-							"bindings", list.size(), "principals", head(new ArrayList<>(principals)), "operations",
+							"bindings", list.size(), "principalCount", principals.size(), "principals",
+							head(new ArrayList<>(principals)), "principalsOmitted",
+							principals.size() > MAX_NAMES ? principals.size() - MAX_NAMES : null, "operations",
 							new ArrayList<>(ops))));
 		});
 		return out;

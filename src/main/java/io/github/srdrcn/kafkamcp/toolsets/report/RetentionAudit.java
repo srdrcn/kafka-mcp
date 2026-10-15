@@ -8,9 +8,10 @@ import io.github.srdrcn.kafkamcp.kafka.Format;
 import io.github.srdrcn.kafkamcp.toolsets.report.Findings.Severity;
 
 /**
- * Retention/segment denetimi kuralları (saf hesap, test edilebilir): sınırsız retention (büyükse yüksek önem),
- * çok kısa retention, retention.bytes, compact topic'lerde kısa delete.retention.ms ve uç dirty ratio, segment
- * boyutu/süresi aykırılıkları. Her bulgu config değeri ve kaynağıyla (topic/broker/default) döner.
+ * Retention/segment denetimi kuralları (saf hesap, test edilebilir): sınırsız retention (büyükse yüksek, boyutu
+ * bilinmiyorsa orta önem), çok kısa retention, retention.bytes, compact topic'lerde kısa delete.retention.ms ve uç
+ * dirty ratio, segment boyutu/süresi aykırılıkları. Her bulgu config değeri ve kaynağıyla (topic/broker/default)
+ * döner.
  */
 public final class RetentionAudit {
 
@@ -24,8 +25,12 @@ public final class RetentionAudit {
 	public record Thresholds(long largeBytes, long shortMs) {
 	}
 
-	/** Kuralları tek topic'e uygular; sizeBytes bilinmiyorsa null. */
-	public static void evaluate(String topic, Config c, Long sizeBytes, int partitions, Thresholds th, Findings f) {
+	/**
+	 * Kuralları tek topic'e uygular; sizeBytes bilinmiyorsa null, sizeComplete false ise sizeBytes alt sınırdır
+	 * (bazı broker'ların log dizinleri okunamadı).
+	 */
+	public static void evaluate(String topic, Config c, Long sizeBytes, boolean sizeComplete, int partitions,
+			Thresholds th, Findings f) {
 		boolean deletes = ConfigValues.deletes(c);
 		boolean compacted = ConfigValues.compacted(c);
 		Long retentionMs = ConfigValues.longValue(c, "retention.ms");
@@ -35,10 +40,15 @@ public final class RetentionAudit {
 		if (deletes && retentionMs != null) {
 			boolean unboundedBytes = retentionBytes == null || retentionBytes < 0;
 			if (retentionMs < 0 && unboundedBytes) {
-				Map<String, Object> item = withSize(ConfigValues.item(topic, c, "retention.ms"), sizeBytes);
+				Map<String, Object> item = withSize(ConfigValues.item(topic, c, "retention.ms"), sizeBytes, sizeComplete);
 				if (sizeBytes != null && sizeBytes >= th.largeBytes()) {
 					f.add("infinite_retention_large", Severity.HIGH,
 							"Sınırsız retention (retention.ms=-1, retention.bytes=-1) ve büyük boyut: disk sürekli büyür", item);
+				}
+				else if (sizeBytes == null || !sizeComplete) {
+					f.add("infinite_retention_size_unknown", Severity.MEDIUM,
+							"Sınırsız retention (retention.ms=-1, retention.bytes=-1); boyut bilinmiyor ya da eksik (log dizinleri okunamadı): büyük olabilir",
+							item);
 				}
 				else {
 					f.add("infinite_retention", Severity.INFO,
@@ -58,7 +68,7 @@ public final class RetentionAudit {
 			}
 		}
 		if (deletes && retentionBytes != null && retentionBytes > 0) {
-			Map<String, Object> item = withSize(ConfigValues.item(topic, c, "retention.bytes"), sizeBytes);
+			Map<String, Object> item = withSize(ConfigValues.item(topic, c, "retention.bytes"), sizeBytes, sizeComplete);
 			long cap = retentionBytes * Math.max(1, partitions);
 			item.put("partitions", partitions);
 			item.put("maxTopicBytes", cap);
@@ -91,10 +101,13 @@ public final class RetentionAudit {
 		}
 	}
 
-	private static Map<String, Object> withSize(Map<String, Object> item, Long sizeBytes) {
+	private static Map<String, Object> withSize(Map<String, Object> item, Long sizeBytes, boolean sizeComplete) {
 		if (sizeBytes != null) {
 			item.put("sizeBytes", sizeBytes);
 			item.put("size", Format.bytes(sizeBytes));
+			if (!sizeComplete) {
+				item.put("sizeLowerBound", true);
+			}
 		}
 		return item;
 	}

@@ -70,6 +70,9 @@ class InventoryReportTest extends ReportTestBase {
 		String external = unique("rep-ext");
 		commit(zk, external, orders, 0, 5);
 		commit(zk, unique("rep-unrelated"), outside, 0, 1);
+		// önekle adlandırılmış ama takım topic'lerini tüketmeyen gruplar
+		commit(zk, prefix + "other1", outside, 0, 1);
+		commit(zk, prefix + "other2", outside, 0, 1);
 		String alice = "User:" + token + "-alice";
 		String bob = "User:" + token + "-bob";
 		String carol = "User:" + token + "-carol";
@@ -101,6 +104,10 @@ class InventoryReportTest extends ReportTestBase {
 			assertThat(texts(groups.get("groups"), "groupId")).containsExactly(prefix + "svc", external);
 			assertThat(groups.at("/groups/0/totalLag").asLong()).isEqualTo(3);
 			assertThat(groups.at("/groups/0/state").asText()).isEqualTo("Empty");
+			assertThat(groups.get("otherGroupsWithPrefixCount").asInt()).isEqualTo(2);
+			assertThat(texts(groups.get("otherGroupsWithPrefix"), null)).containsExactly(prefix + "other1",
+					prefix + "other2");
+			assertThat(groups.has("otherGroupsWithPrefixOmitted")).isFalse();
 
 			JsonNode principals = r.at("/acls/principals");
 			assertThat(texts(principals, "principal")).containsExactlyInAnyOrder(alice, bob, carol, wild);
@@ -118,6 +125,13 @@ class InventoryReportTest extends ReportTestBase {
 				.containsExactly("LITERAL:* (wildcard)");
 			assertThat(r.has("connectors")).isFalse();
 			assertThat(r.at("/examined/topics").asInt()).isEqualTo(3);
+
+			// kırpılan liste sayısıyla birlikte döner
+			JsonNode limited = ok("report_team_inventory", on(zk, "prefix", prefix, "limit", 1));
+			JsonNode limitedGroups = limited.get("consumerGroups");
+			assertThat(limitedGroups.get("otherGroupsWithPrefixCount").asInt()).isEqualTo(2);
+			assertThat(texts(limitedGroups.get("otherGroupsWithPrefix"), null)).containsExactly(prefix + "other1");
+			assertThat(limitedGroups.get("otherGroupsWithPrefixOmitted").asInt()).isEqualTo(1);
 		}
 		finally {
 			deleteAcls(admin(zk), acls);
@@ -141,6 +155,10 @@ class InventoryReportTest extends ReportTestBase {
 		produce(zk, busy, 0, 3, null);
 		commit(zk, p + "-idlegrp", idle, 0, 4);
 		commit(zk, p + "-busygrp", busy, 0, 1);
+		// filtreye uymayan topic/grup/ACL: atlananlar sayılır
+		String out = unique("rep-cleanout");
+		createTopic(zk, out, 1, Map.of());
+		commit(zk, out + "-grp", out, 0, 0);
 		String ghostTopic = p + "-ghost";
 		String ghostGroup = p + "-ghostgrp";
 		List<AclBinding> acls = new ArrayList<>(List.of(
@@ -148,7 +166,8 @@ class InventoryReportTest extends ReportTestBase {
 				acl(ResourceType.GROUP, ghostGroup, PatternType.LITERAL, "User:" + p + "-x", AclOperation.READ),
 				acl(ResourceType.TOPIC, busy, PatternType.LITERAL, "User:" + p + "-x", AclOperation.READ),
 				acl(ResourceType.GROUP, p + "-busygrp", PatternType.LITERAL, "User:" + p + "-x", AclOperation.READ),
-				acl(ResourceType.TOPIC, p + "-pre", PatternType.PREFIXED, "User:" + p + "-x", AclOperation.READ)));
+				acl(ResourceType.TOPIC, p + "-pre", PatternType.PREFIXED, "User:" + p + "-x", AclOperation.READ),
+				acl(ResourceType.TOPIC, out + "-ghost", PatternType.LITERAL, "User:" + p + "-x", AclOperation.READ)));
 		createAcls(admin(zk), acls);
 		try {
 			JsonNode r = ok("report_cleanup_candidates", on(zk, "filter", p, "olderThanDays", 30));
@@ -185,7 +204,12 @@ class InventoryReportTest extends ReportTestBase {
 			assertThat(r.at("/byType/acl").asInt()).isEqualTo(2);
 			assertThat(r.at("/byRisk/high").asInt()).isEqualTo(1);
 			assertThat(r.get("notes").toString()).contains("hiçbir şey silinmez");
-			assertThat(r.at("/examined/aclBindings").asInt()).isGreaterThanOrEqualTo(5);
+			assertThat(r.at("/examined/aclBindings").asInt()).isGreaterThanOrEqualTo(6);
+			assertThat(r.at("/skipped/topicsNotMatchingFilter").asInt()).isGreaterThanOrEqualTo(1);
+			assertThat(r.at("/skipped/groupsNotMatchingFilter").asInt()).isGreaterThanOrEqualTo(1);
+			assertThat(r.at("/skipped/orphanAclResourcesNotMatchingFilter").asInt()).isGreaterThanOrEqualTo(1);
+			assertThat(r.at("/examined/topics").asInt())
+				.isGreaterThanOrEqualTo(4 + r.at("/skipped/topicsNotMatchingFilter").asInt());
 
 			// eşik büyüyünce idle nedeni kalkar
 			JsonNode longer = ok("report_cleanup_candidates", on(zk, "filter", p, "olderThanDays", 90));

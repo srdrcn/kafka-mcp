@@ -45,15 +45,20 @@ class NameSimilarityTest {
 	}
 
 	@Test
-	void similarPairsSkipCollisionsNumericVariantsAndShortNames() {
+	void similarPairsSkipCollisionsAndShortNamesAndListNumericVariantsSeparately() {
 		List<String> names = List.of("orders.customer", "orders.custmer", "orders-v1", "orders_v2", "shard-01",
-				"shard-02", "abc", "abd", "inventory-events", "inventory-evnts");
+				"shard-02", "abc", "abd", "inventory-events", "inventory-evnts", "payments.v1.events",
+				"payments.v2.events", "events-2023", "events-2024");
 		NameSimilarity.Similar s = NameSimilarity.similarPairs(names, 2, 8, () -> false);
 		assertThat(s.pairs()).extracting(NameSimilarity.Pair::a)
 			.containsExactly("inventory-evnts", "orders.custmer");
 		assertThat(s.pairs().get(1).b()).isEqualTo("orders.customer");
 		assertThat(s.pairs().get(1).distance()).isEqualTo(1);
-		assertThat(s.numericVariantsIgnored()).isEqualTo(1);
+		// sadece rakamları farklı çiftler kaybolmaz: adlarıyla ayrı listede
+		assertThat(s.numericVariants()).isEqualTo(3);
+		assertThat(s.numericPairs()).extracting(p -> p.a() + "/" + p.b())
+			.containsExactly("events-2023/events-2024", "payments.v1.events/payments.v2.events", "shard-01/shard-02");
+		assertThat(s.numericPairs()).allMatch(p -> p.distance() == 1);
 		assertThat(s.partial()).isFalse();
 		assertThat(s.capped()).isFalse();
 	}

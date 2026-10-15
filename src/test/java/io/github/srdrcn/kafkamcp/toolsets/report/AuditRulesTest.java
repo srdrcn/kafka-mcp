@@ -121,6 +121,39 @@ class AuditRulesTest {
 	}
 
 	@Test
+	void underMinIsrUsesTheEffectiveMinIsrCappedByReplicaCount() {
+		int[] r12 = { 1, 2 };
+		Map<String, TopicDescription> topics = new TreeMap<>();
+		// RF=1, min.insync=2: broker min ISR'ı 1'e indirir, yazılabilir (min ISR altı değil, RF üstü)
+		topics.put("single", topic("single", part(0, 1, new int[] { 1 }, 1)));
+		// RF=2, min.insync=3, 4 partition, sadece biri URP: sadece o partition etkin min ISR (2) altında
+		topics.put("above", topic("above", part(0, 1, r12, 1), part(1, 1, r12, 1, 2), part(2, 2, r12, 1, 2),
+				part(3, 2, r12, 1, 2)));
+		topics.put("normal", topic("normal", part(0, 1, new int[] { 1, 2, 3 }, 1), part(1, -1, new int[] { 1, 2, 3 })));
+		topics.put("noconfig", topic("noconfig", part(0, 1, r12, 1)));
+		Map<String, Config> configs = new TreeMap<>();
+		configs.put("single", config(Map.of("min.insync.replicas", "2"), DEFAULTS));
+		configs.put("above", config(Map.of("min.insync.replicas", "3"), DEFAULTS));
+		configs.put("normal", config(Map.of("min.insync.replicas", "2"), DEFAULTS));
+
+		ReplicationAudit.MinIsrCounts counts = ReplicationAudit.minIsrCounts(topics.values(), configs,
+				Topics.Reassignments.NONE);
+		// above/0 ve normal/0; offline partition sayılmaz
+		assertThat(counts.underMinIsrPartitions()).isEqualTo(2);
+		assertThat(counts.aboveRfTopics()).isEqualTo(2);
+		assertThat(counts.unknownTopics()).isEqualTo(1);
+
+		// denetim aynı kuralı kullanır: özet ile çelişmez
+		Findings f = replication(topics, configs, null, Map.of(), Topics.Reassignments.NONE);
+		assertThat(topicsOf(f, "under_min_isr")).containsExactly("above", "normal");
+		assertThat(f.items("under_min_isr").get(0)).containsEntry("partitions", List.of(0));
+		assertThat(topicsOf(f, "min_isr_above_rf")).containsExactly("above", "single");
+		assertThat(f.render()).filteredOn(m -> m.get("check").equals("min_isr_above_rf"))
+			.singleElement()
+			.satisfies(m -> assertThat(m.get("message").toString()).contains("eski broker"));
+	}
+
+	@Test
 	void singleRackCheckRunsOnlyWithAtLeastTwoRacks() {
 		Map<String, TopicDescription> topics = Map.of("a", topic("a", part(0, 1, new int[] { 1, 2 }, 1, 2),
 				part(1, 1, new int[] { 1, 3 }, 1, 3), part(2, 2, new int[] { 2, 4 }, 2, 4)));
@@ -139,18 +172,31 @@ class AuditRulesTest {
 	void retentionAuditReportsValueAndSource() {
 		Findings f = new Findings(50);
 		RetentionAudit.Thresholds th = new RetentionAudit.Thresholds(10L << 30, 3_600_000);
-		RetentionAudit.evaluate("big", config(Map.of("retention.ms", "-1"), DEFAULTS), 20L << 30, 4, th, f);
-		RetentionAudit.evaluate("small", config(Map.of("retention.ms", "-1"), DEFAULTS), 1024L, 1, th, f);
+		RetentionAudit.evaluate("big", config(Map.of("retention.ms", "-1"), DEFAULTS), 20L << 30, true, 4, th, f);
+		RetentionAudit.evaluate("small", config(Map.of("retention.ms", "-1"), DEFAULTS), 1024L, true, 1, th, f);
 		RetentionAudit.evaluate("capped", config(Map.of("retention.ms", "-1", "retention.bytes", "1000"), DEFAULTS), 10L,
-				3, th, f);
+				true, 3, th, f);
 		RetentionAudit.evaluate("compacted", config(Map.of("cleanup.policy", "compact", "retention.ms", "-1",
-				"delete.retention.ms", "0", "min.cleanable.dirty.ratio", "0.95"), DEFAULTS), 10L, 1, th, f);
-		RetentionAudit.evaluate("short", config(Map.of("retention.ms", "1000"), DEFAULTS), 10L, 1, th, f);
+				"delete.retention.ms", "0", "min.cleanable.dirty.ratio", "0.95"), DEFAULTS), 10L, true, 1, th, f);
+		RetentionAudit.evaluate("short", config(Map.of("retention.ms", "1000"), DEFAULTS), 10L, true, 1, th, f);
 		RetentionAudit.evaluate("segments", config(Map.of("segment.bytes", "1048576", "segment.ms", "60000"), DEFAULTS),
-				null, 1, th, f);
-		RetentionAudit.evaluate("fine", config(Map.of(), DEFAULTS), 10L, 1, th, f);
+				null, false, 1, th, f);
+		RetentionAudit.evaluate("fine", config(Map.of(), DEFAULTS), 10L, true, 1, th, f);
+		// boyutu bilinmeyen ya da eksik (alt sınır) sınırsız topic "küçük" sayılmaz
+		RetentionAudit.evaluate("unknown", config(Map.of("retention.ms", "-1"), DEFAULTS), null, false, 1, th, f);
+		RetentionAudit.evaluate("partial", config(Map.of("retention.ms", "-1"), DEFAULTS), 2048L, false, 1, th, f);
+		RetentionAudit.evaluate("partialBig", config(Map.of("retention.ms", "-1"), DEFAULTS), 30L << 30, false, 1, th,
+				f);
 
-		assertThat(topicsOf(f, "infinite_retention_large")).containsExactly("big");
+		assertThat(topicsOf(f, "infinite_retention_large")).containsExactly("big", "partialBig");
+		assertThat(f.items("infinite_retention_large").get(1)).containsEntry("sizeLowerBound", true);
+		assertThat(topicsOf(f, "infinite_retention_size_unknown")).containsExactly("unknown", "partial");
+		assertThat(f.items("infinite_retention_size_unknown").get(0)).doesNotContainKey("sizeBytes");
+		assertThat(f.items("infinite_retention_size_unknown").get(1)).containsEntry("sizeBytes", 2048L)
+			.containsEntry("sizeLowerBound", true);
+		assertThat(f.render()).filteredOn(m -> m.get("check").equals("infinite_retention_size_unknown"))
+			.singleElement()
+			.satisfies(m -> assertThat(m).containsEntry("severity", "medium"));
 		assertThat(f.items("infinite_retention_large").get(0)).containsEntry("value", "-1")
 			.containsEntry("source", "topic")
 			.containsEntry("sizeBytes", 20L << 30);

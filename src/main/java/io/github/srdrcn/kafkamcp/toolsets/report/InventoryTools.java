@@ -196,7 +196,9 @@ public class InventoryTools {
 			}
 		}
 		Map<String, Object> out = Results.map("count", rows.size(), "totalLag", totalLag, "groupsListed",
-				groups.listed().size(), "otherGroupsWithPrefix", named.isEmpty() ? null : ReportParams.head(named, limit));
+				groups.listed().size(), "otherGroupsWithPrefixCount", named.isEmpty() ? null : named.size(),
+				"otherGroupsWithPrefix", named.isEmpty() ? null : ReportParams.head(named, limit),
+				"otherGroupsWithPrefixOmitted", named.size() > limit ? named.size() - limit : null);
 		out.putAll(ReportParams.page("groups", rows, limit));
 		return out;
 	}
@@ -249,19 +251,22 @@ public class InventoryTools {
 			.groups(GroupScan.MAX_GROUPS)
 			.reserve(2_000)
 			.run();
-		GroupScan groups = scan.requireGroups();
+		// grup taraması başarısızsa (hata/partial FleetScan'de) topic ve ACL adayları yine üretilir
+		GroupScan groups = scan.groups();
 		Coverage coverage = scan.coverage();
 		long now = scan.nowMs();
 		long threshold = TopicActivity.threshold(now, days);
-		Map<String, Set<String>> consumersByTopic = groups.groupsByTopic();
+		Map<String, Set<String>> consumersByTopic = groups == null ? null : groups.groupsByTopic();
 		List<CleanupRules.Candidate> candidates = new ArrayList<>();
 		int protectedSkipped = 0;
+		int topicsNotMatching = 0;
 		for (String t : scan.topics().keySet()) {
 			if (Topics.protectedReason(t, scan.listing().getOrDefault(t, false)) != null) {
 				protectedSkipped++;
 				continue;
 			}
 			if (!call.matches(t)) {
+				topicsNotMatching++;
 				continue;
 			}
 			TopicActivity a = scan.activity(t);
@@ -271,26 +276,36 @@ public class InventoryTools {
 				details.putAll(a.lastWriteFields(now));
 			}
 			CleanupRules.Candidate c = CleanupRules.topic(t, a, threshold,
-					consumersByTopic.getOrDefault(t, Set.of()).size(), details);
+					consumersByTopic == null ? null : consumersByTopic.getOrDefault(t, Set.of()).size(), details);
 			if (c != null) {
 				candidates.add(c);
 			}
 		}
 		coverage.skipped("protectedTopics", protectedSkipped);
+		coverage.skipped("topicsNotMatchingFilter", topicsNotMatching);
 		Set<String> existing = scan.listing().keySet();
-		Map<String, String> states = groups.states();
-		for (Map.Entry<String, Map<TopicPartition, Long>> e : groups.offsets().entrySet()) {
-			if (!call.matches(e.getKey())) {
-				continue;
+		if (groups != null) {
+			Map<String, String> states = groups.states();
+			int groupsNotMatching = 0;
+			for (Map.Entry<String, Map<TopicPartition, Long>> e : groups.offsets().entrySet()) {
+				if (!call.matches(e.getKey())) {
+					groupsNotMatching++;
+					continue;
+				}
+				CleanupRules.Candidate c = CleanupRules.group(e.getKey(), states.get(e.getKey()), e.getValue(),
+						existing, scan.ranges(), t -> {
+							TopicActivity a = scan.activity(t);
+							return Boolean.TRUE.equals(a.empty()) || Boolean.TRUE.equals(a.idleSince(threshold));
+						});
+				if (c != null) {
+					candidates.add(c);
+				}
 			}
-			CleanupRules.Candidate c = CleanupRules.group(e.getKey(), states.get(e.getKey()), e.getValue(), existing,
-					scan.ranges(), t -> {
-						TopicActivity a = scan.activity(t);
-						return Boolean.TRUE.equals(a.empty()) || Boolean.TRUE.equals(a.idleSince(threshold));
-					});
-			if (c != null) {
-				candidates.add(c);
-			}
+			coverage.skipped("groupsNotMatchingFilter", groupsNotMatching);
+		}
+		else {
+			coverage.note("Consumer group'lar okunamadı: grup adayları ve no_consumers nedeni atlandı, topic adaylarında "
+					+ "consumer bilinmiyor (consumersUnknown)");
 		}
 		Settled<Collection<AclBinding>> aclResult = Settled.within(call, acls, 700);
 		Settled<Collection<GroupListing>> groupIds = Settled.within(call, allGroups, 600);
@@ -304,12 +319,17 @@ public class InventoryTools {
 			else {
 				coverage.note("Grup listesi (tüm tipler) alınamadı: sahipsiz GROUP ACL kontrolü atlandı");
 			}
+			int aclsNotMatching = 0;
 			for (CleanupRules.Candidate c : CleanupRules.orphanAcls(aclResult.value(), existing, ids, groupsKnown)) {
 				if (call.matches(c.name())) {
 					candidates.add(c);
 				}
+				else {
+					aclsNotMatching++;
+				}
 			}
 			coverage.examined("aclBindings", aclResult.value().size());
+			coverage.skipped("orphanAclResourcesNotMatchingFilter", aclsNotMatching);
 		}
 		else if (Acls.isSecurityDisabled(aclResult.error())) {
 			aclInfo = Acls.noAuthorizer();
@@ -335,7 +355,7 @@ public class InventoryTools {
 		List<Map<String, Object>> rows = candidates.stream().map(CleanupRules.Candidate::toMap).toList();
 		Map<String, Object> out = Results.map("olderThanDays", days, "threshold", Format.iso(threshold), "byType",
 				byType, "byRisk", byRisk, "acls", aclInfo);
-		if (!groups.complete()) {
+		if (groups != null && !groups.complete()) {
 			coverage.note("Grup taraması tam değil: no_consumers nedenleri kesin değil");
 		}
 		coverage.note("Salt okunur rapor: hiçbir şey silinmez. Risk: low = veri/consumer izi yok, medium = doğrulayın, "

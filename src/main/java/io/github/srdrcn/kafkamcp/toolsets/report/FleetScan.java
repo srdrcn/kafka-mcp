@@ -20,6 +20,7 @@ import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
 
@@ -76,6 +77,8 @@ public final class FleetScan {
 	private Map<TopicPartition, LogDirs.PartitionSize> sizes;
 
 	private boolean sizesComplete = true;
+
+	private Set<Integer> sizeErrorBrokers = Set.of();
 
 	private Map<String, long[]> topicSizes;
 
@@ -431,6 +434,7 @@ public final class FleetScan {
 		sizes = LogDirs.partitionSizes(ok, topics);
 		if (!errors.isEmpty()) {
 			sizesComplete = false;
+			sizeErrorBrokers = Set.copyOf(errors.keySet());
 			coverage.error("logDirs", errors);
 			coverage.note("Bazı broker'ların log dizinleri okunamadı: boyutlar alt sınırdır");
 		}
@@ -520,6 +524,28 @@ public final class FleetScan {
 		return sizes != null && sizesComplete;
 	}
 
+	/**
+	 * Topic'in boyutu tam mı: boyutlar okundu ve topic'in hiçbir replikası log dizini okunamayan bir broker'da
+	 * değil. false ise {@link #sizeBytes} null ya da alt sınırdır.
+	 */
+	public boolean sizeComplete(String topic) {
+		TopicDescription d = topics.get(topic);
+		if (sizes == null || d == null) {
+			return false;
+		}
+		if (sizesComplete) {
+			return true;
+		}
+		for (TopicPartitionInfo p : d.partitions()) {
+			for (Node n : p.replicas()) {
+				if (sizeErrorBrokers.contains(n.id())) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 	/** Topic → config (configs() istendiyse; okunamayanlar yok). */
 	public Map<String, Config> configs() {
 		return configs == null ? Map.of() : configs;
@@ -572,14 +598,24 @@ public final class FleetScan {
 	 * okunamadıysa (broker hatası) null; bazı broker'lar okunamadıysa alt sınır.
 	 */
 	public Long sizeBytes(String topic) {
-		long[] a = topicSizes().get(topic);
-		return sizes == null ? null : a != null ? a[0] : sizesComplete ? 0L : null;
+		return topicSize(topic, 0);
 	}
 
 	/** Tüm replikaların toplam boyutu; bilinmiyorsa null (bkz. {@link #sizeBytes}). */
 	public Long totalSizeBytes(String topic) {
+		return topicSize(topic, 1);
+	}
+
+	/** index 0: lider, 1: tüm replikalar (ternary ile long/null karışımı unboxing NPE'si verir; açık if). */
+	private Long topicSize(String topic, int index) {
+		if (sizes == null) {
+			return null;
+		}
 		long[] a = topicSizes().get(topic);
-		return sizes == null ? null : a != null ? a[1] : sizesComplete ? 0L : null;
+		if (a != null) {
+			return a[index];
+		}
+		return sizesComplete ? Long.valueOf(0) : null;
 	}
 
 	/** Çıktı için boyut alanları: sizeBytes ve okunur size. */

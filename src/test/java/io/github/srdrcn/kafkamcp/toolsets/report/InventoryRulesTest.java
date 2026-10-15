@@ -58,6 +58,15 @@ class InventoryRulesTest {
 		// eksik son yazma (bazı partition'lar okunamadı) eski görünse de idle sayılmaz
 		assertThat(CleanupRules.topic("f", activity(false, false, old, false), THRESHOLD, 1, Map.of())).isNull();
 		assertThat(CleanupRules.topic("g", activity(false, false, recent, true), THRESHOLD, 1, Map.of())).isNull();
+		// grup taraması başarısız (consumer sayısı bilinmiyor): boş/boşta topic yine aday, risk en az medium
+		CleanupRules.Candidate neverUnknown = CleanupRules.topic("h", activity(true, true, null, true), THRESHOLD,
+				null, Map.of());
+		assertThat(neverUnknown.reasons()).containsExactly("never_written");
+		assertThat(neverUnknown.risk()).isEqualTo(CleanupRules.MEDIUM);
+		assertThat(neverUnknown.details()).containsEntry("consumersUnknown", true).doesNotContainKey("consumerGroups");
+		assertThat(CleanupRules.topic("i", activity(false, false, old, true), THRESHOLD, null, Map.of()).reasons())
+			.containsExactly("idle");
+		assertThat(CleanupRules.topic("j", activity(false, false, recent, true), THRESHOLD, null, Map.of())).isNull();
 	}
 
 	@Test
@@ -100,10 +109,23 @@ class InventoryRulesTest {
 		CleanupRules.Candidate ghost = c.get(1);
 		assertThat(ghost.risk()).isEqualTo(CleanupRules.LOW);
 		assertThat(ghost.details()).containsEntry("bindings", 2)
+			.containsEntry("principalCount", 2)
 			.containsEntry("principals", List.of("User:a", "User:b"))
-			.containsEntry("operations", List.of("ALLOW:READ", "ALLOW:WRITE"));
+			.containsEntry("operations", List.of("ALLOW:READ", "ALLOW:WRITE"))
+			.doesNotContainKey("principalsOmitted");
 		assertThat(c.get(0).risk()).isEqualTo(CleanupRules.MEDIUM);
 		assertThat(c.get(0).reasons()).containsExactly("orphan_group_acl");
+		// çok principal: ilk 10 ad, toplam ve kalan sayı
+		List<AclBinding> many = new java.util.ArrayList<>();
+		for (int i = 0; i < 25; i++) {
+			many.add(acl(ResourceType.TOPIC, "crowded", PatternType.LITERAL, "User:p" + (char) ('a' + i), AclOperation.READ,
+					allow));
+		}
+		CleanupRules.Candidate crowded = CleanupRules.orphanAcls(many, Set.of(), Set.of(), false).get(0);
+		assertThat(crowded.details()).containsEntry("bindings", 25)
+			.containsEntry("principalCount", 25)
+			.containsEntry("principalsOmitted", 15);
+		assertThat((List<?>) crowded.details().get("principals")).hasSize(10);
 		// grup listesi bilinmiyorsa grup ACL'leri aday olmaz
 		assertThat(CleanupRules.orphanAcls(bindings, Set.of("live"), Set.of(), false))
 			.extracting(CleanupRules.Candidate::name)

@@ -116,12 +116,18 @@ public class NamingTools {
 				"küçük harf; - _ . aynı ayraç; ortam token'ları (" + String.join("|", new java.util.TreeSet<>(NameSimilarity.ENV_TOKENS))
 						+ ") ve sondaki sürüm ekleri (v1, v2...) atılır",
 				"similar", "Levenshtein ≤ " + MAX_DISTANCE + ", ad ≥ " + MIN_LENGTH
-						+ " karakter; aynı gruptakiler ve sadece rakamları farklı olanlar (ör. shard-01/shard-02) hariç"));
+						+ " karakter; aynı gruptakiler hariç, sadece rakamları farklı olanlar (ör. shard-01/shard-02, "
+						+ "x.v1.y/x.v2.y) numericVariants altında"));
 		out.put("collisionGroups", ReportParams.page("groups", groups, limit));
 		Map<String, Object> sim = ReportParams.page("pairs", pairs, limit);
 		sim.put("comparisons", similar.comparisons());
-		if (similar.numericVariantsIgnored() > 0) {
-			sim.put("numericVariantsIgnored", similar.numericVariantsIgnored());
+		if (similar.numericVariants() > 0) {
+			List<Map<String, Object>> numeric = new ArrayList<>();
+			for (NameSimilarity.Pair p : ReportParams.head(similar.numericPairs(), limit)) {
+				numeric.add(Results.map("a", p.a(), "b", p.b(), "distance", p.distance()));
+			}
+			sim.put("numericVariants", Results.map("total", similar.numericVariants(), "returned", numeric.size(),
+					"truncated", similar.numericVariants() > numeric.size(), "pairs", numeric));
 		}
 		if (similar.capped()) {
 			sim.put("capped", true);

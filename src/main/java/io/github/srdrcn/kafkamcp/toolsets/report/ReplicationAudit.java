@@ -1,6 +1,7 @@
 package io.github.srdrcn.kafkamcp.toolsets.report;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -96,7 +97,7 @@ public final class ReplicationAudit {
 				ConfigEntry e = c.get("min.insync.replicas");
 				if (minIsr > rf) {
 					f.add("min_isr_above_rf", Severity.CRITICAL,
-							"min.insync.replicas > RF: acks=all producer'lar hiç yazamaz",
+							"min.insync.replicas > RF: eski broker'larda acks=all yazmalar hep reddedilir; yeni sürümler min ISR'ı RF'e indirir (beklenen dayanıklılık yok)",
 							minIsrItem(t, rf, minIsr, e));
 				}
 				else if (minIsr == rf && rf > 1) {
@@ -106,7 +107,7 @@ public final class ReplicationAudit {
 				}
 				List<Integer> underMin = new ArrayList<>();
 				for (TopicPartitionInfo p : d.partitions()) {
-					if (!Topics.offline(p) && p.isr().size() < minIsr && minIsr <= rf) {
+					if (underMinIsr(p, minIsr)) {
 						underMin.add(p.partition());
 					}
 				}
@@ -124,6 +125,45 @@ public final class ReplicationAudit {
 			}
 		}
 		return withoutConfig;
+	}
+
+	/**
+	 * Partition etkin min ISR'ın altında mı: ISR &lt; min(min.insync.replicas, replika sayısı). Broker'lar (3.9 ve
+	 * 4.1'de doğrulandı) acks=all yazmalarda min ISR'ı replika sayısıyla sınırlar; offline partition'lar hariç.
+	 */
+	public static boolean underMinIsr(TopicPartitionInfo p, long minIsr) {
+		return !Topics.offline(p) && p.isr().size() < Math.min(minIsr, p.replicas().size());
+	}
+
+	/**
+	 * Cluster özeti için min ISR sayıları: etkin min ISR altındaki partition'lar, min.insync.replicas &gt; RF olan
+	 * topic'ler ve config'i okunamadığı için ISR açığı değerlendirilemeyen topic'ler.
+	 */
+	public record MinIsrCounts(int underMinIsrPartitions, int aboveRfTopics, int unknownTopics) {
+	}
+
+	/** {@link MinIsrCounts}'u {@link #evaluate} ile aynı kurallarla hesaplar (config'i olmayan topic'ler atlanır). */
+	public static MinIsrCounts minIsrCounts(Collection<TopicDescription> topics, Map<String, Config> configs,
+			Topics.Reassignments reassignments) {
+		int under = 0;
+		int above = 0;
+		int unknown = 0;
+		for (TopicDescription d : topics) {
+			Long minIsr = ConfigValues.longValue(configs.get(d.name()), "min.insync.replicas");
+			if (minIsr == null) {
+				boolean isrShort = d.partitions()
+					.stream()
+					.anyMatch(p -> !Topics.offline(p) && p.isr().size() < p.replicas().size());
+				unknown += isrShort ? 1 : 0;
+				continue;
+			}
+			int rf = Topics.replicationFactor(d, reassignments);
+			above += rf > 0 && minIsr > rf ? 1 : 0;
+			for (TopicPartitionInfo p : d.partitions()) {
+				under += underMinIsr(p, minIsr) ? 1 : 0;
+			}
+		}
+		return new MinIsrCounts(under, above, unknown);
 	}
 
 	/** Replikaların hepsi aynı (bilinen) rack'teyse o rack, değilse null. */

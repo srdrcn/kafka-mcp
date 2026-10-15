@@ -122,7 +122,11 @@ class ReportScaleTest extends ReportTestBase {
 
 		JsonNode duplicates = timed("report_duplicate_like_topics", args("filter", filter));
 		assertThat(duplicates.at("/similarPairs/total").asInt()).isZero();
-		assertThat(duplicates.at("/similarPairs/numericVariantsIgnored").asInt()).isPositive();
+		JsonNode numeric = duplicates.at("/similarPairs/numericVariants");
+		assertThat(numeric.get("total").asInt()).isGreaterThan(50);
+		assertThat(numeric.get("returned").asInt()).isEqualTo(50);
+		assertThat(numeric.get("truncated").asBoolean()).isTrue();
+		assertThat(numeric.at("/pairs/0/a").asText()).startsWith(prefix);
 
 		JsonNode naming = timed("report_naming_check", args("pattern", filter + "t[0-9]{1,2}", "filter", filter));
 		assertThat(naming.get("matching").asInt()).isEqualTo(100);

@@ -69,7 +69,10 @@ class NamingReportTest extends ReportTestBase {
 		assertThat(pairs.get(0).get("a").asText()).isEqualTo(typo);
 		assertThat(pairs.get(0).get("b").asText()).isEqualTo(customer);
 		assertThat(pairs.get(0).get("distance").asInt()).isEqualTo(1);
-		assertThat(r.at("/similarPairs/numericVariantsIgnored").asInt()).isEqualTo(1);
+		assertThat(r.at("/similarPairs/numericVariants/total").asInt()).isEqualTo(1);
+		assertThat(r.at("/similarPairs/numericVariants/pairs/0/a").asText()).isEqualTo(shard1);
+		assertThat(r.at("/similarPairs/numericVariants/pairs/0/b").asText()).isEqualTo(shard2);
+		assertThat(r.at("/similarPairs/numericVariants/truncated").asBoolean()).isFalse();
 		assertThat(r.at("/similarPairs/comparisons").asLong()).isPositive();
 		assertThat(r.get("rules").toString()).contains("dev|prod|stg|test|uat");
 		assertThat(r.has("partial")).isFalse();

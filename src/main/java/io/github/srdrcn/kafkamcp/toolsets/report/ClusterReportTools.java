@@ -10,8 +10,6 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-import org.apache.kafka.clients.admin.Config;
-import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.FeatureMetadata;
 import org.apache.kafka.clients.admin.FinalizedVersionRange;
 import org.apache.kafka.clients.admin.ListOffsetsResult.ListOffsetsResultInfo;
@@ -22,12 +20,10 @@ import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
-import org.apache.kafka.common.config.ConfigResource;
 import org.springframework.stereotype.Component;
 
 import io.github.srdrcn.kafkamcp.config.ClusterConfig;
 import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
-import io.github.srdrcn.kafkamcp.kafka.Configs;
 import io.github.srdrcn.kafkamcp.kafka.Format;
 import io.github.srdrcn.kafkamcp.kafka.KafkaVersions;
 import io.github.srdrcn.kafkamcp.kafka.LogDirs;
@@ -92,6 +88,8 @@ public class ClusterReportTools {
 			.includeInternal(true)
 			.ranges()
 			.sizes()
+			.configs()
+			.brokerConfig()
 			.groups(SUMMARY_LAG_GROUPS)
 			.reserve(3_000)
 			.run();
@@ -100,6 +98,10 @@ public class ClusterReportTools {
 		Settled<FeatureMetadata> fm = Settled.within(call, features, 2_500);
 		FinalizedVersionRange metadataVersion = fm.ok() ? fm.value().finalizedFeatures().get("metadata.version") : null;
 		Topics.Reassignments reassignments = Topics.reassignments(call, pendingReassignments);
+		if (reassignments.error() != null) {
+			coverage.error("listPartitionReassignments", reassignments.error());
+			coverage.note("Reassignment listesi alınamadı: URP sayısı taşınmakta olan (eklenen) replikaları da içerebilir");
+		}
 
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("cluster", cluster);
@@ -116,11 +118,10 @@ public class ClusterReportTools {
 		}
 		out.put("mode", mode);
 
-		// URP / offline ve min ISR adayları
+		// URP / offline
 		int partitions = 0;
 		int urp = 0;
 		int offline = 0;
-		Set<String> urpTopics = new TreeSet<>();
 		long internal = 0;
 		for (TopicDescription d : scan.topics().values()) {
 			internal += d.isInternal() ? 1 : 0;
@@ -131,35 +132,21 @@ public class ClusterReportTools {
 				}
 				else if (Topics.underReplicated(p, reassignments.adding(new TopicPartition(d.name(), p.partition())))) {
 					urp++;
-					urpTopics.add(d.name());
 				}
 			}
 		}
-		// sürüm (KRaft: metadata.version; ZooKeeper: inter.broker.protocol.version) + URP topic'lerinin min ISR'ı
-		List<ConfigResource> resources = new ArrayList<>();
-		urpTopics.forEach(t -> resources.add(Configs.topic(t)));
-		ConfigResource brokerResource = metadataVersion == null && !brokers.isEmpty()
-				? Configs.broker(brokers.get(0).id()) : null;
-		if (brokerResource != null) {
-			resources.add(brokerResource);
-		}
-		Map<ConfigResource, Settled<Config>> configs = resources.isEmpty() ? Map.of()
-				: Settled.all(call, call.admin().describeConfigs(resources).values(), 1_000);
+		// sürüm (KRaft: metadata.version; ZooKeeper: inter.broker.protocol.version)
 		if (metadataVersion != null) {
 			int level = metadataVersion.maxVersionLevel();
 			String name = KafkaVersions.metadataVersion(level);
 			out.put("kafkaVersion", KafkaVersions.release(level));
 			out.put("versionSource", "metadata.version=" + level + (name == null ? "" : " (" + name + ")"));
 		}
-		else if (brokerResource != null) {
-			Settled<Config> bc = configs.get(brokerResource);
-			ConfigEntry ibp = bc != null && bc.ok() ? bc.value().get("inter.broker.protocol.version") : null;
-			if (ibp != null && ibp.value() != null) {
-				out.put("kafkaVersion", KafkaVersions.releaseOf(ibp.value()));
-				out.put("versionSource", "inter.broker.protocol.version=" + ibp.value());
-			}
-			else if (bc != null && !bc.ok()) {
-				coverage.error("brokerConfig", bc.errorMessage());
+		else {
+			String ibp = ConfigValues.text(scan.brokerConfig(), "inter.broker.protocol.version");
+			if (ibp != null) {
+				out.put("kafkaVersion", KafkaVersions.releaseOf(ibp));
+				out.put("versionSource", "inter.broker.protocol.version=" + ibp);
 			}
 		}
 		out.put("controllerId", info.ok() ? info.value().controllerId() : null);
@@ -176,24 +163,17 @@ public class ClusterReportTools {
 		out.put("topics", Results.map("user", scan.topics().size() - internal, "internal", internal));
 		out.put("partitions", partitions);
 		out.put("size", size(scan));
-		int underMinIsr = 0;
-		int minIsrUnknown = 0;
-		for (String t : urpTopics) {
-			Settled<Config> c = configs.get(Configs.topic(t));
-			Long min = c != null && c.ok() ? ConfigValues.longValue(c.value(), "min.insync.replicas") : null;
-			if (min == null) {
-				minIsrUnknown++;
-				continue;
-			}
-			for (TopicPartitionInfo p : scan.topics().get(t).partitions()) {
-				if (!Topics.offline(p) && p.isr().size() < min) {
-					underMinIsr++;
-				}
-			}
-		}
+		ReplicationAudit.MinIsrCounts minIsr = ReplicationAudit.minIsrCounts(scan.topics().values(), scan.configs(),
+				reassignments);
 		out.put("replication", Results.map("underReplicatedPartitions", urp, "offlinePartitions", offline,
-				"underMinIsrPartitions", underMinIsr, "underMinIsrUnknownTopics", minIsrUnknown > 0 ? minIsrUnknown : null,
+				"underMinIsrPartitions", minIsr.underMinIsrPartitions(), "underMinIsrUnknownTopics",
+				minIsr.unknownTopics() > 0 ? minIsr.unknownTopics() : null, "minIsrAboveRfTopics",
+				scan.configs().isEmpty() && !scan.topics().isEmpty() ? null : minIsr.aboveRfTopics(),
 				"reassigningPartitions", reassignments.byPartition().isEmpty() ? null : reassignments.byPartition().size()));
+		if (minIsr.aboveRfTopics() > 0) {
+			coverage.note("minIsrAboveRfTopics: min.insync.replicas > RF (ayrıntı: report_replication_audit); "
+					+ "underMinIsrPartitions etkin min ISR'a göre: min(min.insync.replicas, replika sayısı)");
+		}
 		int empty = 0;
 		for (String t : scan.topics().keySet()) {
 			empty += Boolean.TRUE.equals(scan.activity(t).empty()) ? 1 : 0;
