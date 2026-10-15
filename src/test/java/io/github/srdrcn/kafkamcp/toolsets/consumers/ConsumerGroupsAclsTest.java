@@ -17,7 +17,7 @@ import org.apache.kafka.common.resource.ResourceType;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** consumer_groups_acls: literal + prefixed GROUP ACL'leri. */
+/** consumer_groups_acls: literal + prefixed GROUP ACLs. */
 class ConsumerGroupsAclsTest extends ConsumersTestBase {
 
 	@Test
@@ -34,7 +34,7 @@ class ConsumerGroupsAclsTest extends ConsumersTestBase {
 		testAdmin().createAcls(bindings).all().get(30, TimeUnit.SECONDS);
 		try {
 			waitUntil(() -> ok("consumer_groups_acls", args("group", group)).get("count").asInt() >= 2,
-					"ACL'ler görünmedi");
+					"ACLs did not show up");
 			JsonNode r = ok("consumer_groups_acls", args("group", group));
 			assertThat(r.get("group").asText()).isEqualTo(group);
 			assertThat(r.get("count").asInt()).isEqualTo(2);
@@ -51,7 +51,7 @@ class ConsumerGroupsAclsTest extends ConsumersTestBase {
 
 			JsonNode none = ok("consumer_groups_acls", args("group", unique("noacl")));
 			assertThat(none.get("count").asInt()).isZero();
-			assertThat(none.get("note").asText()).contains("ACL yok");
+			assertThat(none.get("note").asText()).contains("No ACLs match");
 		}
 		finally {
 			testAdmin().deleteAcls(bindings.stream().map(AclBinding::toFilter).toList()).all().get(30, TimeUnit.SECONDS);

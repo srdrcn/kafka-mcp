@@ -11,17 +11,18 @@ import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** consumers araçlarının ortak parametre şemaları ve ayrıştırıcıları. */
+/** Shared parameter schemas and parsers of the consumers tools. */
 final class Params {
 
 	static final int DEFAULT_INTERVAL_SECONDS = 5;
 
-	/** İkinci örnek (committed + end offset) için deadline'dan ayrılan pay. */
+	/** Share of the deadline kept for the second sample (committed + end offsets). */
 	static final long SECOND_SAMPLE_RESERVE_MS = 4_000;
 
 	/**
-	 * İki örnekli araçlarda ilk örneğin adımları için paylar (grup listesi, committed, end offset): yanıt
-	 * vermeyen grup/partition ilk örnekte bütün süreyi yiyemez; bekleme + ikinci örnek için süre kalır.
+	 * Budgets for the first-sample steps of two-sample tools (group list, committed, end offsets): a group or
+	 * partition that does not respond cannot use up all the time in the first sample; time is left for the
+	 * pause and the second sample.
 	 */
 	static final long FIRST_LIST_RESERVE_MS = 9_000;
 
@@ -29,7 +30,7 @@ final class Params {
 
 	static final long FIRST_END_RESERVE_MS = 5_000;
 
-	/** İkinci örneğin adımları için paylar (committed, end offset, son describe). */
+	/** Budgets for the second-sample steps (committed, end offsets, final describe). */
 	static final long SECOND_COMMITTED_RESERVE_MS = 2_000;
 
 	static final long SECOND_END_RESERVE_MS = 800;
@@ -42,12 +43,12 @@ final class Params {
 	}
 
 	static Map<String, Object> group() {
-		return P.string("Consumer group adı (groupId)");
+		return P.string("Consumer group id");
 	}
 
 	static Map<String, Object> intervalSeconds() {
-		Map<String, Object> m = P.integer("İki örnek arası bekleme, sn (varsayılan " + DEFAULT_INTERVAL_SECONDS + ")",
-				1, 10);
+		Map<String, Object> m = P.integer(
+				"Sampling interval in seconds (default " + DEFAULT_INTERVAL_SECONDS + ", 1-10)", 1, 10);
 		m.put("default", DEFAULT_INTERVAL_SECONDS);
 		return m;
 	}
@@ -64,7 +65,7 @@ final class Params {
 		return call.integer("intervalSeconds", DEFAULT_INTERVAL_SECONDS, 1, 10);
 	}
 
-	/** partitions parametresi: sıralı, tekil; yoksa boş liste. */
+	/** partitions parameter: sorted and distinct; empty list if absent. */
 	static List<Integer> partitions(ToolCall call) {
 		TreeSet<Integer> out = new TreeSet<>();
 		for (String s : call.strings("partitions")) {
@@ -76,15 +77,15 @@ final class Params {
 				out.add(p);
 			}
 			catch (NumberFormatException | ArithmeticException e) {
-				throw new ToolException("partitions negatif olmayan tamsayı listesi olmalı: " + s);
+				throw new ToolException("partitions must be a list of non-negative integers: " + s);
 			}
 		}
 		return new ArrayList<>(out);
 	}
 
 	/**
-	 * İki örnek arası bekler; ikinci örneğe süre kalsın diye gerekirse beklemeyi kısaltır. Gerçek bekleme
-	 * süresini (ms) döner; ikinci örneğe süre kalmadıysa beklemeden -1 döner.
+	 * Waits between the two samples; shortens the wait if needed so that time is left for the second sample.
+	 * Returns the actual wait (ms); returns -1 without waiting if no time is left for the second sample.
 	 */
 	static long pause(ToolCall call, int seconds) {
 		long wanted = seconds * 1000L;
@@ -97,10 +98,10 @@ final class Params {
 	}
 
 	static ToolException noTimeForSecondSample() {
-		return new ToolException("İkinci örnek için süre kalmadı (araç zaman sınırı 15 sn); daha dar filtre deneyin");
+		return new ToolException("No time left for the second sample (tool time limit is 15 s); try a narrower filter");
 	}
 
-	/** Saniye başına oran, 2 ondalık. */
+	/** Rate per second, 2 decimals. */
 	static double rate(long delta, double seconds) {
 		return seconds <= 0 ? 0 : Math.round(delta / seconds * 100) / 100.0;
 	}

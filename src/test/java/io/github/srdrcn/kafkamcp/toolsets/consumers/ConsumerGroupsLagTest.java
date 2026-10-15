@@ -54,8 +54,8 @@ class ConsumerGroupsLagTest extends ConsumersTestBase {
 
 		JsonNode filtered = ok("consumer_groups_lag", args("group", group, "topic", t1));
 		assertThat(filtered.get("totalLag").asLong()).isEqualTo(9);
-		assertThat(error("consumer_groups_lag", args("group", group, "topic", t2))).contains("commit'i ya da ataması yok");
-		assertThat(error("consumer_groups_lag", args("group", unique("nope")))).contains("bulunamadı");
+		assertThat(error("consumer_groups_lag", args("group", group, "topic", t2))).contains("has no commits or assignments");
+		assertThat(error("consumer_groups_lag", args("group", unique("nope")))).contains("not found");
 	}
 
 	@Test
@@ -152,7 +152,7 @@ class ConsumerGroupsLagTest extends ConsumersTestBase {
 	@Test
 	void lagTrendErrors() throws Exception {
 		assertThat(error("consumer_groups_lag_trend", args("group", unique("nope"), "intervalSeconds", 1)))
-			.contains("bulunamadı");
+			.contains("not found");
 	}
 
 	@Test

@@ -17,13 +17,13 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.GroupLagInfo;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.OffsetLookup;
 
 /**
- * Toplu lag taramasında eksik kalanların sayaçları: yanıt vermeyen / hata veren gruplar ve end offset'i
- * alınamayan (lag'i bilinmeyen) partition'lar. Hiçbir şey sessizce düşmesin diye çıktıya eklenir; herhangi
- * biri varsa sonuç {@code "partial": true} işaretlenir.
+ * Counters of what a bulk lag scan could not cover: groups that did not respond or failed, and partitions whose
+ * end offset could not be fetched (lag unknown). Added to the output so that nothing is dropped silently; if any
+ * of them is present, the result is marked {@code "partial": true}.
  */
 public final class ScanIssues {
 
-	/** Çıktıda örnek olarak gösterilen en fazla hata (grup/topic). */
+	/** Maximum number of errors (groups/topics) shown as samples in the output. */
 	public static final int MAX_ERROR_SAMPLES = 5;
 
 	private int noResponse;
@@ -36,7 +36,7 @@ public final class ScanIssues {
 
 	private int groupsWithUnknownLag;
 
-	/** Grubun offset'leri alınamadı: süre içinde yanıt gelmedi ya da hata. */
+	/** The group's offsets could not be fetched: no response in time, or an error. */
 	public void groupError(String groupId, String error, boolean timedOut) {
 		if (timedOut) {
 			noResponse++;
@@ -50,7 +50,7 @@ public final class ScanIssues {
 		groupError(info.groupId(), info.error(), info.timedOut());
 	}
 
-	/** Bir grubun end offset'i alınamayan commit'li partition'ları (lag'i bilinmiyor). */
+	/** Committed partitions of a group whose end offset could not be fetched (lag unknown). */
 	public void unknownLag(Collection<TopicPartition> missing) {
 		if (!missing.isEmpty()) {
 			groupsWithUnknownLag++;
@@ -62,12 +62,12 @@ public final class ScanIssues {
 		unknownLag(info.withoutEndPartitions());
 	}
 
-	/** End offset sorgusunun hatalarını (topic bazında örnek) toplar. */
+	/** Collects the errors of the end offset query (one sample per topic). */
 	public void endErrors(OffsetLookup lookup) {
 		lookup.errorsByTopic().forEach(endErrors::putIfAbsent);
 	}
 
-	/** Sonuç eksik mi (yanıtsız/hatalı grup, lag'i bilinmeyen partition ya da eksik grup listesi)? */
+	/** Is the result incomplete (group without response or with error, unknown lag, or partial group list)? */
 	public boolean incomplete(GroupList list) {
 		return noResponse > 0 || !errors.isEmpty() || !withoutEnd.isEmpty() || list.partial();
 	}

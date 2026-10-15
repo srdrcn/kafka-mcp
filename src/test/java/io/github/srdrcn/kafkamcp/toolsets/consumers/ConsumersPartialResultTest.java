@@ -18,12 +18,16 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolHandler;
 
 /**
- * Yanıt vermeyen grup koordinatörü ve leader'ı olmayan partition (bkz. {@link FaultyAdmin}) aracı
- * düşürmemeli: araç deadline'dan önce biter, sağlam grupları döner ve eksikleri {@code partial} ile sayar.
+ * A group coordinator that does not respond and a partition without a leader (see {@link FaultyAdmin}) must not
+ * fail the tool: it finishes before the deadline, returns the healthy groups and counts the missing ones with
+ * {@code partial}.
  */
 class ConsumersPartialResultTest extends ConsumersTestBase {
 
-	/** okGroup: A'da lag 20; hangGroup: A'da lag 15, koordinatörü yanıt vermez; partGroup: A'da lag 10 + H'de commit. */
+	/**
+	 * okGroup: lag 20 on A; hangGroup: lag 15 on A, its coordinator does not respond; partGroup: lag 10 on A +
+	 * commit on H.
+	 */
 	private record Scenario(String prefix, String topicA, String topicH, String okGroup, String hangGroup,
 			String partGroup) {
 	}
@@ -42,7 +46,7 @@ class ConsumersPartialResultTest extends ConsumersTestBase {
 		return s;
 	}
 
-	/** Handler'ı arızalı admin'le ve verilen deadline ile çağırır; deadline'dan önce bitmeli. */
+	/** Calls the handler with the faulty admin and the given deadline; it must finish before the deadline. */
 	private JsonNode run(ToolHandler handler, Map<String, Object> args, long deadlineMillis, Set<String> hangGroups,
 			Set<String> hangTopics) throws Exception {
 		Admin faulty = FaultyAdmin.wrap(testAdmin(), hangGroups, hangTopics);
@@ -76,7 +80,7 @@ class ConsumersPartialResultTest extends ConsumersTestBase {
 		assertThat(r.get("groupsWithoutResponse").asInt()).isEqualTo(1);
 		assertThat(r.get("groupsWithUnknownLag").asInt()).isEqualTo(1);
 		assertThat(r.get("partitionsWithoutEndOffset").asInt()).isEqualTo(1);
-		assertThat(r.at("/endOffsetErrors/" + s.topicH()).asText()).contains("yanıt gelmedi");
+		assertThat(r.at("/endOffsetErrors/" + s.topicH()).asText()).contains("No response");
 		JsonNode part = r.at("/groups/1");
 		assertThat(part.get("totalLag").asLong()).isEqualTo(10);
 		assertThat(part.get("partitionsWithoutEndOffset").asInt()).isEqualTo(1);
@@ -118,7 +122,7 @@ class ConsumersPartialResultTest extends ConsumersTestBase {
 		assertThat(h.get("topic").asText()).isEqualTo(s.topicH());
 		assertThat(h.at("/partitions/0/committed").asLong()).isEqualTo(2);
 		assertThat(h.at("/partitions/0").has("end")).isFalse();
-		assertThat(h.at("/partitions/0/error").asText()).contains("yanıt gelmedi");
+		assertThat(h.at("/partitions/0/error").asText()).contains("No response");
 
 		JsonNode get = run(groupTools::get, args("group", s.partGroup()), 6_000, Set.of(), Set.of(s.topicH()));
 		assertThat(get.get("partial").asBoolean()).isTrue();
@@ -153,7 +157,7 @@ class ConsumersPartialResultTest extends ConsumersTestBase {
 				Set.of());
 		assertThat(r.get("partial").asBoolean()).isTrue();
 		assertThat(r.get("secondSample").asBoolean()).isFalse();
-		assertThat(r.get("note").asText()).contains("İkinci örnek");
+		assertThat(r.get("note").asText()).contains("No time left for the second sample");
 		assertThat(ids(r.get("laggingAtFirstSample"))).containsExactly(s.okGroup(), s.partGroup(), s.hangGroup());
 		assertThat(r.at("/laggingAtFirstSample/0/lag").asLong()).isEqualTo(20);
 		assertThat(r.at("/laggingAtFirstSample/1/lag").asLong()).isEqualTo(18);

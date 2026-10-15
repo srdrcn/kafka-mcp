@@ -1,6 +1,6 @@
 [ {
   "name" : "consumer_groups_list",
-  "description" : "Consumer group'ları listeler (groupId, state, type, protocol)",
+  "description" : "List consumer groups (groupId, state, type, protocol)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -22,7 +22,7 @@
       },
       "state" : {
         "type" : "string",
-        "description" : "Sadece bu durumdaki gruplar (Assigning/Reconciling sadece KRaft'taki consumer tipi gruplarda)",
+        "description" : "Only groups in this state (Assigning/Reconciling only occur in consumer-type groups on KRaft)",
         "enum" : [ "Stable", "Empty", "PreparingRebalance", "CompletingRebalance", "Dead", "Assigning", "Reconciling", "Unknown" ]
       }
     },
@@ -34,7 +34,7 @@
   }
 }, {
   "name" : "consumer_groups_get",
-  "description" : "Group detayı: state, coordinator, assignor, üyeler ve atamaları, partition bazında committed/end offset, lag ve sahip üye",
+  "description" : "Group details: state, coordinator, assignor, members and assignments, per-partition committed/end offset, lag and owner",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -45,7 +45,7 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       }
     },
     "required" : [ "cluster", "group" ]
@@ -56,7 +56,7 @@
   }
 }, {
   "name" : "consumer_groups_find_by_member",
-  "description" : "Üye host'u ya da clientId'si (regex) eşleşen grupları ve üyelerini bulur (en az biri gerekli)",
+  "description" : "Find groups and members whose host or clientId matches a regex (at least one is required)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -67,11 +67,11 @@
       },
       "host" : {
         "type" : "string",
-        "description" : "Üye host regex'i (ör. 10\\.1\\.2\\.)"
+        "description" : "Member host regex (e.g. 10\\.1\\.2\\.)"
       },
       "clientId" : {
         "type" : "string",
-        "description" : "Üye clientId regex'i"
+        "description" : "Member clientId regex"
       }
     },
     "required" : [ "cluster" ]
@@ -82,7 +82,7 @@
   }
 }, {
   "name" : "consumer_groups_empty",
-  "description" : "Empty durumdaki gruplar, hâlâ commit'li offset'i olan topic'leri ve toplam lag'leri (eski grup adayları)",
+  "description" : "Groups in Empty state with the topics they still have committed offsets on and their total lag (likely stale groups)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -111,7 +111,7 @@
   }
 }, {
   "name" : "consumer_groups_acls",
-  "description" : "Gruba uygulanan ACL'ler (literal, prefixed, wildcard): principal, host, operation, permission",
+  "description" : "ACLs that apply to the group (literal, prefixed, wildcard): principal, host, operation, permission",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -122,7 +122,7 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       }
     },
     "required" : [ "cluster", "group" ]
@@ -133,7 +133,7 @@
   }
 }, {
   "name" : "consumer_groups_lag",
-  "description" : "Grubun lag'i: topic toplamları ve partition bazında committed, end, lag, sahip clientId/host (lag'e göre azalan)",
+  "description" : "Group lag: per-topic totals and per-partition committed, end, lag, owner clientId/host (by lag, descending)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -144,11 +144,11 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       },
       "topic" : {
         "type" : "string",
-        "description" : "Sadece bu topic (tam ad)"
+        "description" : "Only this topic (exact name)"
       }
     },
     "required" : [ "cluster", "group" ]
@@ -159,7 +159,7 @@
   }
 }, {
   "name" : "consumer_groups_with_lag",
-  "description" : "Toplam lag'i eşiğin üstündeki gruplar (azalan): state ve en yüksek lag'li 5 topic ile",
+  "description" : "Groups whose total lag is above the threshold (descending), with state and the 5 topics with the most lag",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -170,7 +170,7 @@
       },
       "threshold" : {
         "type" : "integer",
-        "description" : "En az toplam lag (varsayılan 1000)",
+        "description" : "Minimum total lag (default 1000)",
         "minimum" : 0,
         "default" : 1000
       },
@@ -187,7 +187,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Sadece bu regex'e uyan topic'ler sayılır"
+        "description" : "Only topics matching this regex are counted"
       }
     },
     "required" : [ "cluster" ]
@@ -198,7 +198,7 @@
   }
 }, {
   "name" : "consumer_groups_lag_trend",
-  "description" : "Lag eğilimi: iki örnekle topic bazında lag, tüketim/üretim hızı (mesaj/sn), trend ve yetişme süresi tahmini",
+  "description" : "Lag trend from two samples: per-topic lag, consume/produce rate (msg/s), trend and estimated catch-up time",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -209,11 +209,11 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki örnek arası bekleme, sn (varsayılan 5)",
+        "description" : "Sampling interval in seconds (default 5, 1-10)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 5
@@ -227,7 +227,7 @@
   }
 }, {
   "name" : "consumer_groups_stuck",
-  "description" : "Takılı gruplar: iki örnek arasında commit'i ilerlemeyen, end offset'i artan ve lag'i olan partition'lar",
+  "description" : "Stuck groups: partitions with lag whose commit did not advance between two samples while the end offset grew",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -249,7 +249,7 @@
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "İki örnek arası bekleme, sn (varsayılan 5)",
+        "description" : "Sampling interval in seconds (default 5, 1-10)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 5
@@ -263,7 +263,7 @@
   }
 }, {
   "name" : "consumer_groups_offsets_reset",
-  "description" : "WRITE: Grubun bir topic'teki offset'lerini earliest/latest/offset/timestamp/shift'e taşır; grup Empty olmalı (aktif üye yok)",
+  "description" : "WRITE: Move the group's offsets on a topic to earliest/latest/offset/timestamp/shift; the group must be Empty (no active members)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -274,36 +274,36 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partitions" : {
         "type" : "array",
-        "description" : "Partition numaraları (boşsa topic'in tüm partition'ları)",
+        "description" : "Partition numbers (default: all partitions of the topic)",
         "items" : {
           "type" : "integer"
         }
       },
       "to" : {
         "type" : "string",
-        "description" : "Hedef: earliest, latest, offset, timestamp ya da shift",
+        "description" : "Target: earliest, latest, offset, timestamp or shift",
         "enum" : [ "earliest", "latest", "offset", "timestamp", "shift" ]
       },
       "offset" : {
         "type" : "integer",
-        "description" : "to=offset için hedef offset",
+        "description" : "Target offset for to=offset",
         "minimum" : 0
       },
       "timestamp" : {
         "type" : "string",
-        "description" : "to=timestamp için zaman (ISO-8601 ya da epoch ms)"
+        "description" : "Time for to=timestamp (ISO-8601 or epoch ms)"
       },
       "shiftBy" : {
         "type" : "integer",
-        "description" : "to=shift için mevcut commit'e eklenecek miktar (negatif olabilir)"
+        "description" : "Amount added to the current committed offset for to=shift (can be negative)"
       }
     },
     "required" : [ "cluster", "group", "topic", "to" ]
@@ -314,7 +314,7 @@
   }
 }, {
   "name" : "consumer_groups_offsets_delete",
-  "description" : "WRITE: Grubun bir topic'teki commit edilmiş offset'lerini siler (tüm ya da seçili partition'lar)",
+  "description" : "WRITE: Delete the group's committed offsets on a topic (all or selected partitions)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -325,15 +325,15 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partitions" : {
         "type" : "array",
-        "description" : "Partition numaraları (boşsa commit'i olan tüm partition'lar)",
+        "description" : "Partition numbers (default: all partitions with a commit)",
         "items" : {
           "type" : "integer"
         }
@@ -347,7 +347,7 @@
   }
 }, {
   "name" : "consumer_groups_delete",
-  "description" : "WRITE: Consumer group'u siler; grup boş olmalı (aktif üye yok)",
+  "description" : "WRITE: Delete a consumer group; the group must be empty (no active members)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -358,7 +358,7 @@
       },
       "group" : {
         "type" : "string",
-        "description" : "Consumer group adı (groupId)"
+        "description" : "Consumer group id"
       }
     },
     "required" : [ "cluster", "group" ]

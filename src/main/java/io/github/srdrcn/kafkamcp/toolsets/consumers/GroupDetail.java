@@ -17,18 +17,19 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.GroupLagInfo;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.OffsetLookup;
 
 /**
- * Tek grubun tam görünümü: describe + committed offset'ler + end offset'ler (3 admin isteği). Üyelere
- * atanmış ama commit'i olmayan partition'lar da {@code committed == null} satırı olarak dahildir.
+ * Full view of a single group: describe + committed offsets + end offsets (3 admin requests). Partitions assigned
+ * to members but without a commit are included as {@code committed == null} rows.
  */
 public record GroupDetail(String groupId, ConsumerGroupDescription description, GroupLagInfo lag,
 		Map<TopicPartition, MemberDescription> owners) {
 
-	/** describe adımında committed + end offset sorguları için deadline'dan ayrılan pay. */
+	/** Share of the deadline kept in the describe step for the committed + end offset queries. */
 	static final long DESCRIBE_RESERVE_MS = 5_000;
 
 	/**
-	 * Grubu yükler; grup yoksa Türkçe {@link ToolException}. topicFilter null değilse sadece uyan topic'ler. End
-	 * offset'i süre içinde alınamayan partition'lar (ör. leader'ı yok) satırda error ile döner, araç düşmez.
+	 * Loads the group; {@link ToolException} if the group does not exist. If topicFilter is not null, only matching
+	 * topics. Partitions whose end offset cannot be fetched in time (e.g. no leader) are returned with an error in
+	 * their row instead of failing the tool.
 	 */
 	public static GroupDetail load(ToolCall call, String group, Predicate<String> topicFilter) {
 		ConsumerGroupDescription d = ConsumerGroups.describeExisting(call, group, DESCRIBE_RESERVE_MS);
@@ -44,8 +45,8 @@ public record GroupDetail(String groupId, ConsumerGroupDescription description, 
 		}
 		Map<TopicPartition, MemberDescription> owners = ConsumerGroups.owners(d);
 		Set<TopicPartition> assigned = new LinkedHashSet<>();
-		// KIP-848 reconciling: hedef üyeye aktarılmakta olan (önceki sahibi describe'da görünmeyen) partition'lar
-		// da atanmış sayılır; commit'leri yoksa satırları kaybolmasın.
+		// KIP-848 reconciling: partitions being moved to a target member (whose previous owner is not visible in
+		// describe) also count as assigned, so their rows are not lost when they have no commit.
 		Set<TopicPartition> targeted = new LinkedHashSet<>(owners.keySet());
 		targeted.addAll(ConsumerGroups.incomingOwners(d).keySet());
 		for (TopicPartition tp : targeted) {
