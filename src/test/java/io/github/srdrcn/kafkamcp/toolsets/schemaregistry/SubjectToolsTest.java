@@ -148,7 +148,7 @@ class SubjectToolsTest extends SchemaRegistryIntegrationTest {
 	void subjectsWithSpecialCharactersAreUrlEncoded() {
 		String base = unique("sp");
 		List<String> subjects = List.of(base + ".with.dots-value", base + "/with/slash", base + ":colon:x",
-				base + " with space");
+				base + " with space", base + ";semi=1-value");
 		for (String s : subjects) {
 			JsonNode reg = ok("schemas_register", args("subject", s, "schema", SrRest.V1));
 			assertThat(reg.get("created").asBoolean()).as(s).isTrue();

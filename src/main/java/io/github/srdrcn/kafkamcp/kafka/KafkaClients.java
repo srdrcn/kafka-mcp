@@ -40,6 +40,9 @@ public class KafkaClients implements DisposableBean {
 
 	private final Map<String, AdminHolder> admins = new ConcurrentHashMap<>();
 
+	/** Eşzamanlı consumer'lar aynı client.id'yi paylaşmasın (JMX AppInfo çakışması). */
+	private static final java.util.concurrent.atomic.AtomicLong READERS = new java.util.concurrent.atomic.AtomicLong();
+
 	public KafkaClients(KafkaMcpConfig config) {
 		this.config = config;
 		KerberosConfig k = config.getKerberos();
@@ -89,7 +92,7 @@ public class KafkaClients implements DisposableBean {
 		props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
 		props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 500);
 		props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_uncommitted");
-		props.put(CommonClientConfigs.CLIENT_ID_CONFIG, "kafka-mcp-" + c.getName() + "-reader");
+		props.put(CommonClientConfigs.CLIENT_ID_CONFIG, "kafka-mcp-" + c.getName() + "-reader-" + READERS.incrementAndGet());
 		props.keySet().removeIf(k -> k.startsWith("admin."));
 		if (overrides != null) {
 			props.putAll(overrides);

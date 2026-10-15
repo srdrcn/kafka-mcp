@@ -11,12 +11,15 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.FullyQualifiedAnnotationBeanNameGenerator;
 
 import io.github.srdrcn.kafkamcp.config.ConfigException;
 import io.github.srdrcn.kafkamcp.config.ConfigLoader;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 
-@SpringBootApplication
+// Toolset'lerde aynı adlı sınıflar olabilir (ör. messages.SchemaTools / schemaregistry.SchemaTools):
+// bean adları paket dahil üretilir.
+@SpringBootApplication(nameGenerator = FullyQualifiedAnnotationBeanNameGenerator.class)
 public class KafkaMcpApplication {
 
 	static final String USAGE = """

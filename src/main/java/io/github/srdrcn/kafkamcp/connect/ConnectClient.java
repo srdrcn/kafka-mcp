@@ -128,7 +128,10 @@ public class ConnectClient {
 	}
 
 	static RestClient build(String base) {
-		HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		HttpClient http = HttpClient.newBuilder()
+			.version(HttpClient.Version.HTTP_1_1)
+			.connectTimeout(Duration.ofSeconds(5))
+			.build();
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
 		factory.setReadTimeout(Duration.ofMillis(KafkaClients.TIMEOUT_MS - 1_000));
 		return RestClient.builder().requestFactory(factory).build();

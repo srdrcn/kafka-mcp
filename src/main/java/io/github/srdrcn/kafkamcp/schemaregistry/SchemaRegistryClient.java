@@ -203,12 +203,19 @@ public class SchemaRegistryClient {
 
 	}
 
+	/**
+	 * URL path parçası kodlaması: unreserved dışındaki her karakter kodlanır. ';' gibi sub-delim'ler açık
+	 * kalırsa Schema Registry (Jetty) ';' sonrasını matrix parametresi sayıp atar ve başka bir subject'e gider.
+	 */
 	public static String enc(String segment) {
-		return org.springframework.web.util.UriUtils.encodePathSegment(segment, java.nio.charset.StandardCharsets.UTF_8);
+		return org.springframework.web.util.UriUtils.encode(segment, java.nio.charset.StandardCharsets.UTF_8);
 	}
 
 	static RestClient build() {
-		HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+		HttpClient http = HttpClient.newBuilder()
+			.version(HttpClient.Version.HTTP_1_1)
+			.connectTimeout(Duration.ofSeconds(5))
+			.build();
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
 		factory.setReadTimeout(Duration.ofMillis(KafkaClients.TIMEOUT_MS - 1_000));
 		return RestClient.builder().requestFactory(factory).build();
