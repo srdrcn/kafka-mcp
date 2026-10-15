@@ -7,6 +7,8 @@ ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi9/openjdk-21-runtime:latest
 
 FROM ${BUILDER_IMAGE} AS build
 USER 0
+# mvnw unpacks the Maven distribution with tar xz (no unzip in the image), which needs gzip
+RUN microdnf install -y gzip && microdnf clean all
 WORKDIR /build
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
