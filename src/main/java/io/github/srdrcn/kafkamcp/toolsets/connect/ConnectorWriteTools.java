@@ -100,8 +100,8 @@ public class ConnectorWriteTools {
 		if (!a.settled()) {
 			String note;
 			if (s != null && s.equals(before)) {
-				note = "Status is the same as before the call: the operation may not be applied yet, or it finished"
-						+ " too fast to see and returned to the same state";
+				note = "Status is the same as before the call: the operation may not have been applied yet, or it may"
+						+ " have finished too fast to observe and returned to the same state";
 			}
 			else if (target != null && s != null && target.equals(s.state())) {
 				note = "Connector is " + target + " but its tasks have not settled yet";
@@ -197,8 +197,8 @@ public class ConnectorWriteTools {
 		out.put("settled", a.settled());
 		if (!a.settled()) {
 			out.put("note", (now != null && now.equals(old)
-					? "Task status is the same as before the call: the restart may not be visible yet, or the task"
-							+ " failed again with the same error"
+					? "Task status is the same as before the call: the restart may not be visible yet, or the task may"
+							+ " have failed again with the same error"
 					: "Task is not RUNNING/FAILED yet") + "; check again with connectors_status"
 					+ (a.error() == null ? "" : " (" + a.error() + ")"));
 		}

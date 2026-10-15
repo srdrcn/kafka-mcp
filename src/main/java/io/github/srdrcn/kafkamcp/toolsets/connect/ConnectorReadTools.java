@@ -73,7 +73,8 @@ public class ConnectorReadTools {
 					.connect()
 					.required("name", nameParam())
 					.listParams()
-					.param("filter", P.string("Filter on the topic (sink) or the partition JSON (source) (regex, partial match)"))
+					.param("filter", P.string(
+							"Regex filter (partial match) on the topic for sink connectors or the partition JSON for source connectors"))
 					.handler(this::offsets));
 	}
 

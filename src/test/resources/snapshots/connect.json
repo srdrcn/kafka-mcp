@@ -228,7 +228,7 @@
       },
       "filter" : {
         "type" : "string",
-        "description" : "Filter on the topic (sink) or the partition JSON (source) (regex, partial match)"
+        "description" : "Regex filter (partial match) on the topic for sink connectors or the partition JSON for source connectors"
       },
       "limit" : {
         "type" : "integer",
