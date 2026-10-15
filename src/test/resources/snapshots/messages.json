@@ -1,6 +1,6 @@
 [ {
   "name" : "messages_consume",
-  "description" : "Topic'ten mesaj okur (group'suz, commit'siz): latest/earliest/offset/timestamp, key/value/header filtresi, format çözme",
+  "description" : "Read messages without a consumer group or commit: from latest/earliest/offset/timestamp, key/value/header filters, format decoding",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -11,65 +11,65 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partition" : {
         "type" : "integer",
-        "description" : "Partition (boşsa tüm partition'lar)",
+        "description" : "Partition (all partitions if omitted)",
         "minimum" : 0
       },
       "from" : {
         "type" : "string",
-        "description" : "Başlangıç (varsayılan latest = son maxRecords kayıt; yeni veri beklenmez)",
+        "description" : "Start position (default latest = the last maxRecords records; does not wait for new data)",
         "enum" : [ "earliest", "latest", "offset", "timestamp" ]
       },
       "offset" : {
         "type" : "integer",
-        "description" : "from=offset için başlangıç offset'i (seçilen her partition'a uygulanır)",
+        "description" : "Start offset for from=offset (applied to every selected partition)",
         "minimum" : 0
       },
       "timestamp" : {
         "type" : "string",
-        "description" : "from=timestamp için başlangıç zamanı: ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+        "description" : "Start time for from=timestamp: ISO-8601 (e.g. 2025-01-31T10:00:00Z) or epoch ms"
       },
       "keyRegex" : {
         "type" : "string",
-        "description" : "Key regex filtresi (çözülmüş metinde kısmi eşleşme)"
+        "description" : "Key regex filter (partial match on the decoded text)"
       },
       "valueRegex" : {
         "type" : "string",
-        "description" : "Value regex filtresi (çözülmüş metinde kısmi eşleşme)"
+        "description" : "Value regex filter (partial match on the decoded text)"
       },
       "headerKey" : {
         "type" : "string",
-        "description" : "Sadece bu header'ı taşıyan kayıtlar"
+        "description" : "Only records that carry this header"
       },
       "headerValueRegex" : {
         "type" : "string",
-        "description" : "headerKey değeri için regex (headerKey ile birlikte)"
+        "description" : "Regex for the headerKey value (requires headerKey)"
       },
       "format" : {
         "type" : "string",
-        "description" : "Value formatı (varsayılan string)",
+        "description" : "Value format (default string)",
         "enum" : [ "string", "json", "hex", "long", "avro" ],
         "default" : "string"
       },
       "keyFormat" : {
         "type" : "string",
-        "description" : "Key formatı (varsayılan string)",
+        "description" : "Key format (default string)",
         "enum" : [ "string", "json", "hex", "long", "avro" ],
         "default" : "string"
       },
       "maxValueChars" : {
         "type" : "integer",
-        "description" : "Value/key için en fazla karakter; fazlası kesilir (varsayılan 4096)",
+        "description" : "Maximum characters per value/key; longer values are truncated (default 4096)",
         "minimum" : 16,
         "maximum" : 100000,
         "default" : 4096
       },
       "maxScan" : {
         "type" : "integer",
-        "description" : "Filtrede/latest'te taranacak en fazla kayıt (varsayılan 10000)",
+        "description" : "Maximum records to scan with filters or from=latest (default 10000)",
         "minimum" : 1,
         "maximum" : 100000,
         "default" : 10000
@@ -90,7 +90,7 @@
   }
 }, {
   "name" : "messages_get",
-  "description" : "Tek bir mesajı (topic/partition/offset) tam value'suyla getirir",
+  "description" : "Get a single message (topic/partition/offset) with its full value",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -101,7 +101,7 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partition" : {
         "type" : "integer",
@@ -115,13 +115,13 @@
       },
       "format" : {
         "type" : "string",
-        "description" : "Value formatı (varsayılan string)",
+        "description" : "Value format (default string)",
         "enum" : [ "string", "json", "hex", "long", "avro" ],
         "default" : "string"
       },
       "keyFormat" : {
         "type" : "string",
-        "description" : "Key formatı (varsayılan string)",
+        "description" : "Key format (default string)",
         "enum" : [ "string", "json", "hex", "long", "avro" ],
         "default" : "string"
       }
@@ -134,7 +134,7 @@
   }
 }, {
   "name" : "messages_headers",
-  "description" : "Okunan mesajlardaki header istatistikleri: anahtar başına sayı, farklı değer sayısı, örnek değerler",
+  "description" : "Summarize headers of the latest (or earliest) messages: count per key, distinct value count, sample values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -145,16 +145,16 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partition" : {
         "type" : "integer",
-        "description" : "Partition (boşsa tüm partition'lar)",
+        "description" : "Partition (all partitions if omitted)",
         "minimum" : 0
       },
       "from" : {
         "type" : "string",
-        "description" : "Başlangıç (varsayılan latest = son kayıtlar)",
+        "description" : "Start position (default latest = the most recent records)",
         "enum" : [ "earliest", "latest" ]
       },
       "maxRecords" : {
@@ -173,7 +173,7 @@
   }
 }, {
   "name" : "messages_offset_for_timestamp",
-  "description" : "Partition başına zamanı verilen andan büyük/eşit ilk mesajın offset'ini ve zamanını bulur",
+  "description" : "Find, per partition, the offset and time of the first message at or after the given time",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -184,15 +184,15 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "timestamp" : {
         "type" : "string",
-        "description" : "Zaman: ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+        "description" : "Time: ISO-8601 (e.g. 2025-01-31T10:00:00Z) or epoch ms"
       },
       "partition" : {
         "type" : "integer",
-        "description" : "Partition (boşsa tüm partition'lar)",
+        "description" : "Partition (all partitions if omitted)",
         "minimum" : 0
       }
     },
@@ -204,7 +204,7 @@
   }
 }, {
   "name" : "messages_count",
-  "description" : "Offset ya da zaman aralığındaki mesaj sayısı (partition başına offset farkı; yaklaşık)",
+  "description" : "Count messages in an offset or time range (offset difference per partition; approximate)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -215,30 +215,30 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partition" : {
         "type" : "integer",
-        "description" : "Partition (boşsa tüm partition'lar)",
+        "description" : "Partition (all partitions if omitted)",
         "minimum" : 0
       },
       "fromOffset" : {
         "type" : "integer",
-        "description" : "Başlangıç offset'i (dahil; varsayılan earliest)",
+        "description" : "Start offset (inclusive; default earliest)",
         "minimum" : 0
       },
       "toOffset" : {
         "type" : "integer",
-        "description" : "Bitiş offset'i (hariç; varsayılan latest)",
+        "description" : "End offset (exclusive; default latest)",
         "minimum" : 0
       },
       "fromTimestamp" : {
         "type" : "string",
-        "description" : "Başlangıç zamanı (dahil): ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+        "description" : "Start time (inclusive): ISO-8601 (e.g. 2025-01-31T10:00:00Z) or epoch ms"
       },
       "toTimestamp" : {
         "type" : "string",
-        "description" : "Bitiş zamanı (hariç): ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+        "description" : "End time (exclusive): ISO-8601 (e.g. 2025-01-31T10:00:00Z) or epoch ms"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -249,7 +249,7 @@
   }
 }, {
   "name" : "messages_partition_for_key",
-  "description" : "Key'in Kafka varsayılan partitioner'ıyla (murmur2) düşeceği partition'ı hesaplar",
+  "description" : "Compute the partition a key maps to with Kafka's default partitioner (murmur2)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -260,15 +260,15 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "key" : {
         "type" : "string",
-        "description" : "Key (keyFormat'a göre: metin, hex ya da sayı); metin boşluklarıyla, olduğu gibi hash'lenir"
+        "description" : "Key (text, hex or number depending on keyFormat); text is hashed as is, including whitespace"
       },
       "keyFormat" : {
         "type" : "string",
-        "description" : "Key formatı (varsayılan string)",
+        "description" : "Key format (default string)",
         "enum" : [ "string", "hex", "long" ],
         "default" : "string"
       }
@@ -281,7 +281,7 @@
   }
 }, {
   "name" : "messages_sample_schema",
-  "description" : "Son mesajlardan value yapısını çıkarır: JSON yolları, tipler, null/eksik oranları, örnek değer",
+  "description" : "Infer the value structure from recent messages: JSON paths, types, null/missing ratios, example values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -292,16 +292,16 @@
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "partition" : {
         "type" : "integer",
-        "description" : "Partition (boşsa tüm partition'lar)",
+        "description" : "Partition (all partitions if omitted)",
         "minimum" : 0
       },
       "format" : {
         "type" : "string",
-        "description" : "Value formatı (varsayılan json)",
+        "description" : "Value format (default json)",
         "enum" : [ "json", "avro" ],
         "default" : "json"
       },
@@ -321,7 +321,7 @@
   }
 }, {
   "name" : "serdes_list",
-  "description" : "Desteklenen mesaj formatları (string/json/hex/long/avro) ve cluster başına avro desteği",
+  "description" : "List supported message formats (string/json/hex/long/avro) and avro support per cluster",
   "inputSchema" : {
     "type" : "object",
     "properties" : {

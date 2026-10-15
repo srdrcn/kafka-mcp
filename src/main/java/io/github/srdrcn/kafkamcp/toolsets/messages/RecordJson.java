@@ -15,13 +15,13 @@ import org.apache.kafka.common.record.TimestampType;
 import com.fasterxml.jackson.databind.node.NullNode;
 
 /**
- * {@link ConsumerRecord}'u kompakt JSON map'ine çevirir: partition, offset, timestamp (ISO-8601 UTC) +
- * timestampType, çözülmüş key/value (kesilme/hata bayraklarıyla), header'lar (value ile aynı karakter sınırı;
- * kesilenler {@code headersTruncated} listesinde) ve serialized boyutlar.
+ * Converts a {@link ConsumerRecord} into a compact JSON map: partition, offset, timestamp (ISO-8601 UTC) +
+ * timestampType, decoded key/value (with truncation/error flags), headers (same character limit as the value;
+ * truncated ones are listed in {@code headersTruncated}) and serialized sizes.
  */
 public final class RecordJson {
 
-	/** UTF-8 olmayan header değerlerinin öneki. */
+	/** Prefix of non-UTF-8 header values. */
 	public static final String HEX_PREFIX = "hex:";
 
 	private RecordJson() {
@@ -79,13 +79,13 @@ public final class RecordJson {
 	}
 
 	/**
-	 * Header'lar: ad → değer (tekrarlayan adlar liste olur; UTF-8 olmayanlar "hex:" önekli) ve değeri
-	 * {@code maxChars}'ta kesilen header adları.
+	 * Headers: name → value (repeated names become a list; non-UTF-8 values get a "hex:" prefix) and the names of
+	 * headers whose value was truncated at {@code maxChars}.
 	 */
 	public record HeaderValues(Map<String, Object> values, List<String> truncated) {
 	}
 
-	/** Header'ları çözer; {@code maxChars}'tan uzun değerler kesilir ve adları {@code truncated}'a eklenir. */
+	/** Decodes the headers; values longer than {@code maxChars} are truncated and their names added to {@code truncated}. */
 	public static HeaderValues headers(Headers headers, int maxChars) {
 		Map<String, Object> out = new LinkedHashMap<>();
 		Set<String> truncated = new LinkedHashSet<>();
@@ -117,7 +117,7 @@ public final class RecordJson {
 		return new HeaderValues(out, new ArrayList<>(truncated));
 	}
 
-	/** Header değerinin tam (kesilmemiş) metni: UTF-8 ise metin, değilse "hex:..." ; null ise boş metin. */
+	/** The full (untruncated) text of a header value: the text if UTF-8, otherwise "hex:..."; empty text if null. */
 	public static String headerText(byte[] value) {
 		if (value == null) {
 			return "";

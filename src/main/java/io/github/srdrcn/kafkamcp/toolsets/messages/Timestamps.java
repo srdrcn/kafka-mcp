@@ -11,33 +11,34 @@ import java.time.format.DateTimeParseException;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Zaman parametreleri (ISO-8601 ya da epoch ms) ve ISO-8601 UTC çıktı. */
+/** Time parameters (ISO-8601 or epoch ms) and ISO-8601 UTC output. */
 public final class Timestamps {
 
 	private Timestamps() {
 	}
 
-	/** Zorunlu zaman parametresi (epoch ms). */
+	/** Required time parameter (epoch ms). */
 	public static long required(ToolCall call, String name) {
 		return parse(name, call.str(name));
 	}
 
-	/** Opsiyonel zaman parametresi (epoch ms) ya da null. */
+	/** Optional time parameter (epoch ms), or null. */
 	public static Long optional(ToolCall call, String name) {
 		String v = call.str(name, null);
 		return v == null ? null : parse(name, v);
 	}
 
 	/**
-	 * ISO-8601 (2025-01-31T10:00:00Z, +03:00 ofsetli, ofsetsiz = UTC, sadece tarih = gün başı UTC) ya da epoch ms.
-	 * Negatif değer (1970 öncesi) reddedilir: listOffsets'te -1/-2/-3... LATEST/EARLIEST/MAX_TIMESTAMP gibi özel
-	 * anlamlar taşır ve broker sürümüne göre farklı sonuç (ya da eski broker'da UnsupportedVersionException) verir.
+	 * ISO-8601 (2025-01-31T10:00:00Z, with an offset such as +03:00, without an offset = UTC, date only = start of
+	 * day UTC) or epoch ms. Negative values (before 1970) are rejected: in listOffsets -1/-2/-3... have special
+	 * meanings such as LATEST/EARLIEST/MAX_TIMESTAMP and give different results depending on the broker version (or
+	 * an UnsupportedVersionException on an old broker).
 	 */
 	public static long parse(String name, String value) {
 		long ms = parseAny(name, value);
 		if (ms < 0) {
-			throw new ToolException("Geçersiz zaman (" + name + "): " + value
-					+ " — zaman negatif/1970 öncesi olamaz (epoch milisaniye >= 0)");
+			throw new ToolException("Invalid time (" + name + "): " + value
+					+ " — time cannot be negative/before 1970 (epoch milliseconds >= 0)");
 		}
 		return ms;
 	}
@@ -57,25 +58,25 @@ public final class Timestamps {
 			return Instant.parse(iso).toEpochMilli();
 		}
 		catch (DateTimeParseException ignored) {
-			// sıradaki biçim
+			// try the next format
 		}
 		try {
 			return OffsetDateTime.parse(iso).toInstant().toEpochMilli();
 		}
 		catch (DateTimeParseException ignored) {
-			// sıradaki biçim
+			// try the next format
 		}
 		try {
 			return ZonedDateTime.parse(iso).toInstant().toEpochMilli();
 		}
 		catch (DateTimeParseException ignored) {
-			// sıradaki biçim
+			// try the next format
 		}
 		try {
 			return LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC).toEpochMilli();
 		}
 		catch (DateTimeParseException ignored) {
-			// sıradaki biçim
+			// try the next format
 		}
 		try {
 			return LocalDate.parse(iso).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
@@ -85,14 +86,14 @@ public final class Timestamps {
 		}
 	}
 
-	/** Epoch ms → ISO-8601 UTC; negatifse (zaman yok) null. */
+	/** Epoch ms → ISO-8601 UTC; null if negative (no timestamp). */
 	public static String iso(long epochMillis) {
 		return epochMillis < 0 ? null : Instant.ofEpochMilli(epochMillis).toString();
 	}
 
 	private static ToolException invalid(String name, String value) {
-		return new ToolException("Geçersiz zaman (" + name + "): " + value
-				+ " (ISO-8601 ör. 2025-01-31T10:00:00Z ya da epoch milisaniye)");
+		return new ToolException("Invalid time (" + name + "): " + value
+				+ " (use ISO-8601, e.g. 2025-01-31T10:00:00Z, or epoch milliseconds)");
 	}
 
 }

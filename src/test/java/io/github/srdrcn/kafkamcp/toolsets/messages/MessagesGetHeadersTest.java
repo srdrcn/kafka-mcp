@@ -17,7 +17,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 
-/** messages_get (tek kayıt, tam value, aralık dışı hata) ve messages_headers (header istatistikleri). */
+/** messages_get (single record, full value, out-of-range error) and messages_headers (header statistics). */
 class MessagesGetHeadersTest extends KafkaIntegrationTest {
 
 	private static String topic;
@@ -62,8 +62,9 @@ class MessagesGetHeadersTest extends KafkaIntegrationTest {
 	@Test
 	void getRejectsOffsetOutOfRange() {
 		String e = error("messages_get", args("topic", topic, "partition", 0, "offset", 99));
-		assertThat(e).contains("aralık dışında").contains("earliest=0").contains("latest=6");
-		assertThat(error("messages_get", args("topic", topic, "partition", 5, "offset", 0))).contains("Partition 5 yok");
+		assertThat(e).contains("out of range").contains("earliest=0").contains("latest=6");
+		assertThat(error("messages_get", args("topic", topic, "partition", 5, "offset", 0)))
+			.contains("Partition 5 does not exist");
 		assertThat(error("messages_get", args("topic", topic, "partition", 0))).contains("offset");
 	}
 
@@ -115,7 +116,7 @@ class MessagesGetHeadersTest extends KafkaIntegrationTest {
 		assertThat(full.get("headers").get("bin").asText()).isEqualTo(hex);
 		assertThat(full.has("headersTruncated")).isFalse();
 
-		// varsayılan maxValueChars (4096): uzun stacktrace kesilir ve işaretlenir, 1204 karakterlik hex kesilmez
+		// default maxValueChars (4096): the long stacktrace is truncated and flagged, the 1204-character hex is not
 		JsonNode consumed = ok("messages_consume", args("topic", t, "from", "earliest", "maxRecords", 1));
 		JsonNode rec = consumed.get("records").get(0);
 		assertThat(rec.get("headers").get("kafka_dlt-exception-stacktrace").asText())
@@ -129,7 +130,7 @@ class MessagesGetHeadersTest extends KafkaIntegrationTest {
 		assertThat(smallRec.get("headers").get("bin").asText()).hasSize(100);
 		assertThat(smallRec.get("headersTruncated").toString()).contains("kafka_dlt-exception-stacktrace").contains("bin");
 
-		// farklı değer sayımı kesilmemiş değerler üzerinden: iki stacktrace sadece son karakterde ayrılır
+		// distinct values are counted on the untruncated values: the two stacktraces differ only in the last character
 		JsonNode stats = ok("messages_headers", args("topic", t, "from", "earliest"));
 		Map<String, JsonNode> byKey = new HashMap<>();
 		stats.get("headers").forEach(h -> byKey.put(h.get("key").asText(), h));
