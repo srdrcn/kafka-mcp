@@ -1,0 +1,196 @@
+package io.github.srdrcn.kafkamcp.toolsets.messages;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
+import io.github.srdrcn.kafkamcp.support.TestConfigs;
+
+/** messages_consume: başlangıç modları, sıralama, filtreler, formatlar; group/commit oluşmaz. */
+class MessagesConsumeTest extends KafkaIntegrationTest {
+
+	/** 3 partition, 30 kayıt: i → partition i%3, zaman BASE+i sn, key k{i%5}, value v{i}. */
+	private static String topic;
+
+	@BeforeAll
+	static void produce() throws Exception {
+		topic = unique("msg-consume");
+		TestData.createTopic(testAdmin(), topic, 3);
+		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
+		for (int i = 0; i < 30; i++) {
+			ProducerRecord<byte[], byte[]> r = TestData.record(topic, i % 3, TestData.BASE_TS + i * 1000L, "k" + (i % 5),
+					"v" + i + (i % 4 == 0 ? " ERROR disk dolu" : " ok"));
+			if (i % 2 == 0) {
+				r.headers().add(new RecordHeader("trace", ("t-" + i).getBytes(StandardCharsets.UTF_8)));
+			}
+			records.add(r);
+		}
+		TestData.send(records);
+	}
+
+	private static List<String> values(JsonNode r) {
+		List<String> out = new ArrayList<>();
+		r.get("records").forEach(n -> out.add(n.get("value").asText().split(" ")[0]));
+		return out;
+	}
+
+	@Test
+	void latestReturnsMostRecentByTimestampWithoutGroups() throws Exception {
+		Set<String> groupsBefore = TestData.groupIds(testAdmin());
+		JsonNode r = ok("messages_consume", args("topic", topic, "maxRecords", 5));
+		assertThat(r.get("from").asText()).isEqualTo("latest");
+		assertThat(r.get("order").asText()).isEqualTo("timestamp");
+		assertThat(r.get("partitions").asInt()).isEqualTo(3);
+		assertThat(r.get("returned").asInt()).isEqualTo(5);
+		assertThat(values(r)).containsExactly("v25", "v26", "v27", "v28", "v29");
+		assertThat(r.get("reachedEnd").asBoolean()).isTrue();
+		assertThat(r.has("partial")).isFalse();
+		JsonNode last = r.get("records").get(4);
+		assertThat(last.get("partition").asInt()).isEqualTo(29 % 3);
+		assertThat(last.get("key").asText()).isEqualTo("k4");
+		assertThat(last.get("timestamp").asText()).isEqualTo(Timestamps.iso(TestData.BASE_TS + 29_000L));
+		assertThat(last.get("timestampType").asText()).isEqualTo("CreateTime");
+		assertThat(last.get("valueSize").asInt()).isEqualTo("v29 ok".length());
+		assertThat(r.get("records").get(3).get("headers").get("trace").asText()).isEqualTo("t-28");
+		assertThat(TestData.groupIds(testAdmin())).isEqualTo(groupsBefore);
+	}
+
+	@Test
+	void earliestSplitsMaxRecordsFairlyAcrossPartitions() {
+		JsonNode r = ok("messages_consume", args("topic", topic, "from", "earliest", "maxRecords", 6));
+		assertThat(r.get("order").asText()).isEqualTo("partition,offset");
+		assertThat(r.get("returned").asInt()).isEqualTo(6);
+		assertThat(values(r)).containsExactly("v0", "v3", "v1", "v4", "v2", "v5");
+		assertThat(r.get("reachedEnd").asBoolean()).isFalse();
+
+		JsonNode all = ok("messages_consume", args("topic", topic, "from", "earliest", "maxRecords", 500));
+		assertThat(all.get("returned").asInt()).isEqualTo(30);
+		assertThat(all.get("reachedEnd").asBoolean()).isTrue();
+	}
+
+	@Test
+	void offsetModeReadsFromGivenOffsetAndReportsNextOffset() {
+		JsonNode r = ok("messages_consume", args("topic", topic, "partition", 1, "from", "offset", "offset", 3,
+				"maxRecords", 2));
+		assertThat(r.get("records")).hasSize(2);
+		assertThat(r.get("records").get(0).get("offset").asLong()).isEqualTo(3);
+		assertThat(values(r)).containsExactly("v10", "v13");
+		assertThat(r.get("nextOffset").asLong()).isEqualTo(5);
+
+		// from verilmezse offset'ten çıkarılır; latest'ten büyük offset okunacak kayıt bırakmaz
+		JsonNode beyond = ok("messages_consume", args("topic", topic, "partition", 1, "offset", 1000));
+		assertThat(beyond.get("from").asText()).isEqualTo("offset");
+		assertThat(beyond.get("returned").asInt()).isZero();
+		assertThat(beyond.get("notes").get(0).asText()).contains("latest");
+
+		assertThat(error("messages_consume", args("topic", topic, "from", "offset"))).contains("offset");
+		assertThat(error("messages_consume", args("topic", topic, "from", "latest", "offset", 3)))
+			.contains("from=offset");
+	}
+
+	@Test
+	void timestampModeStartsAtFirstRecordAtOrAfterTime() {
+		JsonNode r = ok("messages_consume", args("topic", topic, "from", "timestamp", "timestamp",
+				Timestamps.iso(TestData.BASE_TS + 24_500L), "maxRecords", 50));
+		assertThat(values(r)).containsExactlyInAnyOrder("v25", "v26", "v27", "v28", "v29");
+		assertThat(r.get("reachedEnd").asBoolean()).isTrue();
+
+		JsonNode epoch = ok("messages_consume", args("topic", topic, "partition", 0, "timestamp",
+				String.valueOf(TestData.BASE_TS + 27_000L)));
+		assertThat(values(epoch)).containsExactly("v27");
+	}
+
+	@Test
+	void filtersScanAndReportCounts() {
+		JsonNode r = ok("messages_consume", args("topic", topic, "from", "earliest", "valueRegex", "ERROR",
+				"keyRegex", "^k0$", "maxRecords", 50));
+		// value ERROR: i%4==0, key k0: i%5==0 -> i=0,20
+		assertThat(values(r)).containsExactlyInAnyOrder("v0", "v20");
+		assertThat(r.get("scanned").asInt()).isEqualTo(30);
+		assertThat(r.get("matched").asInt()).isEqualTo(2);
+		assertThat(r.get("reachedEnd").asBoolean()).isTrue();
+		assertThat(r.get("filters").get("valueRegex").asText()).isEqualTo("ERROR");
+
+		JsonNode h = ok("messages_consume", args("topic", topic, "headerKey", "trace", "headerValueRegex", "^t-1\\d$",
+				"maxRecords", 3));
+		// latest + filtre: eşleşenlerin (10..18 çiftleri) en yeni 3'ü
+		assertThat(values(h)).containsExactly("v14", "v16", "v18");
+		assertThat(h.get("matched").asInt()).isEqualTo(5);
+
+		JsonNode limited = ok("messages_consume", args("topic", topic, "from", "earliest", "valueRegex", "nomatch",
+				"maxScan", 6));
+		assertThat(limited.get("scanned").asInt()).isEqualTo(6);
+		assertThat(limited.get("scanLimitReached").asBoolean()).isTrue();
+		assertThat(limited.get("reachedEnd").asBoolean()).isFalse();
+
+		assertThat(error("messages_consume", args("topic", topic, "headerValueRegex", "x"))).contains("headerKey");
+		assertThat(error("messages_consume", args("topic", topic, "valueRegex", "(unclosed"))).contains("regex");
+	}
+
+	@Test
+	void decodesFormatsAndFlagsProblems() throws Exception {
+		String t = unique("msg-formats");
+		TestData.createTopic(testAdmin(), t, 1);
+		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
+		records.add(new ProducerRecord<>(t, 0, null, TestData.longBytes(7L),
+				TestData.utf8("{\"id\":7,\"name\":\"ayşe\",\"opt\":null,\"tags\":[\"a\"]}")));
+		records.add(new ProducerRecord<>(t, 0, null, TestData.longBytes(8L), TestData.utf8("not json")));
+		records.add(new ProducerRecord<>(t, 0, null, new byte[] { 1, 2 }, new byte[] { (byte) 0xc3, (byte) 0x28 }));
+		records.add(new ProducerRecord<>(t, 0, null, null, TestData.utf8("x".repeat(100))));
+		records.add(new ProducerRecord<>(t, 0, TestData.utf8("tomb"), null));
+		TestData.send(records);
+
+		JsonNode json = ok("messages_consume", args("topic", t, "from", "earliest", "format", "json", "keyFormat", "long"));
+		JsonNode r0 = json.get("records").get(0);
+		assertThat(r0.get("key").asLong()).isEqualTo(7L);
+		assertThat(r0.get("value").get("name").asText()).isEqualTo("ayşe");
+		assertThat(r0.get("value").has("opt")).as("JSON içindeki null alan korunur").isTrue();
+		assertThat(r0.get("value").get("tags").get(0).asText()).isEqualTo("a");
+		JsonNode r1 = json.get("records").get(1);
+		assertThat(r1.get("value").asText()).isEqualTo("not json");
+		assertThat(r1.get("valueError").asText()).startsWith("JSON değil");
+		JsonNode r2 = json.get("records").get(2);
+		assertThat(r2.get("keyError").asText()).contains("8 bayt");
+		assertThat(r2.get("key").asText()).isEqualTo("0102");
+		assertThat(r2.get("value").asText()).isEqualTo("c328");
+		assertThat(r2.get("valueError").asText()).contains("UTF-8");
+		JsonNode r3 = json.get("records").get(3);
+		assertThat(r3.has("key")).isFalse();
+		JsonNode r4 = json.get("records").get(4);
+		assertThat(r4.get("tombstone").asBoolean()).isTrue();
+		assertThat(r4.get("value").isNull()).isTrue();
+
+		JsonNode cut = ok("messages_consume", args("topic", t, "partition", 0, "offset", 3, "maxRecords", 1,
+				"maxValueChars", 20));
+		assertThat(cut.get("records").get(0).get("value").asText()).hasSize(20);
+		assertThat(cut.get("records").get(0).get("valueTruncated").asBoolean()).isTrue();
+
+		JsonNode hex = ok("messages_consume", args("topic", t, "partition", 0, "offset", 1, "maxRecords", 1,
+				"format", "hex"));
+		assertThat(hex.get("records").get(0).get("value").asText()).isEqualTo("6e6f74206a736f6e");
+	}
+
+	@Test
+	void readOnlyClusterCanReadAndAvroNeedsSchemaRegistry() {
+		JsonNode r = ok("messages_consume", args("cluster", TestConfigs.READ_ONLY_CLUSTER, "topic", topic,
+				"maxRecords", 2));
+		assertThat(values(r)).containsExactly("v28", "v29");
+
+		assertThat(error("messages_consume", args("topic", topic, "format", "avro"))).contains("schemaRegistryUrl");
+		assertThat(error("messages_consume", args("topic", "yok-" + unique("x")))).contains("bulunamadı");
+		assertThat(error("messages_consume", args("topic", topic, "partition", 7))).contains("Partition 7 yok");
+		assertThat(error("messages_consume", args("topic", topic, "format", "xml"))).contains("Geçersiz format");
+	}
+
+}

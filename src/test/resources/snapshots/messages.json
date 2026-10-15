@@ -1,0 +1,340 @@
+[ {
+  "name" : "messages_consume",
+  "description" : "Topic'ten mesaj okur (group'suz, commit'siz): latest/earliest/offset/timestamp, key/value/header filtresi, format çözme",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partition" : {
+        "type" : "integer",
+        "description" : "Partition (boşsa tüm partition'lar)",
+        "minimum" : 0
+      },
+      "from" : {
+        "type" : "string",
+        "description" : "Başlangıç (varsayılan latest = son maxRecords kayıt; yeni veri beklenmez)",
+        "enum" : [ "earliest", "latest", "offset", "timestamp" ]
+      },
+      "offset" : {
+        "type" : "integer",
+        "description" : "from=offset için başlangıç offset'i (seçilen her partition'a uygulanır)",
+        "minimum" : 0
+      },
+      "timestamp" : {
+        "type" : "string",
+        "description" : "from=timestamp için başlangıç zamanı: ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+      },
+      "keyRegex" : {
+        "type" : "string",
+        "description" : "Key regex filtresi (çözülmüş metinde kısmi eşleşme)"
+      },
+      "valueRegex" : {
+        "type" : "string",
+        "description" : "Value regex filtresi (çözülmüş metinde kısmi eşleşme)"
+      },
+      "headerKey" : {
+        "type" : "string",
+        "description" : "Sadece bu header'ı taşıyan kayıtlar"
+      },
+      "headerValueRegex" : {
+        "type" : "string",
+        "description" : "headerKey değeri için regex (headerKey ile birlikte)"
+      },
+      "format" : {
+        "type" : "string",
+        "description" : "Value formatı (varsayılan string)",
+        "enum" : [ "string", "json", "hex", "long", "avro" ],
+        "default" : "string"
+      },
+      "keyFormat" : {
+        "type" : "string",
+        "description" : "Key formatı (varsayılan string)",
+        "enum" : [ "string", "json", "hex", "long", "avro" ],
+        "default" : "string"
+      },
+      "maxValueChars" : {
+        "type" : "integer",
+        "description" : "Value/key için en fazla karakter; fazlası kesilir (varsayılan 4096)",
+        "minimum" : 16,
+        "maximum" : 100000,
+        "default" : 4096
+      },
+      "maxScan" : {
+        "type" : "integer",
+        "description" : "Filtrede/latest'te taranacak en fazla kayıt (varsayılan 10000)",
+        "minimum" : 1,
+        "maximum" : 100000,
+        "default" : 10000
+      },
+      "maxRecords" : {
+        "type" : "integer",
+        "description" : "Okunacak en fazla kayıt (varsayılan 50, en fazla 500)",
+        "minimum" : 1,
+        "maximum" : 500,
+        "default" : 50
+      }
+    },
+    "required" : [ "cluster", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "messages_get",
+  "description" : "Tek bir mesajı (topic/partition/offset) tam value'suyla getirir",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partition" : {
+        "type" : "integer",
+        "description" : "Partition",
+        "minimum" : 0
+      },
+      "offset" : {
+        "type" : "integer",
+        "description" : "Offset",
+        "minimum" : 0
+      },
+      "format" : {
+        "type" : "string",
+        "description" : "Value formatı (varsayılan string)",
+        "enum" : [ "string", "json", "hex", "long", "avro" ],
+        "default" : "string"
+      },
+      "keyFormat" : {
+        "type" : "string",
+        "description" : "Key formatı (varsayılan string)",
+        "enum" : [ "string", "json", "hex", "long", "avro" ],
+        "default" : "string"
+      }
+    },
+    "required" : [ "cluster", "topic", "partition", "offset" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "messages_headers",
+  "description" : "Okunan mesajlardaki header istatistikleri: anahtar başına sayı, farklı değer sayısı, örnek değerler",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partition" : {
+        "type" : "integer",
+        "description" : "Partition (boşsa tüm partition'lar)",
+        "minimum" : 0
+      },
+      "from" : {
+        "type" : "string",
+        "description" : "Başlangıç (varsayılan latest = son kayıtlar)",
+        "enum" : [ "earliest", "latest" ]
+      },
+      "maxRecords" : {
+        "type" : "integer",
+        "description" : "Okunacak en fazla kayıt (varsayılan 50, en fazla 500)",
+        "minimum" : 1,
+        "maximum" : 500,
+        "default" : 50
+      }
+    },
+    "required" : [ "cluster", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "messages_offset_for_timestamp",
+  "description" : "Partition başına zamanı verilen andan büyük/eşit ilk mesajın offset'ini ve zamanını bulur",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "timestamp" : {
+        "type" : "string",
+        "description" : "Zaman: ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+      },
+      "partition" : {
+        "type" : "integer",
+        "description" : "Partition (boşsa tüm partition'lar)",
+        "minimum" : 0
+      }
+    },
+    "required" : [ "cluster", "topic", "timestamp" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "messages_count",
+  "description" : "Offset ya da zaman aralığındaki mesaj sayısı (partition başına offset farkı; yaklaşık)",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partition" : {
+        "type" : "integer",
+        "description" : "Partition (boşsa tüm partition'lar)",
+        "minimum" : 0
+      },
+      "fromOffset" : {
+        "type" : "integer",
+        "description" : "Başlangıç offset'i (dahil; varsayılan earliest)",
+        "minimum" : 0
+      },
+      "toOffset" : {
+        "type" : "integer",
+        "description" : "Bitiş offset'i (hariç; varsayılan latest)",
+        "minimum" : 0
+      },
+      "fromTimestamp" : {
+        "type" : "string",
+        "description" : "Başlangıç zamanı (dahil): ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+      },
+      "toTimestamp" : {
+        "type" : "string",
+        "description" : "Bitiş zamanı (hariç): ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms"
+      }
+    },
+    "required" : [ "cluster", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "messages_partition_for_key",
+  "description" : "Key'in Kafka varsayılan partitioner'ıyla (murmur2) düşeceği partition'ı hesaplar",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "key" : {
+        "type" : "string",
+        "description" : "Key (keyFormat'a göre: metin, hex ya da sayı)"
+      },
+      "keyFormat" : {
+        "type" : "string",
+        "description" : "Key formatı (varsayılan string)",
+        "enum" : [ "string", "hex", "long" ],
+        "default" : "string"
+      }
+    },
+    "required" : [ "cluster", "topic", "key" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "messages_sample_schema",
+  "description" : "Son mesajlardan value yapısını çıkarır: JSON yolları, tipler, null/eksik oranları, örnek değer",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "partition" : {
+        "type" : "integer",
+        "description" : "Partition (boşsa tüm partition'lar)",
+        "minimum" : 0
+      },
+      "format" : {
+        "type" : "string",
+        "description" : "Value formatı (varsayılan json)",
+        "enum" : [ "json", "avro" ],
+        "default" : "json"
+      },
+      "maxRecords" : {
+        "type" : "integer",
+        "description" : "Okunacak en fazla kayıt (varsayılan 50, en fazla 500)",
+        "minimum" : 1,
+        "maximum" : 500,
+        "default" : 50
+      }
+    },
+    "required" : [ "cluster", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "serdes_list",
+  "description" : "Desteklenen mesaj formatları (string/json/hex/long/avro) ve cluster başına avro desteği",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      }
+    },
+    "required" : [ ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+} ]
