@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import io.github.srdrcn.kafkamcp.kafka.Format;
 import io.github.srdrcn.kafkamcp.kafka.Futures;
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.kafka.LastRecords;
 import io.github.srdrcn.kafkamcp.kafka.LogDirs;
 import io.github.srdrcn.kafkamcp.kafka.Offsets;
@@ -145,7 +146,10 @@ public class TopicDataTools {
 		List<TopicPartition> online = Topics.onlinePartitions(List.of(d));
 		ListOffsetsResult maxTs = Offsets.submit(call, online, OffsetSpec.maxTimestamp());
 		Map<TopicPartition, Offsets.Range> ranges = Offsets.ranges(call, online);
-		Map<TopicPartition, ListOffsetsResultInfo> max = Offsets.awaitEach(call, online, maxTs).values();
+		Futures.Each<TopicPartition, ListOffsetsResultInfo> maxEach = Offsets.awaitEach(call, online, maxTs);
+		Map<TopicPartition, ListOffsetsResultInfo> max = maxEach.values();
+		// maxTimestamp Kafka 3.0+ ister; eski broker'larda son kayıt okunur (aşağıdaki fallback)
+		boolean maxTsUnsupported = maxEach.errors().values().stream().anyMatch(KafkaErrors::isUnsupported);
 		Map<TopicPartition, Offsets.Range> fallback = new LinkedHashMap<>();
 		ranges.forEach((tp, r) -> {
 			ListOffsetsResultInfo i = max.get(tp);
@@ -195,9 +199,13 @@ public class TopicDataTools {
 			rows.add(Results.map("partition", p.partition(), "lastWriteTime", Format.iso(ts), "ageSeconds",
 					Format.ageSeconds(ts), "offset", offset, "source", source));
 		}
+		// "son kayıt okundu" sadece fallback gerçekten çalıştıysa (boş partition'larda okunacak kayıt yok)
+		String note = !maxTsUnsupported ? null
+				: KafkaErrors.UNSUPPORTED + ": ListOffsets maxTimestamp Kafka 3.0+ broker gerektirir"
+						+ (fallback.isEmpty() ? "" : "; son kayıt okundu");
 		return Results.map("topic", topic, "lastWriteTime", Format.iso(topicMax), "ageSeconds",
 				Format.ageSeconds(topicMax), "partition", topicMaxPartition, "emptyPartitions", empty, "method",
-				fallback.isEmpty() ? "maxTimestamp" : "maxTimestamp+lastRecord", "partitions", rows);
+				fallback.isEmpty() ? "maxTimestamp" : "maxTimestamp+lastRecord", "note", note, "partitions", rows);
 	}
 
 	Object topicsWriteRate(ToolCall call) {

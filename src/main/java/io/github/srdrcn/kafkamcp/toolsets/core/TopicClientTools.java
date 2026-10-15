@@ -32,16 +32,22 @@ import io.github.srdrcn.kafkamcp.connect.ConnectClient;
 import io.github.srdrcn.kafkamcp.kafka.ConsumerGroups;
 import io.github.srdrcn.kafkamcp.kafka.Format;
 import io.github.srdrcn.kafkamcp.kafka.Futures;
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.kafka.Producers;
 import io.github.srdrcn.kafkamcp.kafka.Topics;
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
+import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
 /** Topic'in istemcileri: consumer group'lar, Connect connector'ları, producer'lar, transaction'lar. */
 @Component
 public class TopicClientTools {
+
+	/** describeProducers'ı desteklemeyen (Kafka 3.0 öncesi) broker'lar için not. */
+	static final String UNSUPPORTED_PRODUCERS = KafkaErrors.UNSUPPORTED
+			+ ": describeProducers Kafka 3.0+ broker gerektirir (bu partition'ların producer'ları okunamadı)";
 
 	/** Connect REST'e aynı anda en fazla bu kadar istek. */
 	private static final int CONNECT_PARALLELISM = 8;
@@ -55,7 +61,7 @@ public class TopicClientTools {
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("topics_consumers",
-						"Topic'te commit'li offset'i olan consumer group'lar: durum, üye sayısı, bu topic'teki lag")
+						"Topic'te commit'li offset'i olan consumer group'lar: tip (Classic/Consumer), durum, üye sayısı, bu topic'teki lag")
 					.required("topic", P.string("Topic adı"))
 					.listParams()
 					.handler(this::topicsConsumers),
@@ -86,8 +92,8 @@ public class TopicClientTools {
 				continue;
 			}
 			totalLag += g.lag();
-			rows.add(Results.map("groupId", g.groupId(), "state", g.state(), "members", g.members(), "lag", g.lag(),
-					"partitions", g.partitions()));
+			rows.add(Results.map("groupId", g.groupId(), "type", g.type(), "state", g.state(), "members",
+					g.members(), "lag", g.lag(), "partitions", g.partitions()));
 		}
 		Map<String, Object> out = Results.map("topic", topic, "groupsScanned", tc.groupsScanned(), "totalLag",
 				totalLag, "failedGroups", tc.errors().isEmpty() ? null : tc.errors().size(), "lagUnknownPartitions",
@@ -210,7 +216,21 @@ public class TopicClientTools {
 		String topic = call.str("topic");
 		TopicDescription d = Topics.describeOne(call, topic);
 		List<TopicPartition> online = Topics.onlinePartitions(List.of(d));
-		Futures.Each<TopicPartition, List<ProducerState>> each = Producers.describe(call, online).requireAny();
+		Futures.Each<TopicPartition, List<ProducerState>> each = Producers.describe(call, online);
+		// describeProducers Kafka 3.0+ ister: eski broker'ların partition'ları not olarak raporlanır, araç düşmez
+		Map<TopicPartition, String> failed = new LinkedHashMap<>();
+		int unsupported = 0;
+		for (Map.Entry<TopicPartition, String> e : each.errors().entrySet()) {
+			if (KafkaErrors.isUnsupported(e.getValue())) {
+				unsupported++;
+			}
+			else {
+				failed.put(e.getKey(), e.getValue());
+			}
+		}
+		if (each.values().isEmpty() && !failed.isEmpty()) {
+			throw new ToolException(failed.values().iterator().next());
+		}
 		List<Map.Entry<TopicPartition, ProducerState>> states = new ArrayList<>();
 		each.values().forEach((tp, list) -> list.forEach(s -> states.add(Map.entry(tp, s))));
 		states.sort(Comparator.comparingLong((Map.Entry<TopicPartition, ProducerState> e) -> e.getValue().lastTimestamp())
@@ -227,7 +247,8 @@ public class TopicClientTools {
 		}
 		Map<String, Object> out = Results.map("topic", topic, "partitionsScanned", online.size(), "producerCount",
 				ids.size(), "partitionsWithOpenTransaction", openTxnPartitions.size(), "failedPartitions",
-				each.errors().isEmpty() ? null : each.errors().size());
+				failed.isEmpty() ? null : failed.size(), "unsupportedPartitions", unsupported > 0 ? unsupported : null,
+				"note", unsupported > 0 ? UNSUPPORTED_PRODUCERS : null);
 		out.putAll(Results.page("producers", rows, call.limit()));
 		return out;
 	}
@@ -292,6 +313,16 @@ public class TopicClientTools {
 		Map<String, Object> out = Results.map("topic", topic, "openTransactionsInCluster", open.listings().size(),
 				"openTransactions", txns, "partitionsWithOpenTransaction", partitions, "hangingSuspects", hanging,
 				"hangingThresholdMs", thresholdMs);
+		List<String> notes = new ArrayList<>();
+		if (producers.errors().values().stream().anyMatch(KafkaErrors::isUnsupported)) {
+			notes.add(UNSUPPORTED_PRODUCERS);
+		}
+		if (open.errors().values().stream().anyMatch(KafkaErrors::isUnsupported)) {
+			notes.add(KafkaErrors.UNSUPPORTED + ": listTransactions Kafka 3.0+ broker gerektirir (açık transaction listesi eksik)");
+		}
+		if (!notes.isEmpty()) {
+			out.put("notes", notes);
+		}
 		if (hanging > 0) {
 			out.put("hint", "hangingSuspect: partition'daki transaction transaction.max.timeout.ms'den uzun süredir "
 					+ "açık ve coordinator'da karşılığı yok; askıda olabilir (kafka-transactions.sh find-hanging ile doğrulayın)");

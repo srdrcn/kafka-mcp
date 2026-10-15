@@ -43,7 +43,7 @@ public class TopicTools {
 					.listParams()
 					.handler(this::topicsList),
 				ToolSpec.read("topics_get",
-						"Topic detayı: partition'lar (lider, replika, ISR, URP), varsayılandan farklı config'ler, boyut, offset'ler")
+						"Topic detayı: partition'lar (lider, replika, ISR, KRaft'ta ELR, URP), varsayılandan farklı config'ler, boyut, offset'ler")
 					.required("topic", P.string("Topic adı"))
 					.handler(this::topicsGet),
 				ToolSpec.read("topics_config_get", "Topic config'leri: değer, kaynak, varsayılan mı, salt okunur mu")
@@ -104,11 +104,16 @@ public class TopicTools {
 			boolean isOffline = Topics.offline(p);
 			urp += isUrp ? 1 : 0;
 			offline += isOffline ? 1 : 0;
+			// ELR (KIP-966) sadece KRaft'ta; ZooKeeper'da null, boşsa da gösterilmez
+			List<Integer> elr = Topics.elr(p);
+			List<Integer> lastKnownElr = Topics.lastKnownElr(p);
 			partitions.add(Results.map("partition", p.partition(), "leader", Topics.leader(p), "replicas",
-					Topics.ids(p.replicas()), "isr", Topics.ids(p.isr()), "addingReplicas",
+					Topics.ids(p.replicas()), "isr", Topics.ids(p.isr()), "elr",
+					elr == null || elr.isEmpty() ? null : elr, "lastKnownElr",
+					lastKnownElr == null || lastKnownElr.isEmpty() ? null : lastKnownElr, "addingReplicas",
 					adding.isEmpty() ? null : adding, "urp", isUrp ? true : null, "offline", isOffline ? true : null));
 		}
-		Map<String, Object> out = Results.map("topic", topic, "topicId", String.valueOf(d.topicId()), "internal",
+		Map<String, Object> out = Results.map("topic", topic, "topicId", Topics.topicId(d), "internal",
 				d.isInternal() ? true : null, "partitionCount", d.partitions().size(), "replicationFactor",
 				Topics.replicationFactor(d, reassignments), "underReplicatedPartitions", urp, "offlinePartitions",
 				offline, "reassignmentsError", reassignments.error());

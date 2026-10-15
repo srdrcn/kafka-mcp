@@ -4,14 +4,18 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
+import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /** core testleri için topic oluşturma ve veri üretme yardımcıları. */
 final class TestData {
@@ -47,14 +51,46 @@ final class TestData {
 		}
 	}
 
+	/**
+	 * Topic henüz broker metadata'sına yansımadıysa (UnknownTopicOrPartition) en çok 20 sn tekrar dener;
+	 * CreateTopics yanıtı ile broker'ın metadata'yı uygulaması arasında kısa bir pencere vardır.
+	 */
+	static <T> T retryUnknownTopic(Callable<T> action) throws Exception {
+		long end = System.currentTimeMillis() + Duration.ofSeconds(20).toMillis();
+		while (true) {
+			try {
+				return action.call();
+			}
+			catch (ExecutionException e) {
+				if (!(e.getCause() instanceof UnknownTopicOrPartitionException) || System.currentTimeMillis() > end) {
+					throw e;
+				}
+			}
+			Thread.sleep(100);
+		}
+	}
+
 	/** Belirli partition'a, verilen zaman damgasıyla (null = şimdi) n mesaj yazar. */
 	static void produce(String topic, int partition, int count, Long timestamp) throws Exception {
 		try (KafkaProducer<byte[], byte[]> p = KafkaTestCluster.producer(null)) {
-			for (int i = 0; i < count; i++) {
-				p.send(new ProducerRecord<>(topic, partition, timestamp, ("k" + i).getBytes(StandardCharsets.UTF_8),
-						("v" + i).getBytes(StandardCharsets.UTF_8)))
-					.get();
-			}
+			produce(p, topic, partition, count, timestamp);
+		}
+	}
+
+	/** {@link #produce(String, int, int, Long)}; ZooKeeper modlu test cluster'ına. */
+	static void produceZk(String topic, int partition, int count, Long timestamp) throws Exception {
+		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
+			produce(p, topic, partition, count, timestamp);
+		}
+	}
+
+	/** Verilen producer ile n mesaj yazar (zaman damgası null ise şimdi). */
+	static void produce(KafkaProducer<byte[], byte[]> p, String topic, int partition, int count, Long timestamp)
+			throws Exception {
+		for (int i = 0; i < count; i++) {
+			p.send(new ProducerRecord<>(topic, partition, timestamp, ("k" + i).getBytes(StandardCharsets.UTF_8),
+					("v" + i).getBytes(StandardCharsets.UTF_8)))
+				.get();
 		}
 	}
 

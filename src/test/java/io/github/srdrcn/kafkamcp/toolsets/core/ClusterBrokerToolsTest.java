@@ -31,7 +31,7 @@ class ClusterBrokerToolsTest extends KafkaIntegrationTest {
 		assertThat(r.get("clusterId").asText()).isNotBlank();
 		assertThat(r.get("mode").asText()).isEqualTo("KRaft");
 		assertThat(r.get("controllerId").asInt()).isEqualTo(1);
-		assertThat(r.get("kafkaVersion").asText()).isEqualTo("4.1");
+		assertThat(r.get("minKafkaVersion").asText()).isEqualTo("4.1");
 		assertThat(r.get("versionSource").asText()).startsWith("metadata.version=").contains("4.1-IV");
 		assertThat(r.get("brokerCount").asInt()).isEqualTo(1);
 		assertThat(r.get("topicCount").asInt()).isPositive();

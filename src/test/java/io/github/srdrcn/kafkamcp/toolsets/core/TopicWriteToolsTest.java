@@ -151,13 +151,15 @@ class TopicWriteToolsTest extends KafkaIntegrationTest {
 		assertThat(error("topics_delete", args("cluster", "test-ro", "topic", connectConfigs))).contains("readOnly");
 	}
 
+	/** Araçla yeni oluşturulan topic'in metadata'sı broker'a biraz geç yansıyabilir: kısa süre tekrar dener. */
 	private static TopicDescription describe(String topic) throws Exception {
-		return testAdmin().describeTopics(List.of(topic)).allTopicNames().get().get(topic);
+		return TestData.retryUnknownTopic(
+				() -> testAdmin().describeTopics(List.of(topic)).allTopicNames().get().get(topic));
 	}
 
 	private static ConfigEntry topicConfig(String topic, String key) throws Exception {
 		ConfigResource r = new ConfigResource(ConfigResource.Type.TOPIC, topic);
-		return testAdmin().describeConfigs(List.of(r)).all().get().get(r).get(key);
+		return TestData.retryUnknownTopic(() -> testAdmin().describeConfigs(List.of(r)).all().get().get(r).get(key));
 	}
 
 }
