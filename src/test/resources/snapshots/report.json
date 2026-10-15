@@ -1,12 +1,12 @@
 [ {
   "name" : "report_cluster_summary",
-  "description" : "Cluster özeti: mod/sürüm, broker, topic/partition, boyut, URP/offline, grup durumları ve lag, en büyük topic'ler, connector/subject sayısı",
+  "description" : "Cluster summary: mode/version, brokers, topics/partitions, size, URP/offline, group states and lag, largest topics, connectors/subjects",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },
@@ -18,34 +18,34 @@
   }
 }, {
   "name" : "report_top_topics",
-  "description" : "Topic sıralaması: boyut, partition sayısı, consumer group sayısı ya da yazma hızına göre ilk N",
+  "description" : "Top N topics by size, partition count, consumer group count or write rate",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "by" : {
         "type" : "string",
-        "description" : "Sıralama ölçütü",
+        "description" : "Ranking metric",
         "enum" : [ "size", "partitions", "consumers", "write_rate" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 20)",
+        "description" : "Maximum number of items to return (default 20)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 20
       },
       "intervalSeconds" : {
         "type" : "integer",
-        "description" : "Yazma hızı için iki örnek arası saniye (varsayılan 5, 1-10)",
+        "description" : "Sampling interval in seconds for the write rate (default 5, 1-10)",
         "minimum" : 1,
         "maximum" : 10,
         "default" : 5
@@ -59,27 +59,27 @@
   }
 }, {
   "name" : "report_empty_topics",
-  "description" : "Hiç mesajı olmayan topic'ler (tüm partition'larda earliest == latest); hiç yazılmamış olanlar ayrıca işaretlenir",
+  "description" : "Topics with no messages (earliest == latest on every partition); never-written topics are flagged",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "İç (__*) ve sistem topic'lerini (Connect/Schema Registry/MirrorMaker) dahil et (varsayılan false)",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
         "default" : false
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -93,29 +93,29 @@
   }
 }, {
   "name" : "report_idle_topics",
-  "description" : "Son yazması N günden eski topic'ler (maxTimestamp), en eskiden yeniye; boş topic'ler ayrıca listelenir",
+  "description" : "Topics whose last write (maxTimestamp) is older than N days, oldest first; empty topics are listed separately",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "olderThanDays" : {
         "type" : "integer",
-        "description" : "Son yazma kaç günden eskiyse boşta sayılır (varsayılan 30)",
+        "description" : "Days since the last write after which a topic counts as idle (default 30)",
         "minimum" : 1,
         "maximum" : 3650,
         "default" : 30
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -129,22 +129,22 @@
   }
 }, {
   "name" : "report_topics_without_consumers",
-  "description" : "Hiçbir consumer group'un commit'li offset'i olmayan (iç olmayan) topic'ler; boyut ve son yazma yaşıyla",
+  "description" : "Non-internal topics without committed offsets from any consumer group, with size and last write age",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -158,27 +158,27 @@
   }
 }, {
   "name" : "report_replication_audit",
-  "description" : "Replikasyon denetimi: RF=1, min.insync.replicas ≥ RF, URP/offline, unclean election, varsayılan altı RF, tek rack",
+  "description" : "Replication audit: RF=1, min.insync.replicas ≥ RF, URP/offline, unclean election, RF below default, single rack",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "İç (__*) ve sistem topic'lerini (Connect/Schema Registry/MirrorMaker) dahil et (varsayılan true)",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default true)",
         "default" : true
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 50)",
+        "description" : "Maximum number of items to return (default 50)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 50
@@ -192,41 +192,41 @@
   }
 }, {
   "name" : "report_retention_audit",
-  "description" : "Retention denetimi: sınırsız/çok kısa retention, retention.bytes, compact ayarları, segment aykırılıkları (değer + kaynak)",
+  "description" : "Retention audit: infinite/very short retention, retention.bytes, compaction settings, segment outliers (value + source)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "İç (__*) ve sistem topic'lerini (Connect/Schema Registry/MirrorMaker) dahil et (varsayılan false)",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
         "default" : false
       },
       "largeSizeMb" : {
         "type" : "integer",
-        "description" : "Sınırsız retention'da bu boyuttan (MB) büyük topic yüksek önemli (varsayılan 10240)",
+        "description" : "Size in MB above which a topic with infinite retention is high severity (default 10240)",
         "minimum" : 0,
         "maximum" : 100000000,
         "default" : 10240
       },
       "shortRetentionMinutes" : {
         "type" : "integer",
-        "description" : "Bundan kısa retention/delete.retention/segment.ms aykırı sayılır (dakika, varsayılan 60)",
+        "description" : "Minutes below which retention/delete.retention/segment.ms is flagged (default 60)",
         "minimum" : 1,
         "maximum" : 10080,
         "default" : 60
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 50)",
+        "description" : "Maximum number of items to return (default 50)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 50
@@ -240,57 +240,57 @@
   }
 }, {
   "name" : "report_partition_outliers",
-  "description" : "Partition aykırılıkları: medyanın çok üstünde partition sayısı, topic içi boyut skew'i, broker lider dengesizliği",
+  "description" : "Partition outliers: partition counts far above the median, size skew within topics, leader imbalance across brokers",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "partitionFactor" : {
         "type" : "integer",
-        "description" : "Medyanın kaç katı aykırı (varsayılan 4)",
+        "description" : "Multiple of the median partition count above which a topic is an outlier (default 4)",
         "minimum" : 2,
         "maximum" : 1000,
         "default" : 4
       },
       "minPartitions" : {
         "type" : "integer",
-        "description" : "Aykırı sayılmak için en az partition (varsayılan 50)",
+        "description" : "Minimum partition count for an outlier (default 50)",
         "minimum" : 1,
         "maximum" : 100000,
         "default" : 50
       },
       "skewFactor" : {
         "type" : "integer",
-        "description" : "Topic ortalamasının kaç katı skew (varsayılan 3)",
+        "description" : "Multiple of the topic's average partition size above which a partition is skewed (default 3)",
         "minimum" : 2,
         "maximum" : 1000,
         "default" : 3
       },
       "minSizeMb" : {
         "type" : "integer",
-        "description" : "Skew için partition en az bu boyutta olmalı (MB, varsayılan 1)",
+        "description" : "Minimum partition size in MB for skew (default 1)",
         "minimum" : 0,
         "maximum" : 10000000,
         "default" : 1
       },
       "leaderImbalancePct" : {
         "type" : "integer",
-        "description" : "Broker lider sayısı ortalamadan bu yüzdeden fazla saparsa dengesiz (varsayılan 25)",
+        "description" : "Leader count deviation from the average (%) above which a broker is imbalanced (default 25)",
         "minimum" : 1,
         "maximum" : 1000,
         "default" : 25
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 20)",
+        "description" : "Maximum number of items to return (default 20)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 20
@@ -304,31 +304,31 @@
   }
 }, {
   "name" : "report_naming_check",
-  "description" : "Adlandırma kuralına (tam eşleşen regex) uymayan topic'ler, sayıları ve en sık önekleri",
+  "description" : "Topics that do not match a naming rule (full-match regex), with counts and the most common prefixes",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "pattern" : {
         "type" : "string",
-        "description" : "Topic adının tamamıyla eşleşmesi gereken regex (ör. [a-z]+\\.[a-z0-9-]+\\.v[0-9]+)"
+        "description" : "Regex the whole topic name must match (e.g. [a-z]+\\.[a-z0-9-]+\\.v[0-9]+)"
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "İç (__*) ve sistem topic'lerini (Connect/Schema Registry/MirrorMaker) dahil et (varsayılan false)",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
         "default" : false
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -342,27 +342,27 @@
   }
 }, {
   "name" : "report_duplicate_like_topics",
-  "description" : "Kopya şüpheli topic adları: normalize edilince çakışan gruplar ve Levenshtein mesafesi ≤ 2 çiftler",
+  "description" : "Suspected duplicate topic names: groups that collide after normalization and pairs with Levenshtein distance ≤ 2",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "includeInternal" : {
         "type" : "boolean",
-        "description" : "İç (__*) ve sistem topic'lerini (Connect/Schema Registry/MirrorMaker) dahil et (varsayılan false)",
+        "description" : "Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false)",
         "default" : false
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 50)",
+        "description" : "Maximum number of items to return (default 50)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 50
@@ -376,29 +376,29 @@
   }
 }, {
   "name" : "report_team_inventory",
-  "description" : "Takım envanteri (topic öneki): topic'ler, boyut, boş/boşta işaretleri, consumer group'lar ve lag, connector'lar, ACL principal'ları",
+  "description" : "Team inventory by topic prefix: topics, size, empty/idle flags, consumer groups and lag, connectors, ACL principals",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "prefix" : {
         "type" : "string",
-        "description" : "Topic adı öneki (ör. payments.)"
+        "description" : "Topic name prefix (e.g. payments.)"
       },
       "olderThanDays" : {
         "type" : "integer",
-        "description" : "Son yazma kaç günden eskiyse boşta sayılır (varsayılan 30)",
+        "description" : "Days since the last write after which a topic counts as idle (default 30)",
         "minimum" : 1,
         "maximum" : 3650,
         "default" : 30
       },
       "limit" : {
         "type" : "integer",
-        "description" : "Her listede en fazla kaç kayıt (varsayılan 100)",
+        "description" : "Maximum number of items per list (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -412,29 +412,29 @@
   }
 }, {
   "name" : "report_cleanup_candidates",
-  "description" : "Temizlik adayları (silmez): boş/boşta/consumer'sız topic'ler, Empty gruplar, sahipsiz LITERAL ACL'ler; neden ve risk ile",
+  "description" : "Cleanup candidates (deletes nothing): empty/idle/unconsumed topics, Empty groups, orphan LITERAL ACLs, with reasons and risk",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "olderThanDays" : {
         "type" : "integer",
-        "description" : "Son yazma kaç günden eskiyse boşta sayılır (varsayılan 30)",
+        "description" : "Days since the last write after which a topic counts as idle (default 30)",
         "minimum" : 1,
         "maximum" : 3650,
         "default" : 30
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100

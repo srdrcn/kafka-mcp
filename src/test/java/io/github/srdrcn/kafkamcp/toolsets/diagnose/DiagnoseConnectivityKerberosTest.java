@@ -32,9 +32,9 @@ import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.toolsets.acl.KerberosCheck;
 
 /**
- * diagnose_connectivity Kerberos hata yolları (Spring bağlamı yok): kerberos bloğu eksik keytab'ı ya da erişilemeyen
- * KDC'yi gösterir; Kafka adımı (GSSAPI login olamayacağı için) atlanır, önbellekteki AdminClient hiç kullanılmaz.
- * JVM genelindeki java.security.krb5.conf test sonunda geri alınır.
+ * diagnose_connectivity Kerberos failure paths (no Spring context): the kerberos block shows a missing keytab or an
+ * unreachable KDC; the Kafka step is skipped (GSSAPI cannot log in), and the cached AdminClient is never used. The
+ * JVM-wide java.security.krb5.conf is restored at the end of the test.
  */
 class DiagnoseConnectivityKerberosTest {
 
@@ -81,7 +81,7 @@ class DiagnoseConnectivityKerberosTest {
 
 			@Override
 			public Admin admin(String name) {
-				throw new AssertionError("diagnose_connectivity önbellekteki AdminClient'ı kullanmamalı");
+				throw new AssertionError("diagnose_connectivity must not use the cached AdminClient");
 			}
 
 		};
@@ -106,7 +106,7 @@ class DiagnoseConnectivityKerberosTest {
 				return s;
 			}
 		}
-		throw new AssertionError(name + " adımı yok: " + r.get("steps"));
+		throw new AssertionError("No " + name + " step: " + r.get("steps"));
 	}
 
 	@Test
@@ -115,7 +115,7 @@ class DiagnoseConnectivityKerberosTest {
 		JsonNode r = run(keytab);
 		assertThat(r.get("status").asText()).isEqualTo("critical");
 		JsonNode f = DiagnoseTestBase.finding(r, "KEYTAB_NOT_FOUND");
-		assertThat(f.get("message").asText()).contains("keytab bulunamadı", keytab.toString());
+		assertThat(f.get("message").asText()).contains("Keytab not found", keytab.toString());
 		assertThat(f.get("recommendation").asText()).contains("Secret");
 		assertThat(r.at("/facts/client/saslMechanism").asText()).isEqualTo("GSSAPI");
 		assertThat(step(r, "tcp").get("status").asText()).isEqualTo("ok");
@@ -132,15 +132,15 @@ class DiagnoseConnectivityKerberosTest {
 		JsonNode r = run(keytab);
 		assertThat(r.get("status").asText()).isEqualTo("critical");
 		JsonNode f = DiagnoseTestBase.finding(r, "KERBEROS_LOGIN_FAILED");
-		assertThat(f.get("message").asText()).contains("KDC'ye ulaşılamadı");
+		assertThat(f.get("message").asText()).contains("Cannot reach the KDC");
 		assertThat(f.get("recommendation").asText()).contains("88");
 		assertThat(DiagnoseTestBase.findings(r, "KEYTAB_NOT_FOUND")).isEmpty();
 		assertThat(step(r, "kafka").get("status").asText()).isEqualTo("skipped");
 	}
 
 	/**
-	 * Bilet önbelleğiyle (kinit sidecar, useTicketCache=true) GSSAPI: keytab/principal tanımsız olması kritik değil,
-	 * login denenmediği için ("skipped") Kafka adımı atlanmaz, yeni AdminClient ile denenir.
+	 * GSSAPI with a ticket cache (kinit sidecar, useTicketCache=true): an unset keytab/principal is not critical; since
+	 * the login is not attempted ("skipped"), the Kafka step is not skipped but tried with a new AdminClient.
 	 */
 	@Test
 	void ticketCacheSetupStillTriesKafka() throws Exception {
@@ -162,11 +162,13 @@ class DiagnoseConnectivityKerberosTest {
 		List<JsonNode> notes = DiagnoseTestBase.findings(r, "KERBEROS_TICKET_CACHE");
 		assertThat(notes).isNotEmpty();
 		assertThat(notes).allSatisfy(n -> assertThat(n.get("severity").asText()).isEqualTo("info"));
-		assertThat(DiagnoseTestBase.texts(r.get("findings")).toString()).contains("keytab tanımlı değil");
+		// the problem text comes from KerberosCheck (acl toolset); check its leading token and our explanation only
+		assertThat(notes).anySatisfy(n -> assertThat(n.get("message").asText()).startsWith("keytab")
+			.contains("useTicketCache=true"));
 		assertThat(DiagnoseTestBase.findings(r, "KERBEROS_PROBLEM")).isEmpty();
 	}
 
-	/** KDC'si erişilemeyen (127.0.0.1:1, kısa timeout, tek deneme) krb5.conf. */
+	/** krb5.conf whose KDC is unreachable (127.0.0.1:1, short timeout, single attempt). */
 	static Path krb5Conf(Path dir, String realm) throws IOException {
 		Path conf = dir.resolve("krb5.conf");
 		Files.writeString(conf, """
@@ -187,7 +189,7 @@ class DiagnoseConnectivityKerberosTest {
 		return conf;
 	}
 
-	/** MIT keytab (v0x502) biçiminde tek girdili sahte keytab (aes128-cts-hmac-sha1-96). */
+	/** Fake single-entry keytab in MIT keytab format (v0x502) (aes128-cts-hmac-sha1-96). */
 	static void writeKeytab(Path file, String name, String realm) throws IOException {
 		ByteArrayOutputStream entry = new ByteArrayOutputStream();
 		DataOutputStream e = new DataOutputStream(entry);

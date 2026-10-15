@@ -19,16 +19,17 @@ import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Next;
 import io.github.srdrcn.kafkamcp.toolsets.messages.RecordScanner.Window;
 
 /**
- * Consumer group'suz okuma motoru: earliest/latest/offset/timestamp başlangıcı, opsiyonel filtre,
- * maxRecords/maxScan sınırları; yeni veri beklemez, deadline'a yaklaşınca okuduğunu partial döner.
+ * Reading engine without a consumer group: earliest/latest/offset/timestamp start, optional filter,
+ * maxRecords/maxScan limits; does not wait for new data and returns what it has read as partial when the deadline
+ * gets close.
  * <ul>
- * <li>latest: seçilen partition'ların son kayıtları (end offset'lerden hesaplanır), zamana göre en yeni
- * maxRecords kayıt. Okunan toplam pencere maxScan ile sınırlıdır. Transaction marker'ları/compaction
- * boşlukları yüzünden pencereden az kayıt çıkan partition'ların penceresi geriye genişletilir. Zaman damgası
- * olmayan kayıtlar (eski ZooKeeper broker'larındaki v0 mesaj formatı; timestamp -1) zamanlılardan eski sayılır
- * ve kendi aralarında partition sonlarından adil seçilir (sonuç approximate + not).</li>
- * <li>earliest/offset/timestamp: başlangıçtan ileri; filtresizken maxRecords partition'lara adil bölünür,
- * filtreliyken maxScan kadar kayıt taranır ve ilk maxRecords eşleşme döner.</li>
+ * <li>latest: the last records of the selected partitions (computed from the end offsets), the newest maxRecords
+ * records by time. The total window read is limited by maxScan. Partitions whose window yields fewer records
+ * because of transaction markers/compaction gaps get their window extended backwards. Records without a timestamp
+ * (v0 message format on old ZooKeeper brokers; timestamp -1) count as older than timed ones and are picked fairly
+ * among themselves from the partition ends (result approximate + note).</li>
+ * <li>earliest/offset/timestamp: forward from the start; without a filter maxRecords is split fairly across
+ * partitions, with a filter up to maxScan records are scanned and the first maxRecords matches are returned.</li>
  * </ul>
  */
 public final class MessageReader {
@@ -39,10 +40,10 @@ public final class MessageReader {
 
 	private static final int MAX_LISTED_PARTITIONS = 20;
 
-	/** latest'te az kayıt çıkan partition pencerelerini geriye genişletme turu sınırı. */
+	/** Maximum rounds of extending backwards the latest windows of partitions that yielded too few records. */
 	private static final int MAX_EXTEND_ROUNDS = 6;
 
-	/** latest sıralaması: zaman, partition, offset. */
+	/** latest order: time, partition, offset. */
 	public static final Comparator<ConsumerRecord<byte[], byte[]>> BY_TIME = Comparator
 		.comparingLong((ConsumerRecord<byte[], byte[]> r) -> r.timestamp())
 		.thenComparingInt(ConsumerRecord::partition)
@@ -72,33 +73,33 @@ public final class MessageReader {
 					return f;
 				}
 			}
-			throw new ToolException("Geçersiz from: " + value + " (geçerli: earliest|latest|offset|timestamp)");
+			throw new ToolException("Invalid from: " + value + " (valid: earliest|latest|offset|timestamp)");
 		}
 
 	}
 
 	/**
-	 * Okuma isteği. {@code offset} from=offset, {@code timestamp} (epoch ms) from=timestamp için;
-	 * {@code filter} null ise filtresiz.
+	 * Read request. {@code offset} is for from=offset, {@code timestamp} (epoch ms) for from=timestamp; no filter if
+	 * {@code filter} is null.
 	 */
 	public record Request(String topic, Integer partition, From from, Long offset, Long timestamp, int maxRecords,
 			int maxScan, Predicate<ConsumerRecord<byte[], byte[]>> filter) {
 	}
 
 	/**
-	 * Okuma sonucu. {@code records}: latest için zamana, diğerleri için partition/offset'e göre sıralı.
-	 * {@code partitions}: okunan (lideri olan) partition'lar; {@code offlinePartitions}: lideri olmadığı için
-	 * atlananlar; {@code skippedPartitions}: lideri olduğu halde başlangıcı bulunamadığı (zamana göre aramayı
-	 * desteklemeyen eski broker) için okunmayanlar: {@code partitions}'a, {@code nextOffsets}'e girmez ve
-	 * {@code reachedEnd} false olur. {@code nextOffsets}: okunan partition başına bir sonraki okunacak offset.
-	 * {@code partial}: zaman sınırına takıldı ya da skippedPartitions var (nedeni notes'ta).
+	 * Read result. {@code records}: sorted by time for latest, by partition/offset otherwise. {@code partitions}:
+	 * the partitions read (with a leader); {@code offlinePartitions}: skipped because they have no leader;
+	 * {@code skippedPartitions}: not read because their start could not be found although they have a leader (old
+	 * broker without time lookup support): they are left out of {@code partitions} and {@code nextOffsets}, and
+	 * {@code reachedEnd} is false. {@code nextOffsets}: the next offset to read for each partition read.
+	 * {@code partial}: hit the time limit or there are skippedPartitions (the reason is in notes).
 	 */
 	public record Result(List<ConsumerRecord<byte[], byte[]>> records, List<TopicPartition> partitions,
 			List<Integer> offlinePartitions, long scanned, long matched, boolean reachedEnd, boolean partial,
 			boolean scanLimitReached, boolean approximate, Map<TopicPartition, Long> nextOffsets, List<String> notes,
 			List<Integer> skippedPartitions) {
 
-		/** Atlanan partition'ı olmayan sonuç (önceki imza). */
+		/** Result without skipped partitions (previous signature). */
 		public Result(List<ConsumerRecord<byte[], byte[]>> records, List<TopicPartition> partitions,
 				List<Integer> offlinePartitions, long scanned, long matched, boolean reachedEnd, boolean partial,
 				boolean scanLimitReached, boolean approximate, Map<TopicPartition, Long> nextOffsets,
@@ -126,8 +127,8 @@ public final class MessageReader {
 	}
 
 	/**
-	 * Partition başına başlangıç offset'i. Başlangıcı bulunamadığı için okunmayacak partition'lar (zamana göre
-	 * aramayı desteklemeyen eski broker) {@code skipped}'e eklenir.
+	 * Start offset per partition. Partitions that will not be read because their start could not be found (old
+	 * broker without time lookup support) are added to {@code skipped}.
 	 */
 	private static Map<TopicPartition, Long> starts(ToolCall call, Request req, List<TopicPartition> tps,
 			PartitionOffsets.Bounds b, List<String> notes, List<Integer> skipped) {
@@ -148,21 +149,21 @@ public final class MessageReader {
 					starts.put(tp, Math.max(b.earliest(tp), Math.min(o, b.latest(tp))));
 				}
 				if (!below.isEmpty()) {
-					notes.add("offset " + o + " earliest'ten küçük, earliest'ten başlandı: partition " + list(below));
+					notes.add("offset " + o + " is below earliest, started from earliest: partition " + list(below));
 				}
 				if (!above.isEmpty()) {
-					notes.add("offset " + o + " latest'ten büyük, okunacak kayıt yok: partition " + list(above));
+					notes.add("offset " + o + " is beyond latest, no records to read: partition " + list(above));
 				}
 			}
 			case TIMESTAMP -> {
-				// eski ZooKeeper broker'ları (v0 mesaj formatı / eski protokol) zamana göre aramayı partition
-				// bazında reddedebilir: o partition'lar okunmaz ve not alır, diğerleri okunur
+				// old ZooKeeper brokers (v0 message format / old protocol) may reject the time lookup per
+				// partition: those partitions are not read and get a note, the others are read
 				PartitionOffsets.Lookup at = PartitionOffsets.forTimestampEach(call, tps, req.timestamp());
 				List<Integer> none = new ArrayList<>();
 				for (TopicPartition tp : tps) {
 					PartitionOffsets.OffsetAt a = at.offsets().get(tp);
 					if (at.unsupported().containsKey(tp)) {
-						// okunmaz: başlangıcı yok (latest'ten "başlamış" sayılırsa bitmiş görünür)
+						// not read: there is no start (treating it as started at latest would make it look finished)
 						skipped.add(tp.partition());
 					}
 					else if (a == null || !a.found()) {
@@ -174,10 +175,10 @@ public final class MessageReader {
 					}
 				}
 				if (!none.isEmpty()) {
-					notes.add("Bu zamandan sonra kaydı olmayan partition: " + list(none));
+					notes.add("No records at or after this time: partition " + list(none));
 				}
 				at.unsupportedByReason()
-					.forEach((reason, ps) -> notes.add("Zamana göre başlangıç bulunamadı, okunmadı: partition "
+					.forEach((reason, ps) -> notes.add("No start offset found by time; not read: partition "
 							+ list(ps) + " (" + reason + ")"));
 			}
 			default -> throw new IllegalStateException();
@@ -228,8 +229,8 @@ public final class MessageReader {
 			completed = scan.completed();
 			deadline = scan.deadlineReached();
 			if (!filtered) {
-				// transaction marker'ları ve compaction boşlukları offset kaplar: pencereden az kayıt çıkan
-				// partition'ların penceresi (maxScan bütçesiyle) geriye genişletilir
+				// transaction markers and compaction gaps take up offsets: partitions whose window yielded too few
+				// records get their window extended backwards (within the maxScan budget)
 				long budget = req.maxScan() - RecordScanner.sum(size);
 				for (int round = 0; round < MAX_EXTEND_ROUNDS && completed; round++) {
 					Map<TopicPartition, Long> grant = RecordScanner.fairShare(extension(tps, b, size, starts, got),
@@ -262,38 +263,39 @@ public final class MessageReader {
 		long untimed = records.stream().filter(MessageReader::untimed).count();
 		boolean approximate = (!filtered && (reduced || !shortfall.isEmpty())) || untimed > 0;
 		if (untimed > 0) {
-			notes.add(untimed + " kayıtta zaman damgası yok (eski v0 mesaj formatı): en yeni seçim zamana göre "
-					+ "yapılamadı, her partition'ın son kayıtlarından adil seçildi; bu kayıtlar zamanlı kayıtlardan "
-					+ "önce, partition/offset sırasıyla listelendi");
+			notes.add(untimed + " record(s) have no timestamp (old v0 message format): the newest records could not be "
+					+ "picked by time, so they were picked fairly from the end of each partition; these records are listed "
+					+ "before timed records, in partition/offset order");
 		}
 		if (!filtered && reduced) {
-			notes.add("Partition başına okunan pencere maxScan (" + req.maxScan()
-					+ ") ile sınırlandı; en yeni kayıt seçimi yaklaşık (daha kesin sonuç için maxScan'ı artırın)");
+			notes.add("The window read per partition was limited by maxScan (" + req.maxScan()
+					+ "); the selection of the newest records is approximate (increase maxScan for a more exact result)");
 		}
 		if (!shortfall.isEmpty()) {
-			notes.add("Partition " + list(shortfall) + ": transaction marker/compaction boşlukları nedeniyle son "
-					+ "offset'lerde istenenden az kayıt vardı; geriye genişletme sınırına (maxScan=" + req.maxScan()
-					+ ") takıldı, bu partition'ların daha eski kayıtları eksik olabilir");
+			notes.add("Partition " + list(shortfall) + ": the last offsets held fewer records than requested because of "
+					+ "transaction marker/compaction gaps; the backward extension hit its limit (maxScan=" + req.maxScan()
+					+ "), so older records of these partitions may be missing");
 		}
 		if (filtered && reduced) {
-			notes.add("Sadece son " + RecordScanner.sum(size) + " kayıt tarandı (maxScan); daha eski eşleşmeler olabilir");
+			notes.add("Only the last " + RecordScanner.sum(size) + " records were scanned (maxScan); there may be older matches");
 		}
 		if (deadline) {
-			notes.add("Zaman sınırına yaklaşıldı; o ana kadar okunanlar döndü");
+			notes.add("Approaching the time limit; returned the records read so far");
 		}
 		return new Result(records, tps, sel.offline(), scanned, matched[0], completed, deadline, filtered && reduced,
 				approximate, scan.positions(), notes);
 	}
 
-	/** Zaman damgası yok: v0 mesaj formatı (ya da NO_TIMESTAMP ile yazılmış kayıt); timestamp -1. */
+	/** No timestamp: v0 message format (or a record written with NO_TIMESTAMP); timestamp -1. */
 	static boolean untimed(ConsumerRecord<?, ?> r) {
 		return r.timestamp() < 0;
 	}
 
 	/**
-	 * latest seçim sırası (küçük = daha eski; heap en eskiyi atar). Zamanlı kayıtlarda {@link #BY_TIME}. Zaman
-	 * damgası olmayan kayıtlar zamanlı her kayıttan eski sayılır ve kendi aralarında partition sonuna (latest)
-	 * uzaklıkla sıralanır: seçim partition id'sine göre değil, her partition'ın kuyruğundan adil yapılır.
+	 * latest selection order (smaller = older; the heap drops the oldest). {@link #BY_TIME} for timed records.
+	 * Records without a timestamp count as older than every timed record and are ordered among themselves by distance
+	 * from the partition end (latest): the selection is made fairly from the tail of each partition, not by
+	 * partition id.
 	 */
 	static Comparator<ConsumerRecord<byte[], byte[]>> newestLast(List<TopicPartition> tps, PartitionOffsets.Bounds b) {
 		Map<Integer, Long> ends = new HashMap<>();
@@ -305,8 +307,9 @@ public final class MessageReader {
 	}
 
 	/**
-	 * Penceresinden hedefinden ({@code size}) az kayıt çıkan ve geriye yeri olan partition'lar için ek pencere
-	 * boyu (offset): gözlenen offset/kayıt oranıyla eksik kayıt sayısına göre tahmin.
+	 * Extra window size (in offsets) for partitions whose window yielded fewer records than the target
+	 * ({@code size}) and that have room backwards: estimated from the missing record count and the observed
+	 * offset/record ratio.
 	 */
 	private static Map<TopicPartition, Long> extension(List<TopicPartition> tps, PartitionOffsets.Bounds b,
 			Map<TopicPartition, Long> size, Map<TopicPartition, Long> starts, Map<TopicPartition, Long> got) {
@@ -325,7 +328,7 @@ public final class MessageReader {
 		return ext;
 	}
 
-	/** Hedefinden az kayıt çıkan ama geriye daha okunmamış offset'i kalan partition'lar. */
+	/** Partitions that yielded fewer records than the target but still have unread offsets further back. */
 	private static List<Integer> shortfall(List<TopicPartition> tps, PartitionOffsets.Bounds b,
 			Map<TopicPartition, Long> size, Map<TopicPartition, Long> starts, Map<TopicPartition, Long> got) {
 		List<Integer> out = new ArrayList<>();
@@ -338,8 +341,8 @@ public final class MessageReader {
 	}
 
 	/**
-	 * {@code skipped}: başlangıcı bulunamadığı için okunmayacak partition'lar; taranmaz, reachedEnd false ve
-	 * sonuç partial işaretlenir.
+	 * {@code skipped}: partitions that will not be read because their start could not be found; they are not
+	 * scanned, reachedEnd is false and the result is marked partial.
 	 */
 	private static Result forward(ToolCall call, Request req, PartitionOffsets.Selection sel,
 			PartitionOffsets.Bounds b, Map<TopicPartition, Long> starts, List<String> notes, List<Integer> skipped) {
@@ -398,10 +401,10 @@ public final class MessageReader {
 		boolean reachedEnd = skipped.isEmpty() && readToEnd;
 		boolean scanLimitReached = filtered && scanLimited && scan.completed() && !readToEnd;
 		if (scanLimitReached) {
-			notes.add("maxScan (" + req.maxScan() + ") kadar kayıt tarandı; devamı taranmadı");
+			notes.add("Scanned up to maxScan (" + req.maxScan() + ") records; the rest was not scanned");
 		}
 		if (scan.deadlineReached()) {
-			notes.add("Zaman sınırına yaklaşıldı; o ana kadar okunanlar döndü");
+			notes.add("Approaching the time limit; returned the records read so far");
 		}
 		return new Result(records, tps, sel.offline(), scan.scanned(), records.size(), reachedEnd,
 				scan.deadlineReached() || !skipped.isEmpty(), scanLimitReached, false, scan.positions(), notes,
@@ -413,7 +416,7 @@ public final class MessageReader {
 			return partitions.toString();
 		}
 		return partitions.subList(0, MAX_LISTED_PARTITIONS) + " (+" + (partitions.size() - MAX_LISTED_PARTITIONS)
-				+ " partition daha)";
+				+ " more)";
 	}
 
 }

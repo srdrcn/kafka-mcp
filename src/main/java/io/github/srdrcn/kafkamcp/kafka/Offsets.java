@@ -14,54 +14,54 @@ import org.apache.kafka.common.TopicPartition;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
- * Offset sorguları: her çağrı tüm partition'lar için TEK listOffsets gönderir. Başarısız partition'lar
- * sonuçta yer almaz (hiçbiri başarılı değilse hata fırlatılır); çağıran eksikleri raporlamalıdır.
+ * Offset queries: each call sends a SINGLE listOffsets for all partitions. Failed partitions are left out of
+ * the result (an error is thrown if none succeeded); the caller should report the missing ones.
  */
 public final class Offsets {
 
 	private Offsets() {
 	}
 
-	/** earliest/latest aralığı; count = latest - earliest. */
+	/** earliest/latest range; count = latest - earliest. */
 	public record Range(long earliest, long latest) {
 
-		/** Yaklaşık mesaj sayısı (compaction/transaction marker'ları nedeniyle üst sınır). */
+		/** Approximate message count (an upper bound because of compaction/transaction markers). */
 		public long count() {
 			return Math.max(0, latest - earliest);
 		}
 
 	}
 
-	/** Tek listOffsets çağrısı (spec tüm partition'lar için aynı). */
+	/** A single listOffsets call (same spec for all partitions). */
 	public static Map<TopicPartition, ListOffsetsResultInfo> list(ToolCall call, Collection<TopicPartition> tps,
 			OffsetSpec spec) {
 		return awaitEach(call, tps, submit(call, tps, spec)).requireAny().values();
 	}
 
-	/** Partition başına latest (log end) offset. */
+	/** Latest (log end) offset per partition. */
 	public static Map<TopicPartition, Long> latest(ToolCall call, Collection<TopicPartition> tps) {
 		return offsets(list(call, tps, OffsetSpec.latest()));
 	}
 
-	/** Partition başına earliest offset. */
+	/** Earliest offset per partition. */
 	public static Map<TopicPartition, Long> earliest(ToolCall call, Collection<TopicPartition> tps) {
 		return offsets(list(call, tps, OffsetSpec.earliest()));
 	}
 
-	/** earliest + latest; iki listOffsets aynı anda gönderilir. Sadece ikisi de gelen partition'lar döner. */
+	/** earliest + latest; both listOffsets are sent at once. Only partitions with both results are returned. */
 	public static Map<TopicPartition, Range> ranges(ToolCall call, Collection<TopicPartition> tps) {
 		return submitRanges(call, tps).await(call);
 	}
 
-	/** earliest + latest isteklerini gönderir (beklemez); başka isteklerle paralel çalıştırmak için. */
+	/** Sends the earliest + latest requests (does not wait); for running them in parallel with other requests. */
 	public static PendingRanges submitRanges(ToolCall call, Collection<TopicPartition> tps) {
 		return new PendingRanges(tps, submit(call, tps, OffsetSpec.earliest()), submit(call, tps, OffsetSpec.latest()));
 	}
 
-	/** Gönderilmiş earliest/latest istekleri. */
+	/** Pending earliest/latest requests. */
 	public record PendingRanges(Collection<TopicPartition> tps, ListOffsetsResult earliest, ListOffsetsResult latest) {
 
-		/** Sonuçları bekler; sadece ikisi de gelen partition'lar döner (hiçbiri gelmezse hata). */
+		/** Waits for the results; only partitions with both results are returned (error if none arrives). */
 		public Map<TopicPartition, Range> await(ToolCall call) {
 			Map<TopicPartition, Long> e = offsets(awaitEach(call, tps, earliest).requireAny().values());
 			Map<TopicPartition, Long> l = offsets(awaitEach(call, tps, latest).requireAny().values());
@@ -78,7 +78,7 @@ public final class Offsets {
 
 	}
 
-	/** listOffsets isteğini gönderir (beklemez); birden çok spec'i paralel göndermek için. */
+	/** Sends the listOffsets request (does not wait); for sending several specs in parallel. */
 	public static ListOffsetsResult submit(ToolCall call, Collection<TopicPartition> tps, OffsetSpec spec) {
 		Map<TopicPartition, OffsetSpec> specs = new HashMap<>();
 		for (TopicPartition tp : tps) {
@@ -87,7 +87,7 @@ public final class Offsets {
 		return call.admin().listOffsets(specs);
 	}
 
-	/** {@link #submit} sonucunu bekler; partition bazında başarılı sonuçlar ve hatalar. */
+	/** Waits for the {@link #submit} result; successful results and errors per partition. */
 	public static Futures.Each<TopicPartition, ListOffsetsResultInfo> awaitEach(ToolCall call,
 			Collection<TopicPartition> tps, ListOffsetsResult result) {
 		Map<TopicPartition, KafkaFuture<ListOffsetsResultInfo>> futures = new LinkedHashMap<>();

@@ -15,31 +15,31 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Topic kullanım raporları: boş topic'ler, boşta (yazılmayan) topic'ler, consumer'ı olmayan topic'ler. */
+/** Topic usage reports: empty topics, idle (not written) topics, topics without consumers. */
 @Component
 public class TopicUsageTools {
 
-	/** Bilinmeyen/ek listelerde gösterilen en fazla ad. */
+	/** Maximum number of names shown in the unknown/extra lists. */
 	static final int SAMPLE = 20;
 
-	/** Commit etmeyen okuyucular hakkında not. */
-	static final String INVISIBLE_READERS = "Sadece commit'li offset'i olan consumer group'lar görünür: assign() ile okuyan "
-			+ "ve commit etmeyen istemciler, Connect source/iç okuyucuları, Schema Registry gibi sistem okuyucuları burada görünmez";
+	/** Note about readers that do not commit. */
+	static final String INVISIBLE_READERS = "Only consumer groups with committed offsets are visible: clients that read with "
+			+ "assign() without committing, Connect source/internal readers and system readers such as Schema Registry are not shown";
 
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("report_empty_topics",
-						"Hiç mesajı olmayan topic'ler (tüm partition'larda earliest == latest); hiç yazılmamış olanlar ayrıca işaretlenir")
+						"Topics with no messages (earliest == latest on every partition); never-written topics are flagged")
 					.param("includeInternal", ReportParams.includeInternal(false))
 					.listParams()
 					.handler(this::emptyTopics),
 				ToolSpec.read("report_idle_topics",
-						"Son yazması N günden eski topic'ler (maxTimestamp), en eskiden yeniye; boş topic'ler ayrıca listelenir")
+						"Topics whose last write (maxTimestamp) is older than N days, oldest first; empty topics are listed separately")
 					.param("olderThanDays", ReportParams.olderThanDays())
 					.listParams()
 					.handler(this::idleTopics),
 				ToolSpec.read("report_topics_without_consumers",
-						"Hiçbir consumer group'un commit'li offset'i olmayan (iç olmayan) topic'ler; boyut ve son yazma yaşıyla")
+						"Non-internal topics without committed offsets from any consumer group, with size and last write age")
 					.listParams()
 					.handler(this::topicsWithoutConsumers));
 	}
@@ -63,7 +63,7 @@ public class TopicUsageTools {
 				"unknownCount", unknown.isEmpty() ? null : unknown.size(), "unknownTopics",
 				unknown.isEmpty() ? null : ReportParams.head(unknown, SAMPLE));
 		scan.coverage()
-			.note("neverWritten=false: topic'e yazılmış ama tüm veri retention ile silinmiş (latest > 0)");
+			.note("neverWritten=false: the topic was written to but all data was removed by retention (latest > 0)");
 		scan.coverage().addTo(out);
 		out.putAll(ReportParams.page("topics", rows, call.limit()));
 		return out;
@@ -88,7 +88,7 @@ public class TopicUsageTools {
 				idle.add(a);
 			}
 			else if (isIdle == null) {
-				unknown.computeIfAbsent(a.unknownReason() == null ? "bilinmiyor" : a.unknownReason(),
+				unknown.computeIfAbsent(a.unknownReason() == null ? "unknown" : a.unknownReason(),
 						k -> new ArrayList<>()).add(t);
 			}
 		}
@@ -108,13 +108,13 @@ public class TopicUsageTools {
 		if (!unknown.isEmpty()) {
 			out.put("unknown", unknown(unknown));
 		}
-		scan.coverage().note("Son yazma: partition'ların en büyük zaman damgası (CreateTime ise producer'ın verdiği zaman)");
+		scan.coverage().note("Last write: the largest record timestamp across partitions (with CreateTime, the time set by the producer)");
 		scan.coverage().addTo(out);
 		out.putAll(ReportParams.page("topics", rows, call.limit()));
 		return out;
 	}
 
-	/** Nedene göre bilinmeyen topic'ler: {count, byReason: {neden: {count, topics}}}. */
+	/** Unknown topics by reason: {count, byReason: {reason: {count, topics}}}. */
 	static Map<String, Object> unknown(Map<String, List<String>> byReason) {
 		Map<String, Object> reasons = new LinkedHashMap<>();
 		int total = 0;
@@ -157,7 +157,7 @@ public class TopicUsageTools {
 				scan.topics().size() - rows.size(), "groupsListed", groups.listed().size());
 		if (!groups.complete()) {
 			out.put("uncertain", true);
-			scan.coverage().note("Bazı grupların offset'leri okunamadı/incelenmedi: listedeki bazı topic'lerin consumer'ı olabilir");
+			scan.coverage().note("Offsets of some groups could not be read or were not examined: some listed topics may have consumers");
 		}
 		scan.coverage().note(INVISIBLE_READERS);
 		scan.coverage().addTo(out);

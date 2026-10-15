@@ -9,11 +9,11 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** acl: ACL, kota ve güvenlik araçları. */
+/** acl: ACL, quota and security tools. */
 @Component
 public class AclToolset implements Toolset {
 
-	/** Listeleme sırası: önce okuma, sonra yazma araçları. */
+	/** Listing order: read tools first, then write tools. */
 	private static final List<String> ORDER = List.of("acls_list", "acls_explain", "acls_who_can_access_topic",
 			"acls_principal_permissions", "acls_audit", "quotas_list", "scram_users_list", "delegation_tokens_list",
 			"kerberos_self_check", "security_summary", "acls_create", "quotas_update", "acls_delete");
@@ -44,7 +44,7 @@ public class AclToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "ACL, kota, SCRAM, delegation token ve Kerberos/güvenlik araçları";
+		return "ACL, quota, SCRAM, delegation token and Kerberos/security tools";
 	}
 
 	@Override

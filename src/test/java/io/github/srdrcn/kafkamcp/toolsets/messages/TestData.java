@@ -20,10 +20,10 @@ import org.apache.kafka.clients.producer.RecordMetadata;
 
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
-/** messages testleri için topic oluşturma ve veri üretme yardımcıları. */
+/** Helpers for creating topics and producing data in the messages tests. */
 final class TestData {
 
-	/** Geçmişte sabit bir başlangıç zamanı (broker'ın gelecek zaman sınırına takılmasın). */
+	/** A fixed start time in the past (so it does not hit the broker's future timestamp limit). */
 	static final long BASE_TS = Instant.now().minus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.SECONDS).toEpochMilli();
 
 	private TestData() {
@@ -46,7 +46,7 @@ final class TestData {
 		return new ProducerRecord<>(topic, partition, timestamp, utf8(key), utf8(value));
 	}
 
-	/** Kayıtları sırayla gönderir ve onaylarını bekler. */
+	/** Sends the records in order and waits for their acks. */
 	static List<RecordMetadata> send(List<ProducerRecord<byte[], byte[]>> records) throws Exception {
 		try (KafkaProducer<byte[], byte[]> producer = KafkaTestCluster.producer(null)) {
 			List<Future<RecordMetadata>> futures = new ArrayList<>();

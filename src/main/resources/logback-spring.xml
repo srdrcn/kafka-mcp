@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Loglar düz JSON (satır başına bir olay). HTTP modunda stdout, stdio modunda stderr. -->
+<!-- Logs are plain JSON (one event per line). stdout in HTTP mode, stderr in stdio mode. -->
 <configuration>
   <springProperty scope="context" name="LOG_TARGET" source="kafka-mcp.log-target" defaultValue="System.out"/>
   <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">

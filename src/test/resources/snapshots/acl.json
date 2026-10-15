@@ -1,53 +1,53 @@
 [ {
   "name" : "acls_list",
-  "description" : "ACL'leri listeler; principal, kaynak tipi/adı, desen, işlem, izin ve host'a göre filtreler",
+  "description" : "List ACLs, filtered by principal, resource type/name, pattern, operation, permission and host",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
         "type" : "string",
-        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
       },
       "resourceType" : {
         "type" : "string",
-        "description" : "Kaynak tipi (varsayılan ANY)",
+        "description" : "Resource type (default ANY)",
         "enum" : [ "TOPIC", "GROUP", "CLUSTER", "TRANSACTIONAL_ID", "DELEGATION_TOKEN", "USER", "ANY" ]
       },
       "resourceName" : {
         "type" : "string",
-        "description" : "Kaynak adı (patternType'a göre eşleşir)"
+        "description" : "Resource name (matched according to patternType)"
       },
       "patternType" : {
         "type" : "string",
-        "description" : "Desen tipi (varsayılan ANY; MATCH: bu kaynağa uygulanan literal, prefixed ve * binding'leri)",
+        "description" : "Pattern type (default ANY; MATCH: literal, prefixed and * bindings that apply to this resource)",
         "enum" : [ "LITERAL", "PREFIXED", "MATCH", "ANY" ]
       },
       "operation" : {
         "type" : "string",
-        "description" : "İşlem (varsayılan ANY)",
+        "description" : "Operation (default ANY)",
         "enum" : [ "ALL", "READ", "WRITE", "CREATE", "DELETE", "ALTER", "DESCRIBE", "CLUSTER_ACTION", "DESCRIBE_CONFIGS", "ALTER_CONFIGS", "IDEMPOTENT_WRITE", "CREATE_TOKENS", "DESCRIBE_TOKENS", "ANY" ]
       },
       "permission" : {
         "type" : "string",
-        "description" : "İzin (varsayılan ANY)",
+        "description" : "Permission (default ANY)",
         "enum" : [ "ALLOW", "DENY", "ANY" ]
       },
       "host" : {
         "type" : "string",
-        "description" : "Host (varsayılan tümü)"
+        "description" : "Host (default all)"
       },
       "filter" : {
         "type" : "string",
-        "description" : "Principal ya da kaynak adı filtresi (regex, kısmi eşleşme)"
+        "description" : "Principal or resource name filter (regex, partial match)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -61,47 +61,47 @@
   }
 }, {
   "name" : "acls_explain",
-  "description" : "Principal'ın kaynakta bir işlemi yapıp yapamayacağını Kafka authorizer kurallarıyla (KRaft StandardAuthorizer, ZooKeeper AclAuthorizer) açıklar (ALLOW/DENY ve nedeni)",
+  "description" : "Explain whether a principal may perform an operation on a resource under the built-in Kafka authorizer rules (ALLOW/DENY and why)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
         "type" : "string",
-        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
       },
       "operation" : {
         "type" : "string",
-        "description" : "İşlem",
+        "description" : "Operation",
         "enum" : [ "ALL", "READ", "WRITE", "CREATE", "DELETE", "ALTER", "DESCRIBE", "CLUSTER_ACTION", "DESCRIBE_CONFIGS", "ALTER_CONFIGS", "IDEMPOTENT_WRITE", "CREATE_TOKENS", "DESCRIBE_TOKENS" ]
       },
       "resourceType" : {
         "type" : "string",
-        "description" : "Kaynak tipi",
+        "description" : "Resource type",
         "enum" : [ "TOPIC", "GROUP", "CLUSTER", "TRANSACTIONAL_ID", "DELEGATION_TOKEN", "USER" ]
       },
       "resourceName" : {
         "type" : "string",
-        "description" : "Kaynak adı (CLUSTER için kafka-cluster)"
+        "description" : "Resource name (kafka-cluster for CLUSTER)"
       },
       "host" : {
         "type" : "string",
-        "description" : "İstemci IP'si (varsayılan *: sadece host'u * olan ACL'ler eşleşir)"
+        "description" : "Client IP (default *: only ACLs whose host is * match)"
       },
       "superUsers" : {
         "type" : "array",
-        "description" : "Bilinen süper kullanıcılar (ör. User:admin); broker super.users'ı gizli döndürdüğünde kullanılır",
+        "description" : "Known super users (e.g. User:admin); used when the broker returns super.users as hidden",
         "items" : {
           "type" : "string"
         }
       },
       "allowEveryoneIfNoAclFound" : {
         "type" : "boolean",
-        "description" : "Broker'ın allow.everyone.if.no.acl.found değeri; broker gizli döndürdüğünde kullanılır (verilmezse false varsayılır)"
+        "description" : "The broker's allow.everyone.if.no.acl.found value; used when the broker returns it as hidden (assumed false if omitted)"
       }
     },
     "required" : [ "cluster", "principal", "operation", "resourceType", "resourceName" ]
@@ -112,34 +112,34 @@
   }
 }, {
   "name" : "acls_who_can_access_topic",
-  "description" : "Topic'e kimlerin erişebildiğini (ALLOW), kimlerin açıkça reddedildiğini (DENY) ve süper kullanıcıları gösterir",
+  "description" : "Show who can access a topic (ALLOW), who is explicitly denied (DENY), and the super users",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       },
       "operation" : {
         "type" : "string",
-        "description" : "İşlem (varsayılan READ ve WRITE)",
+        "description" : "Operation (default READ and WRITE)",
         "enum" : [ "ALL", "READ", "WRITE", "CREATE", "DELETE", "ALTER", "DESCRIBE", "CLUSTER_ACTION", "DESCRIBE_CONFIGS", "ALTER_CONFIGS", "IDEMPOTENT_WRITE", "CREATE_TOKENS", "DESCRIBE_TOKENS" ]
       },
       "superUsers" : {
         "type" : "array",
-        "description" : "Bilinen süper kullanıcılar (ör. User:admin); broker super.users'ı gizli döndürdüğünde kullanılır",
+        "description" : "Known super users (e.g. User:admin); used when the broker returns super.users as hidden",
         "items" : {
           "type" : "string"
         }
       },
       "allowEveryoneIfNoAclFound" : {
         "type" : "boolean",
-        "description" : "Broker'ın allow.everyone.if.no.acl.found değeri; broker gizli döndürdüğünde kullanılır (verilmezse false varsayılır)"
+        "description" : "The broker's allow.everyone.if.no.acl.found value; used when the broker returns it as hidden (assumed false if omitted)"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -150,30 +150,30 @@
   }
 }, {
   "name" : "acls_principal_permissions",
-  "description" : "Principal'a uygulanan ACL'leri kaynağa göre gruplar; etkin ALLOW/DENY işlemlerini özetler",
+  "description" : "Group the ACLs that apply to a principal by resource and summarize the effective ALLOW/DENY operations",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "principal" : {
         "type" : "string",
-        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
       },
       "includeWildcardPrincipal" : {
         "type" : "boolean",
-        "description" : "User:* binding'lerini de dahil et (varsayılan true)"
+        "description" : "Also include User:* bindings (default true)"
       },
       "filter" : {
         "type" : "string",
-        "description" : "Kaynak adı filtresi (regex, kısmi eşleşme)"
+        "description" : "Resource name filter (regex, partial match)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kaynak dönsün (varsayılan 100)",
+        "description" : "Maximum number of resources to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -187,22 +187,22 @@
   }
 }, {
   "name" : "acls_audit",
-  "description" : "Riskli ve sahipsiz ACL'leri bulur: User:*, wildcard kaynak, ALL, CLUSTER ALLOW, olmayan topic/group, boşa prefix",
+  "description" : "Find risky and orphaned ACLs: User:*, wildcard resource, ALL, CLUSTER ALLOW, missing topic/group, unused prefix",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Kapsam: principal ya da kaynak adı filtresi (regex, kısmi eşleşme)"
+        "description" : "Scope: principal or resource name filter (regex, partial match)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "Kategori başına en fazla örnek (varsayılan 20)",
+        "description" : "Maximum samples per category (default 20)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 20
@@ -216,22 +216,22 @@
   }
 }, {
   "name" : "quotas_list",
-  "description" : "Client kotalarını (user/client-id/ip, <default> dahil) ve değerlerini listeler",
+  "description" : "List client quotas (user/client-id/ip, <default> included) and their values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Entity filtresi (regex; ör. user=alice, client-id=<default>, ip=10\\.)"
+        "description" : "Entity filter (regex; e.g. user=alice, client-id=<default>, ip=10\\.)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -245,22 +245,22 @@
   }
 }, {
   "name" : "scram_users_list",
-  "description" : "SCRAM kullanıcılarını mekanizma ve iterasyon sayısıyla listeler (gizli bilgi dönmez)",
+  "description" : "List SCRAM users with mechanism and iteration count (no secrets returned)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Kullanıcı adı filtresi (regex, kısmi eşleşme)"
+        "description" : "User name filter (regex, partial match)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -274,22 +274,22 @@
   }
 }, {
   "name" : "delegation_tokens_list",
-  "description" : "Delegation token'ları listeler: id, sahip, yenileyenler, süreler, süresi dolmuş mu (HMAC dönmez)",
+  "description" : "List delegation tokens: id, owner, renewers, timestamps, expired or not (no HMAC returned)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Token id ya da sahip filtresi (regex, kısmi eşleşme)"
+        "description" : "Token id or owner filter (regex, partial match)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
@@ -303,13 +303,13 @@
   }
 }, {
   "name" : "kerberos_self_check",
-  "description" : "Bu sunucunun Kerberos ayarlarını (krb5.conf, keytab, principal) kontrol eder; login ve Kafka bağlantısını dener",
+  "description" : "Check this server's Kerberos setup (krb5.conf, keytab, principal); try a login and a Kafka connection",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },
@@ -321,13 +321,13 @@
   }
 }, {
   "name" : "security_summary",
-  "description" : "Güvenlik özeti: metadata modu (KRaft/ZooKeeper), listener/SASL/authorizer ayarları, ACL/SCRAM/kota/token sayıları, bu sunucunun bağlantısı",
+  "description" : "Security summary: metadata mode (KRaft/ZooKeeper), listener/SASL/authorizer settings, ACL/SCRAM/quota/token counts, this server's connection",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha", "beta" ]
       }
     },
@@ -339,71 +339,71 @@
   }
 }, {
   "name" : "acls_create",
-  "description" : "YAZMA: ACL oluşturur: tek binding ya da preset (producer, consumer, streams); oluşan binding'leri döner",
+  "description" : "WRITE: Create ACLs: a single binding or a preset (producer, consumer, streams); returns the created bindings",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "principal" : {
         "type" : "string",
-        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
       },
       "preset" : {
         "type" : "string",
-        "description" : "Hazır set (verilirse topic zorunlu; resourceType/resourceName/operation verilmez)",
+        "description" : "Preset (requires topic; do not pass resourceType/resourceName/operation)",
         "enum" : [ "producer", "consumer", "streams" ]
       },
       "resourceType" : {
         "type" : "string",
-        "description" : "Kaynak tipi (preset yoksa zorunlu)",
+        "description" : "Resource type (required without preset)",
         "enum" : [ "TOPIC", "GROUP", "CLUSTER", "TRANSACTIONAL_ID", "DELEGATION_TOKEN", "USER" ]
       },
       "resourceName" : {
         "type" : "string",
-        "description" : "Kaynak adı (preset yoksa zorunlu; CLUSTER için kafka-cluster)"
+        "description" : "Resource name (required without preset; kafka-cluster for CLUSTER)"
       },
       "patternType" : {
         "type" : "string",
-        "description" : "Desen tipi (varsayılan LITERAL)",
+        "description" : "Pattern type (default LITERAL)",
         "enum" : [ "LITERAL", "PREFIXED" ]
       },
       "operation" : {
         "type" : "string",
-        "description" : "İşlem (preset yoksa zorunlu)",
+        "description" : "Operation (required without preset)",
         "enum" : [ "ALL", "READ", "WRITE", "CREATE", "DELETE", "ALTER", "DESCRIBE", "CLUSTER_ACTION", "DESCRIBE_CONFIGS", "ALTER_CONFIGS", "IDEMPOTENT_WRITE", "CREATE_TOKENS", "DESCRIBE_TOKENS" ]
       },
       "permission" : {
         "type" : "string",
-        "description" : "İzin (varsayılan ALLOW; preset'ler sadece ALLOW)",
+        "description" : "Permission (default ALLOW; presets are ALLOW only)",
         "enum" : [ "ALLOW", "DENY" ]
       },
       "host" : {
         "type" : "string",
-        "description" : "Host (varsayılan *)"
+        "description" : "Host (default *)"
       },
       "topic" : {
         "type" : "string",
-        "description" : "Preset topic'i (streams için input topic)"
+        "description" : "Preset topic (input topic for streams)"
       },
       "group" : {
         "type" : "string",
-        "description" : "consumer preset'i: consumer group (zorunlu)"
+        "description" : "consumer preset: consumer group (required)"
       },
       "transactionalId" : {
         "type" : "string",
-        "description" : "producer preset'i: transactional.id (opsiyonel)"
+        "description" : "producer preset: transactional.id (optional)"
       },
       "applicationId" : {
         "type" : "string",
-        "description" : "streams preset'i: application.id (zorunlu)"
+        "description" : "streams preset: application.id (required)"
       },
       "outputTopic" : {
         "type" : "string",
-        "description" : "streams preset'i: çıktı topic'i (opsiyonel; WRITE, DESCRIBE)"
+        "description" : "streams preset: output topic (optional; WRITE, DESCRIBE)"
       }
     },
     "required" : [ "cluster", "principal" ]
@@ -414,34 +414,34 @@
   }
 }, {
   "name" : "quotas_update",
-  "description" : "YAZMA: Client kotası ayarlar/kaldırır (user, clientId, ip; <default> destekli); önce/sonra değerleri döner",
+  "description" : "WRITE: Set or remove client quotas (user, clientId, ip; <default> supported); returns the before/after values",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "user" : {
         "type" : "string",
-        "description" : "Kullanıcı (varsayılan kullanıcı için <default>)"
+        "description" : "User (<default> for the default user)"
       },
       "clientId" : {
         "type" : "string",
-        "description" : "client.id (varsayılan için <default>)"
+        "description" : "client.id (<default> for the default)"
       },
       "ip" : {
         "type" : "string",
-        "description" : "IP adresi (varsayılan için <default>); user/clientId ile birlikte verilmez"
+        "description" : "IP address (<default> for the default); cannot be combined with user/clientId"
       },
       "set" : {
         "type" : "object",
-        "description" : "Ayarlanacak kotalar: anahtar → sayı (ör. {\"producer_byte_rate\": 1048576}). Anahtarlar: producer_byte_rate, consumer_byte_rate, request_percentage, controller_mutation_rate; ip için connection_creation_rate"
+        "description" : "Quotas to set: key → number (e.g. {\"producer_byte_rate\": 1048576}). Keys: producer_byte_rate, consumer_byte_rate, request_percentage, controller_mutation_rate; connection_creation_rate for ip"
       },
       "remove" : {
         "type" : "array",
-        "description" : "Kaldırılacak kota anahtarları",
+        "description" : "Quota keys to remove",
         "items" : {
           "type" : "string"
         }
@@ -455,46 +455,46 @@
   }
 }, {
   "name" : "acls_delete",
-  "description" : "YAZMA: Filtreye uyan ACL'leri siler (principal, resourceType, resourceName zorunlu); silinen binding'leri döner",
+  "description" : "WRITE: Delete ACLs matching the filter (principal, resourceType, resourceName required); returns the deleted bindings",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "principal" : {
         "type" : "string",
-        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+        "description" : "Principal (e.g. User:alice; a bare name gets the User: prefix)"
       },
       "resourceType" : {
         "type" : "string",
-        "description" : "Kaynak tipi",
+        "description" : "Resource type",
         "enum" : [ "TOPIC", "GROUP", "CLUSTER", "TRANSACTIONAL_ID", "DELEGATION_TOKEN", "USER" ]
       },
       "resourceName" : {
         "type" : "string",
-        "description" : "Kaynak adı (CLUSTER için kafka-cluster)"
+        "description" : "Resource name (kafka-cluster for CLUSTER)"
       },
       "patternType" : {
         "type" : "string",
-        "description" : "Desen tipi (varsayılan LITERAL; ANY: bu addaki tüm desenler)",
+        "description" : "Pattern type (default LITERAL; ANY: all patterns with this name)",
         "enum" : [ "LITERAL", "PREFIXED", "ANY" ]
       },
       "operation" : {
         "type" : "string",
-        "description" : "İşlem (varsayılan ANY)",
+        "description" : "Operation (default ANY)",
         "enum" : [ "ALL", "READ", "WRITE", "CREATE", "DELETE", "ALTER", "DESCRIBE", "CLUSTER_ACTION", "DESCRIBE_CONFIGS", "ALTER_CONFIGS", "IDEMPOTENT_WRITE", "CREATE_TOKENS", "DESCRIBE_TOKENS", "ANY" ]
       },
       "permission" : {
         "type" : "string",
-        "description" : "İzin (varsayılan ANY)",
+        "description" : "Permission (default ANY)",
         "enum" : [ "ALLOW", "DENY", "ANY" ]
       },
       "host" : {
         "type" : "string",
-        "description" : "Host (varsayılan tümü)"
+        "description" : "Host (default all)"
       }
     },
     "required" : [ "cluster", "principal", "resourceType", "resourceName" ]

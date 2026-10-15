@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** schemaregistry: subject, şema, fark ve compatibility araçları (sadece schemaRegistryUrl tanımlı cluster'larda). */
+/** schemaregistry: subject, schema, diff and compatibility tools (only on clusters with a schemaRegistryUrl). */
 @Component
 public class SchemaRegistryToolset implements Toolset {
 
@@ -32,7 +32,7 @@ public class SchemaRegistryToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Schema Registry subject, şema, fark ve compatibility araçları";
+		return "Schema Registry subject, schema, diff and compatibility tools";
 	}
 
 	@Override

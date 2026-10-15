@@ -35,7 +35,7 @@ import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectApi;
 import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectorOverview;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 
-/** Envanter raporları: takım (önek) envanteri ve temizlik adayları. */
+/** Inventory reports: team (prefix) inventory and cleanup candidates. */
 @Component
 public class InventoryTools {
 
@@ -46,23 +46,23 @@ public class InventoryTools {
 	}
 
 	public List<ToolSpec> tools() {
-		Map<String, Object> limit = ReportParams.integer("Her listede en fazla kaç kayıt (varsayılan 100)", 100, 1,
+		Map<String, Object> limit = ReportParams.integer("Maximum number of items per list (default 100)", 100, 1,
 				ToolSpec.MAX_LIST_LIMIT);
 		return List.of(
 				ToolSpec.read("report_team_inventory",
-						"Takım envanteri (topic öneki): topic'ler, boyut, boş/boşta işaretleri, consumer group'lar ve lag, connector'lar, ACL principal'ları")
-					.required("prefix", P.string("Topic adı öneki (ör. payments.)"))
+						"Team inventory by topic prefix: topics, size, empty/idle flags, consumer groups and lag, connectors, ACL principals")
+					.required("prefix", P.string("Topic name prefix (e.g. payments.)"))
 					.param("olderThanDays", ReportParams.olderThanDays())
 					.param("limit", limit)
 					.handler(this::teamInventory),
 				ToolSpec.read("report_cleanup_candidates",
-						"Temizlik adayları (silmez): boş/boşta/consumer'sız topic'ler, Empty gruplar, sahipsiz LITERAL ACL'ler; neden ve risk ile")
+						"Cleanup candidates (deletes nothing): empty/idle/unconsumed topics, Empty groups, orphan LITERAL ACLs, with reasons and risk")
 					.param("olderThanDays", ReportParams.olderThanDays())
 					.listParams()
 					.handler(this::cleanupCandidates));
 	}
 
-	/** TOPIC ve GROUP ACL'leri (tek describeAcls). */
+	/** ACLs of one resource type such as TOPIC or GROUP (one describeAcls). */
 	private static KafkaFuture<Collection<AclBinding>> submitAcls(ToolCall call, ResourceType type) {
 		return call.admin()
 			.describeAcls(new AclBindingFilter(new ResourcePatternFilter(type, null, PatternType.ANY),
@@ -145,12 +145,12 @@ public class InventoryTools {
 				coverage.partial();
 			}
 		}
-		coverage.note("Connector eşleşmesi config'e göre (topics/topic, *.regex, *.prefix); ACL'ler: LITERAL, PREFIXED ve '*' TOPIC binding'leri");
+		coverage.note("Connectors are matched by config (topics/topic, *.regex, *.prefix); ACLs: LITERAL, PREFIXED and '*' TOPIC bindings");
 		coverage.addTo(out);
 		return out;
 	}
 
-	/** Takım topic'lerinde commit'li offset'i olan gruplar (lag'e göre) ve önekle adlandırılmış diğer gruplar. */
+	/** Groups with committed offsets on the team topics (by lag) and other groups named with the prefix. */
 	private static Map<String, Object> teamGroups(FleetScan scan, String prefix, int limit) {
 		GroupScan groups = scan.groups();
 		if (groups == null) {
@@ -203,7 +203,7 @@ public class InventoryTools {
 		return out;
 	}
 
-	/** Config'i takım topic'lerine (ya da önek altındaki adlara) referans veren connector'lar. */
+	/** Connectors whose config references the team topics (or names under the prefix). */
 	private static Map<String, Object> teamConnectors(Settled<List<ConnectorOverview>> s, String prefix,
 			Set<String> teamTopics, int limit) {
 		if (!s.ok()) {
@@ -251,7 +251,7 @@ public class InventoryTools {
 			.groups(GroupScan.MAX_GROUPS)
 			.reserve(2_000)
 			.run();
-		// grup taraması başarısızsa (hata/partial FleetScan'de) topic ve ACL adayları yine üretilir
+		// if the group scan fails (error/partial recorded by FleetScan), topic and ACL candidates are still produced
 		GroupScan groups = scan.groups();
 		Coverage coverage = scan.coverage();
 		long now = scan.nowMs();
@@ -304,8 +304,8 @@ public class InventoryTools {
 			coverage.skipped("groupsNotMatchingFilter", groupsNotMatching);
 		}
 		else {
-			coverage.note("Consumer group'lar okunamadı: grup adayları ve no_consumers nedeni atlandı, topic adaylarında "
-					+ "consumer bilinmiyor (consumersUnknown)");
+			coverage.note("Could not read consumer groups: group candidates and the no_consumers reason are skipped; "
+					+ "consumers of topic candidates are unknown (consumersUnknown)");
 		}
 		Settled<Collection<AclBinding>> aclResult = Settled.within(call, acls, 700);
 		Settled<Collection<GroupListing>> groupIds = Settled.within(call, allGroups, 600);
@@ -317,7 +317,7 @@ public class InventoryTools {
 				groupIds.value().forEach(g -> ids.add(g.groupId()));
 			}
 			else {
-				coverage.note("Grup listesi (tüm tipler) alınamadı: sahipsiz GROUP ACL kontrolü atlandı");
+				coverage.note("Could not list groups (all types): orphan GROUP ACL check skipped");
 			}
 			int aclsNotMatching = 0;
 			for (CleanupRules.Candidate c : CleanupRules.orphanAcls(aclResult.value(), existing, ids, groupsKnown)) {
@@ -356,10 +356,10 @@ public class InventoryTools {
 		Map<String, Object> out = Results.map("olderThanDays", days, "threshold", Format.iso(threshold), "byType",
 				byType, "byRisk", byRisk, "acls", aclInfo);
 		if (groups != null && !groups.complete()) {
-			coverage.note("Grup taraması tam değil: no_consumers nedenleri kesin değil");
+			coverage.note("Group scan is incomplete: no_consumers reasons are not certain");
 		}
-		coverage.note("Salt okunur rapor: hiçbir şey silinmez. Risk: low = veri/consumer izi yok, medium = doğrulayın, "
-				+ "high = aktif yazma var");
+		coverage.note("Read-only report: nothing is deleted. Risk: low = no data/consumer traces, medium = verify first, "
+				+ "high = active writes");
 		coverage.note(TopicUsageTools.INVISIBLE_READERS);
 		coverage.addTo(out);
 		out.putAll(ReportParams.page("candidates", rows, call.limit()));

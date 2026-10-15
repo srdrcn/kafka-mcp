@@ -58,13 +58,13 @@ class BrokerWriteToolsTest extends KafkaIntegrationTest {
 
 	@Test
 	void brokersConfigUpdateValidatesInputAndRespectsReadOnly() {
-		assertThat(error("brokers_config_update", args("brokerId", 1))).contains("set ya da delete");
+		assertThat(error("brokers_config_update", args("brokerId", 1))).contains("set or delete");
 		assertThat(error("brokers_config_update", args("set", Map.of(KEY, "1"), "delete", List.of(KEY))))
-			.contains("hem set hem delete");
+			.contains("both set and delete");
 		assertThat(error("brokers_config_update", args("brokerId", 7, "set", Map.of(KEY, "1"))))
-			.contains("Broker bulunamadı: 7");
+			.contains("Broker not found: 7");
 		assertThat(error("brokers_config_update", args("brokerId", 1, "set", Map.of(KEY, "abc"))))
-			.contains("Geçersiz istek/config");
+			.contains("Invalid request/config");
 		assertThat(error("brokers_config_update", args("cluster", "test-ro", "set", Map.of(KEY, "16000"))))
 			.contains("readOnly");
 	}
@@ -87,11 +87,11 @@ class BrokerWriteToolsTest extends KafkaIntegrationTest {
 
 		JsonNode all = ok("brokers_elect_preferred_leaders", args());
 		assertThat(all.get("requested").asInt()).isZero();
-		assertThat(all.get("message").asText()).contains("tercih edilen");
+		assertThat(all.get("message").asText()).contains("preferred replica");
 
 		assertThat(error("brokers_elect_preferred_leaders", args("partitions", List.of(0)))).contains("topic");
 		assertThat(error("brokers_elect_preferred_leaders", args("topic", topic, "partitions", List.of(5))))
-			.contains("geçersiz partition: 5");
+			.contains("Invalid partition 5");
 		assertThat(error("brokers_elect_preferred_leaders", args("cluster", "test-ro", "topic", topic)))
 			.contains("readOnly");
 	}
@@ -111,7 +111,7 @@ class BrokerWriteToolsTest extends KafkaIntegrationTest {
 		TopicDescription d = testAdmin().describeTopics(List.of(topic)).allTopicNames().get().get(topic);
 		assertThat(d.partitions().get(0).replicas()).extracting(Node::id).containsExactly(1);
 
-		// dizi olmayan replicas iptal sayılmaz: "1", "[1]" ve 1 reassign olarak ayrıştırılır
+		// non-array replicas do not mean cancel: "1", "[1]" and 1 are parsed as a reassignment
 		for (Object replicas : List.of("1", "[1]", 1)) {
 			JsonNode parsed = ok("partition_reassignments_alter",
 					args("reassignments", List.of(Map.of("topic", topic, "partition", 0, "replicas", replicas))));
@@ -121,7 +121,7 @@ class BrokerWriteToolsTest extends KafkaIntegrationTest {
 		}
 		assertThat(error("partition_reassignments_alter",
 				args("reassignments", List.of(Map.of("topic", topic, "partition", 0, "replicas", "abc")))))
-			.contains("Tamsayı bekleniyordu");
+			.contains("Expected an integer");
 
 		JsonNode cancel = ok("partition_reassignments_alter",
 				args("reassignments", List.of(Map.of("topic", topic, "partition", 0))));
@@ -132,14 +132,14 @@ class BrokerWriteToolsTest extends KafkaIntegrationTest {
 
 		assertThat(error("partition_reassignments_alter",
 				args("reassignments", List.of(Map.of("topic", topic, "partition", 0, "replicas", List.of(1, 99))))))
-			.contains("Broker bulunamadı: 99");
+			.contains("Broker not found: 99");
 		assertThat(error("partition_reassignments_alter",
 				args("reassignments", List.of(Map.of("topic", topic, "partition", 3, "replicas", List.of(1))))))
-			.contains("Geçersiz partition");
+			.contains("Invalid partition");
 		assertThat(error("partition_reassignments_alter",
-				args("reassignments", List.of(Map.of("topic", unique("yok"), "partition", 0)))))
-			.contains("Topic bulunamadı");
-		assertThat(error("partition_reassignments_alter", args("reassignments", List.of()))).contains("boş");
+				args("reassignments", List.of(Map.of("topic", unique("missing"), "partition", 0)))))
+			.contains("Topic not found");
+		assertThat(error("partition_reassignments_alter", args("reassignments", List.of()))).contains("non-empty");
 		assertThat(error("partition_reassignments_alter", args("cluster", "test-ro", "reassignments",
 				List.of(Map.of("topic", topic, "partition", 0)))))
 			.contains("readOnly");

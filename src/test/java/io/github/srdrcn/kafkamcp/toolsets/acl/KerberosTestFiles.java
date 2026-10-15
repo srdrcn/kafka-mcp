@@ -7,13 +7,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Kerberos testleri için krb5.conf ve sahte keytab üretir. */
+/** Generates krb5.conf and fake keytab files for the Kerberos tests. */
 final class KerberosTestFiles {
 
 	private KerberosTestFiles() {
 	}
 
-	/** KDC'si erişilemeyen (127.0.0.1:1, kısa timeout, tek deneme) krb5.conf. */
+	/** krb5.conf with an unreachable KDC (127.0.0.1:1, short timeout, single attempt). */
 	static Path unreachableKdcKrb5Conf(Path dir, String realm) throws IOException {
 		Path conf = dir.resolve("krb5.conf");
 		Files.writeString(conf, """
@@ -42,7 +42,7 @@ final class KerberosTestFiles {
 		return conf;
 	}
 
-	/** MIT keytab (v0x502) biçiminde tek girdili sahte keytab (aes128-cts-hmac-sha1-96, sabit anahtar). */
+	/** Fake single-entry keytab in MIT keytab (v0x502) format (aes128-cts-hmac-sha1-96, fixed key). */
 	static void writeKeytab(Path file, String name, String realm) throws IOException {
 		ByteArrayOutputStream entry = new ByteArrayOutputStream();
 		DataOutputStream e = new DataOutputStream(entry);

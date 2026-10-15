@@ -26,38 +26,38 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Topic yazma araçları: oluşturma, klonlama, config güncelleme, partition artırma, silme. */
+/** Topic write tools: create, clone, config update, partition increase, delete. */
 @Component
 public class TopicWriteTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.write("topics_create", "Topic oluşturur (partition/RF boşsa broker varsayılanı)")
-					.required("topic", P.string("Topic adı"))
-					.param("partitions", P.integer("Partition sayısı (boşsa broker varsayılanı)", 1, 100_000))
-					.param("replicationFactor", P.integer("Replication factor (boşsa broker varsayılanı)", 1, 32))
-					.param("configs", P.stringMap("Topic config'leri (anahtar → değer)"))
+				ToolSpec.write("topics_create", "Create a topic (partitions and RF default to the broker defaults)")
+					.required("topic", P.string("Topic name"))
+					.param("partitions", P.integer("Partition count (default: broker default)", 1, 100_000))
+					.param("replicationFactor", P.integer("Replication factor (default: broker default)", 1, 32))
+					.param("configs", P.stringMap("Topic configs (key → value)"))
 					.handler(this::topicsCreate),
 				ToolSpec.write("topics_clone",
-						"Kaynak topic'in partition sayısı, RF ve topic seviyesindeki config'leriyle yeni topic oluşturur (veri kopyalanmaz)")
-					.required("source", P.string("Kaynak topic"))
-					.required("target", P.string("Oluşturulacak topic"))
-					.param("partitions", P.integer("Partition sayısı (boşsa kaynaktaki)", 1, 100_000))
-					.param("replicationFactor", P.integer("Replication factor (boşsa kaynaktaki)", 1, 32))
-					.param("configs", P.stringMap("Kaynaktakilerin üzerine yazılacak config'ler (anahtar → değer)"))
+						"Create a topic with the partition count, RF and topic-level configs of a source topic (data is not copied)")
+					.required("source", P.string("Source topic"))
+					.required("target", P.string("Topic to create"))
+					.param("partitions", P.integer("Partition count (default: same as the source)", 1, 100_000))
+					.param("replicationFactor", P.integer("Replication factor (default: same as the source)", 1, 32))
+					.param("configs", P.stringMap("Configs that override the source configs (key → value)"))
 					.handler(this::topicsClone),
-				ToolSpec.write("topics_config_update", "Topic config'ini değiştirir (set/delete); önce/sonra değerlerini döner")
-					.required("topic", P.string("Topic adı"))
-					.param("set", P.stringMap("Atanacak config'ler (anahtar → değer)"))
-					.param("delete", P.stringArray("Silinecek (varsayılana dönecek) config adları"))
+				ToolSpec.write("topics_config_update", "Change topic configs (set/delete); returns before/after values")
+					.required("topic", P.string("Topic name"))
+					.param("set", P.stringMap("Configs to set (key → value)"))
+					.param("delete", P.stringArray("Config names to delete (revert to default)"))
 					.handler(this::topicsConfigUpdate),
 				ToolSpec.write("topics_partitions_increase",
-						"Topic partition sayısını artırır (azaltılamaz; key'li verilerde key→partition eşlemesi değişir)")
-					.required("topic", P.string("Topic adı"))
-					.required("totalCount", P.integer("Yeni toplam partition sayısı (mevcuttan büyük)", 2, 100_000))
+						"Increase the partition count of a topic (cannot be decreased; changes the key→partition mapping of keyed data)")
+					.required("topic", P.string("Topic name"))
+					.required("totalCount", P.integer("New total partition count (greater than the current one)", 2, 100_000))
 					.handler(this::topicsPartitionsIncrease),
-				ToolSpec.destructive("topics_delete", "Topic'i ve tüm verisini siler (iç/sistem topic'leri reddedilir)")
-					.required("topic", P.string("Silinecek topic adı (tek)"))
+				ToolSpec.destructive("topics_delete", "Delete a topic and all its data (internal and system topics are refused)")
+					.required("topic", P.string("Name of the topic to delete (a single topic)"))
 					.handler(this::topicsDelete));
 	}
 
@@ -84,7 +84,7 @@ public class TopicWriteTools {
 		Integer partitions = call.optInt("partitions");
 		Integer rf = call.optInt("replicationFactor");
 		if (rf == null) {
-			// reassignment sürerken eklenen replikalar RF'yi şişirmesin
+			// replicas added by an ongoing reassignment must not inflate the RF
 			rf = Topics.replicationFactor(d, Topics.reassignments(call, pendingReassignments));
 		}
 		Map<String, Object> out = create(call, target, partitions == null ? d.partitions().size() : partitions, rf,
@@ -94,7 +94,7 @@ public class TopicWriteTools {
 		if (!overrides.isEmpty()) {
 			out.put("overriddenConfigs", overrides);
 		}
-		out.put("note", "Sadece yapı kopyalandı; mesajlar kopyalanmadı");
+		out.put("note", "Only the structure was copied; messages were not copied");
 		return out;
 	}
 
@@ -111,13 +111,13 @@ public class TopicWriteTools {
 		TopicDescription d = Topics.describeOne(call, topic);
 		int current = d.partitions().size();
 		if (total <= current) {
-			throw new ToolException("totalCount (" + total + ") mevcut partition sayısından (" + current
-					+ ") büyük olmalı; partition sayısı azaltılamaz");
+			throw new ToolException("totalCount (" + total + ") must be greater than the current partition count ("
+					+ current + "); the partition count cannot be decreased");
 		}
 		call.await(call.admin().createPartitions(Map.of(topic, NewPartitions.increaseTo(total))).all());
 		return Results.map("topic", topic, "before", current, "after", total, "warning",
-				"Key'li mesajlarda key → partition eşlemesi değişti: aynı key'in yeni mesajları farklı partition'a "
-						+ "gidebilir (key bazlı sıralama ve compaction etkilenir)");
+				"The key → partition mapping changed for keyed messages: new messages with the same key may go to "
+						+ "a different partition (affects per-key ordering and compaction)");
 	}
 
 	Object topicsDelete(ToolCall call) {
@@ -125,7 +125,7 @@ public class TopicWriteTools {
 		TopicDescription d = Topics.describeOne(call, topic);
 		String reason = Topics.protectedReason(topic, d.isInternal());
 		if (reason != null) {
-			throw new ToolException("Silme reddedildi: " + topic + " bir " + reason);
+			throw new ToolException("Delete refused: " + topic + " is a " + reason);
 		}
 		call.await(call.admin().deleteTopics(List.of(topic)).all());
 		return Results.map("deleted", topic, "partitions", d.partitions().size());
@@ -134,16 +134,16 @@ public class TopicWriteTools {
 	private Map<String, Object> create(ToolCall call, String topic, Integer partitions, Integer rf,
 			Map<String, String> configs) {
 		if (partitions != null && partitions < 1) {
-			throw new ToolException("partitions en az 1 olmalı");
+			throw new ToolException("partitions must be at least 1");
 		}
 		if (rf != null) {
 			if (rf < 1) {
-				throw new ToolException("replicationFactor en az 1 olmalı");
+				throw new ToolException("replicationFactor must be at least 1");
 			}
 			int brokers = ClusterMeta.describe(call, false).brokers().size();
 			if (rf > brokers) {
-				throw new ToolException("replicationFactor (" + rf + ") broker sayısından (" + brokers
-						+ ") büyük olamaz");
+				throw new ToolException("replicationFactor (" + rf + ") cannot be greater than the broker count ("
+						+ brokers + ")");
 			}
 		}
 		NewTopic nt = new NewTopic(topic, Optional.ofNullable(partitions),
@@ -153,7 +153,7 @@ public class TopicWriteTools {
 		call.await(r.all());
 		Map<String, Object> out = Results.map("topic", topic);
 		try {
-			// eski broker'lar (CreateTopics v5/v7 öncesi) topic id ve partition/RF döndürmez: sıfır UUID / -1
+			// older brokers (before CreateTopics v5/v7) do not return the topic id and partitions/RF: zero UUID / -1
 			Uuid id = call.await(r.topicId(topic));
 			if (id != null && !Uuid.ZERO_UUID.equals(id)) {
 				out.put("topicId", id.toString());
@@ -164,9 +164,9 @@ public class TopicWriteTools {
 					"replicationFactor", createdRf > 0 ? Integer.valueOf(createdRf) : rf));
 		}
 		catch (ToolException e) {
-			// topic oluştu; ayrıntılar okunamadı (ör. DESCRIBE_CONFIGS yetkisi yok ya da eski broker)
+			// the topic was created but its details could not be read (e.g. no DESCRIBE_CONFIGS permission, old broker)
 			out.putAll(Results.map("partitions", partitions, "replicationFactor", rf));
-			out.put("note", "Topic oluşturuldu; ayrıntıları okunamadı (" + e.getMessage() + ")");
+			out.put("note", "Topic created; could not read its details (" + e.getMessage() + ")");
 		}
 		if (!configs.isEmpty()) {
 			out.put("configs", configs);
@@ -178,7 +178,7 @@ public class TopicWriteTools {
 		Map<String, String> configs = call.stringMap("configs");
 		configs.forEach((k, v) -> {
 			if (v == null) {
-				throw new ToolException("configs değeri boş olamaz: " + k);
+				throw new ToolException("configs value cannot be empty: " + k);
 			}
 		});
 		return configs;

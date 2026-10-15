@@ -6,14 +6,14 @@ import java.util.List;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 /**
- * kafka-mcp.yaml kök yapısı. Alan adları YAML anahtarlarıyla birebir aynıdır.
+ * Root structure of kafka-mcp.yaml. Field names match the YAML keys exactly.
  */
 public class KafkaMcpConfig {
 
-	/** HTTP portu. Doluysa (ve --transport verilmemişse) Streamable HTTP, boşsa stdio çalışır. */
+	/** HTTP port. If set (and --transport is not given) Streamable HTTP runs, otherwise stdio. */
 	private Integer port;
 
-	/** Boş değilse istekteki X-Authorization header'ı bu değerle birebir eşleşmeli. */
+	/** If not empty, the request's X-Authorization header must match this value exactly. */
 	private String apiKey;
 
 	private boolean readOnly = false;
@@ -87,7 +87,7 @@ public class KafkaMcpConfig {
 		return apiKey != null && !apiKey.isBlank();
 	}
 
-	/** Cluster'ın efektif readOnly değeri: cluster override'ı varsa o, yoksa global değer. */
+	/** Effective readOnly value of the cluster: the cluster override if set, otherwise the global value. */
 	public boolean isReadOnly(ClusterConfig cluster) {
 		return cluster.getReadOnly() != null ? cluster.getReadOnly() : readOnly;
 	}

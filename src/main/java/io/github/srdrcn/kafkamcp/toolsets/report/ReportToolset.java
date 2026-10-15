@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** report: cluster geneli (filo) raporları; tümü salt okunur, toplu admin istekleriyle. */
+/** report: cluster-wide (fleet) reports; all read-only, using batched admin requests. */
 @Component
 public class ReportToolset implements Toolset {
 
@@ -38,7 +38,7 @@ public class ReportToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Cluster geneli raporlar: özet, en büyük/aktif topic'ler, boş/boşta topic'ler, denetimler, envanter";
+		return "Cluster-wide reports: summary, largest/most active topics, empty/idle topics, audits, inventory";
 	}
 
 	@Override

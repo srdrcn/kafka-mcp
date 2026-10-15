@@ -10,24 +10,24 @@ import org.apache.kafka.common.TopicPartition;
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
-/** diagnose araçlarının ortak parametreleri ve küçük çıktı yardımcıları. */
+/** Shared parameters and small output helpers of the diagnose tools. */
 final class DiagnoseParams {
 
-	/** İki örnek arası varsayılan bekleme (sn; diğer araçlardaki intervalSeconds kuralıyla aynı). */
+	/** Default wait between two samples (s; same intervalSeconds rule as the other tools). */
 	static final int DEFAULT_INTERVAL_SECONDS = 5;
 
-	/** diagnose_topic'in kısa örneği (sn): topic başına çok sayıda alt kontrol var. */
+	/** Short sampling interval of diagnose_topic (s): there are many sub-checks per topic. */
 	static final int TOPIC_INTERVAL_SECONDS = 3;
 
-	/** Kanıt listelerinde gösterilen en fazla öğe (fazlası sayılır). */
+	/** Maximum number of items shown in evidence lists (the rest are counted). */
 	static final int MAX_EVIDENCE = 10;
 
 	private DiagnoseParams() {
 	}
 
 	static Map<String, Object> interval(int defaultSeconds) {
-		Map<String, Object> m = P.integer("İki offset örneği arası bekleme, sn (varsayılan " + defaultSeconds
-				+ ", 1-10; süre sınırına göre kısaltılabilir)", 1, 10);
+		Map<String, Object> m = P.integer("Wait between two offset samples in seconds (default " + defaultSeconds
+				+ ", 1-10; may be shortened to fit the time limit)", 1, 10);
 		m.put("default", defaultSeconds);
 		return m;
 	}
@@ -36,28 +36,28 @@ final class DiagnoseParams {
 		return call.integer("intervalSeconds", defaultSeconds, 1, 10) * 1000L;
 	}
 
-	/** İlk n öğe. */
+	/** First n items. */
 	static <T> List<T> first(Collection<T> items, int n) {
 		List<T> list = new ArrayList<>(items);
 		return list.subList(0, Math.min(n, list.size()));
 	}
 
-	/** Partition numaraları (ilk MAX_EVIDENCE). */
+	/** Partition numbers (first MAX_EVIDENCE). */
 	static List<Integer> partitionNumbers(Collection<TopicPartition> tps) {
 		return first(tps.stream().map(TopicPartition::partition).sorted().toList(), MAX_EVIDENCE);
 	}
 
-	/** "topic-3" biçiminde (ilk MAX_EVIDENCE). */
+	/** In "topic-3" form (first MAX_EVIDENCE). */
 	static List<String> partitionNames(Collection<TopicPartition> tps) {
 		return first(tps.stream().map(TopicPartition::toString).sorted().toList(), MAX_EVIDENCE);
 	}
 
-	/** Liste MAX_EVIDENCE'tan uzunsa atlanan sayısı, değilse null. */
+	/** Number of omitted items if the list is longer than MAX_EVIDENCE, otherwise null. */
 	static Integer omitted(Collection<?> items) {
 		return omitted(items, MAX_EVIDENCE);
 	}
 
-	/** Liste max'tan uzunsa atlanan sayısı, değilse null. */
+	/** Number of omitted items if the list is longer than max, otherwise null. */
 	static Integer omitted(Collection<?> items, int max) {
 		return items.size() > max ? items.size() - max : null;
 	}

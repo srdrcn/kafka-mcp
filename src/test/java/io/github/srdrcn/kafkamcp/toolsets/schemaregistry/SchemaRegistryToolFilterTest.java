@@ -17,7 +17,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** Araç adları/türleri ve ToolFilter seviyesinde schemaRegistryUrl şartı (ağa çıkmaz). */
+/** Tool names/kinds and the schemaRegistryUrl requirement at the ToolFilter level (no network). */
 class SchemaRegistryToolFilterTest {
 
 	private static SchemaRegistryToolset toolset(KafkaMcpConfig c) {
@@ -57,7 +57,7 @@ class SchemaRegistryToolFilterTest {
 		KafkaMcpConfig c = config();
 		Map<String, List<String>> tools = select(c);
 		assertThat(tools).hasSize(10);
-		// alpha: SR var; beta: SR yok (ve readOnly)
+		// alpha: has SR; beta: no SR (and readOnly)
 		assertThat(tools.values()).allSatisfy(clusters -> assertThat(clusters).containsExactly("alpha"));
 		ToolSpec any = toolset(c).tools().get(0);
 		assertThat(ToolFilter.reasonUnavailable(c, any, c.cluster("beta"))).contains("schemaRegistryUrl");
@@ -65,7 +65,7 @@ class SchemaRegistryToolFilterTest {
 		c.cluster("beta").setSchemaRegistryUrl("http://beta.invalid:8081");
 		Map<String, List<String>> both = select(c);
 		assertThat(both.get("subjects_list")).containsExactly("alpha", "beta");
-		// beta readOnly: yazma araçları sadece alpha'da
+		// beta is readOnly: write tools only on alpha
 		assertThat(both.get("schemas_register")).containsExactly("alpha");
 		assertThat(both.get("schemas_delete_version")).containsExactly("alpha");
 

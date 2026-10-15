@@ -32,68 +32,68 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.ConsumerGroups.GroupSummary;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.GroupLagInfo;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.PartitionLag;
 
-/** Consumer group listeleme/detay araçları: list, get, find_by_member, empty, acls. */
+/** Consumer group listing/detail tools: list, get, find_by_member, empty, acls. */
 @Component
 public class GroupTools {
 
 	/**
-	 * consumer_groups_get/_lag'de en fazla gösterilen partition satırı; get'te üye atamalarındaki partition
-	 * numaraları için de ayrı bütçe (fazlası sayılarak atlanır).
+	 * Maximum partition rows shown in consumer_groups_get/_lag; in get, also a separate budget for the partition
+	 * numbers in member assignments (the rest is counted and omitted).
 	 */
 	static final int MAX_PARTITION_ROWS = 1000;
 
-	/** consumer_groups_get totals.lagByTopic'te gösterilen en fazla topic (lag'e göre azalan). */
+	/** Maximum topics shown in consumer_groups_get totals.lagByTopic (by lag, descending). */
 	static final int MAX_LAG_BY_TOPIC = 50;
 
-	/** consumer_groups_empty'de grup başına gösterilen en fazla topic. */
+	/** Maximum topics shown per group in consumer_groups_empty. */
 	static final int MAX_TOPICS_PER_GROUP = 20;
 
-	/** consumer_groups_find_by_member sınırları: grup, grup başına üye, üye başına topic. */
+	/** consumer_groups_find_by_member limits: groups, members per group, topics per member. */
 	static final int MAX_MEMBER_GROUPS = 100;
 
 	static final int MAX_MEMBERS_PER_GROUP = 10;
 
 	static final int MAX_TOPICS_PER_MEMBER = 10;
 
-	/** consumer_groups_list: listGroups'tan sonra sadece çıktı için ayrılan pay. */
+	/** consumer_groups_list: share kept after listGroups, only for the output. */
 	private static final long LIST_ONLY_RESERVE_MS = 1_000;
 
-	/** consumer_groups_find_by_member: listGroups'tan sonra describeConsumerGroups + çıktı için ayrılan pay. */
+	/** consumer_groups_find_by_member: share kept after listGroups for describeConsumerGroups + output. */
 	private static final long LIST_BEFORE_DESCRIBE_RESERVE_MS = 2_000;
 
-	private static final String NO_ACL_NOTE = "Bu gruba uyan ACL yok "
-			+ "(allow.everyone.if.no.acl.found=false ise sadece süper kullanıcılar erişir)";
+	private static final String NO_ACL_NOTE = "No ACLs match this group "
+			+ "(if allow.everyone.if.no.acl.found=false, only super users have access)";
 
 	static final List<String> STATES = List.of("Stable", "Empty", "PreparingRebalance", "CompletingRebalance", "Dead",
 			"Assigning", "Reconciling", "Unknown");
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("consumer_groups_list", "Consumer group'ları listeler (groupId, state, type, protocol)")
+				ToolSpec.read("consumer_groups_list", "List consumer groups (groupId, state, type, protocol)")
 					.listParams()
 					.param("state", P.enumOf(
-							"Sadece bu durumdaki gruplar (Assigning/Reconciling sadece KRaft'taki consumer tipi gruplarda)",
+							"Only groups in this state (Assigning/Reconciling only occur in consumer-type groups on KRaft)",
 							STATES))
 					.handler(this::list),
 				ToolSpec
 					.read("consumer_groups_get",
-							"Group detayı: state, coordinator, assignor, üyeler ve atamaları, partition bazında committed/end offset, lag ve sahip üye")
+							"Group details: state, coordinator, assignor, members and assignments, per-partition committed/end offset, lag and owner")
 					.required("group", Params.group())
 					.handler(this::get),
 				ToolSpec
 					.read("consumer_groups_find_by_member",
-							"Üye host'u ya da clientId'si (regex) eşleşen grupları ve üyelerini bulur (en az biri gerekli)")
-					.param("host", P.string("Üye host regex'i (ör. 10\\.1\\.2\\.)"))
-					.param("clientId", P.string("Üye clientId regex'i"))
+							"Find groups and members whose host or clientId matches a regex (at least one is required)")
+					.param("host", P.string("Member host regex (e.g. 10\\.1\\.2\\.)"))
+					.param("clientId", P.string("Member clientId regex"))
 					.handler(this::findByMember),
 				ToolSpec
 					.read("consumer_groups_empty",
-							"Empty durumdaki gruplar, hâlâ commit'li offset'i olan topic'leri ve toplam lag'leri (eski grup adayları)")
+							"Groups in Empty state with the topics they still have committed offsets on and their total lag (likely stale groups)")
 					.listParams()
 					.handler(this::empty),
 				ToolSpec
 					.read("consumer_groups_acls",
-							"Gruba uygulanan ACL'ler (literal, prefixed, wildcard): principal, host, operation, permission")
+							"ACLs that apply to the group (literal, prefixed, wildcard): principal, host, operation, permission")
 					.required("group", Params.group())
 					.handler(this::acls));
 	}
@@ -101,7 +101,7 @@ public class GroupTools {
 	Object list(ToolCall call) {
 		String state = call.str("state", null);
 		if (state != null && STATES.stream().noneMatch(state::equalsIgnoreCase)) {
-			throw new ToolException("Geçersiz state: " + state + " (geçerli: " + STATES + ")");
+			throw new ToolException("Invalid state: " + state + " (valid: " + STATES + ")");
 		}
 		GroupList list = ConsumerGroups.list(call, LIST_ONLY_RESERVE_MS, call::matches);
 		Map<String, Integer> byState = new TreeMap<>();
@@ -123,8 +123,8 @@ public class GroupTools {
 	}
 
 	/**
-	 * maxRows: offsets bölümündeki partition satırı ve üye atamalarındaki partition numarası bütçesi;
-	 * maxLagByTopic: totals.lagByTopic'teki en fazla topic.
+	 * maxRows: budget for the partition rows in the offsets section and the partition numbers in member
+	 * assignments; maxLagByTopic: maximum topics in totals.lagByTopic.
 	 */
 	Object get(ToolCall call, int maxRows, int maxLagByTopic) {
 		String group = call.str("group");
@@ -188,7 +188,7 @@ public class GroupTools {
 				: d.partitionAssignor();
 		List<String> notes = new ArrayList<>();
 		if (withoutCommit > 0) {
-			notes.add("noCommit: atanmış ama commit edilmiş offset'i olmayan partition (lag hesaplanmadı)");
+			notes.add("noCommit: partition is assigned but has no committed offset (lag not computed)");
 		}
 		if (reassigning > 0) {
 			notes.add(ConsumerGroups.REASSIGNING_NOTE);
@@ -196,7 +196,7 @@ public class GroupTools {
 		Map<String, Object> out = Results.map("groupId", d.groupId(), "state", g.state(), "type",
 				ConsumerGroups.type(d.type()), "simple", d.isSimpleConsumerGroup() ? Boolean.TRUE : null,
 				"coordinator", ConsumerGroups.node(d.coordinator()), "partitionAssignor", assignor);
-		// KIP-848 consumer tipi gruplar (sadece KRaft): groupEpoch, targetAssignmentEpoch.
+		// KIP-848 consumer-type groups (KRaft only): groupEpoch, targetAssignmentEpoch.
 		out.putAll(ConsumerGroups.consumerProtocolFields(d));
 		out.putAll(Results.map("memberCount", members.size(), "members", members, "assignmentPartitionsOmitted",
 				assignmentOmitted > 0 ? assignmentOmitted : null, "offsets", topics, "totals", totals, "partitionRowsOmitted", omitted > 0 ? omitted : null,
@@ -205,7 +205,7 @@ public class GroupTools {
 		return out;
 	}
 
-	/** Sıralı map'in ilk max girdisi. */
+	/** First max entries of an ordered map. */
 	static <K, V> Map<K, V> first(Map<K, V> map, int max) {
 		if (map.size() <= max) {
 			return map;
@@ -219,16 +219,16 @@ public class GroupTools {
 		return findByMember(call, MAX_MEMBER_GROUPS, MAX_MEMBERS_PER_GROUP, MAX_TOPICS_PER_MEMBER);
 	}
 
-	/** maxGroups/maxMembers/maxTopics: çıktıdaki grup, grup başına üye ve üye başına topic sınırları. */
+	/** maxGroups/maxMembers/maxTopics: limits on groups, members per group and topics per member in the output. */
 	Object findByMember(ToolCall call, int maxGroups, int maxMembers, int maxTopics) {
 		Pattern host = call.regex("host");
 		Pattern clientId = call.regex("clientId");
 		if (host == null && clientId == null) {
-			throw new ToolException("host ya da clientId parametrelerinden en az biri gerekli");
+			throw new ToolException("At least one of the host or clientId parameters is required");
 		}
 		GroupList list = ConsumerGroups.list(call, LIST_BEFORE_DESCRIBE_RESERVE_MS);
 		List<GroupSummary> candidates = list.groups().stream().filter(GroupSummary::mayHaveMembers).toList();
-		// Eski broker'da (state'siz liste) list() grupları zaten describe etti: onlar tekrar sorulmaz.
+		// On an old broker (listing without state) list() has already described the groups: they are not asked again.
 		Map<String, ConsumerGroupDescription> known = list.descriptions();
 		Map<String, Settled<ConsumerGroupDescription>> fresh = ConsumerGroups.describe(call,
 				candidates.stream().map(GroupSummary::groupId).filter(id -> !known.containsKey(id)).toList());
@@ -343,7 +343,8 @@ public class GroupTools {
 		if (!s.ok()) {
 			if (s.error() instanceof SecurityDisabledException) {
 				return Results.map("group", group, "authorizer", false, "acls", List.of(), "note",
-						"Cluster'da authorizer kapalı: ACL tanımlanamaz ve uygulanmaz (gruba erişim kısıtlanmıyor)");
+						"Authorizer is disabled on the cluster: ACLs cannot be defined or enforced "
+								+ "(access to the group is not restricted)");
 			}
 			throw new ToolException(s.errorMessage(), s.error());
 		}

@@ -12,18 +12,18 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Anahtar başına KafkaFuture'ları (partition, broker, grup...) tek seferde bekleyip başarılı sonuçları ve
- * hataları ayıran yardımcı. Böylece tek bir partition/grup hatası tüm aracı düşürmez.
+ * Helper that awaits per-key KafkaFutures (partition, broker, group...) in one go and separates the successful
+ * results from the errors, so a single partition/group error does not fail the whole tool.
  */
 public final class Futures {
 
 	private Futures() {
 	}
 
-	/** Anahtar başına başarılı değerler ve Türkçe hata mesajları. */
+	/** Successful values and error messages per key. */
 	public record Each<K, V>(Map<K, V> values, Map<K, String> errors) {
 
-		/** Hiç başarılı değer yoksa ilk hatayı ToolException olarak fırlatır; yoksa kendini döner. */
+		/** Throws the first error as a ToolException if there is no successful value; otherwise returns itself. */
 		public Each<K, V> requireAny() {
 			if (values.isEmpty() && !errors.isEmpty()) {
 				throw new ToolException(errors.values().iterator().next());
@@ -33,14 +33,14 @@ public final class Futures {
 
 	}
 
-	/** Tüm future'ları deadline'a kadar bekler; istisna fırlatmaz, hataları anahtar bazında toplar. */
+	/** Waits for all futures until the deadline; never throws, collects the errors per key. */
 	public static <K, V> Each<K, V> awaitEach(ToolCall call, Map<K, ? extends KafkaFuture<V>> futures) {
 		return awaitEach(call, futures, Long.MAX_VALUE);
 	}
 
 	/**
-	 * {@link #awaitEach(ToolCall, Map)} gibi, ama en fazla {@code maxMillis} bekler; bitmeyenler "zaman aşımı"
-	 * hatası olur. Takılan bir broker/coordinator sonraki adımların süresini tüketmesin diye.
+	 * Like {@link #awaitEach(ToolCall, Map)}, but waits at most {@code maxMillis}; unfinished ones get a
+	 * "No response (timeout)" error. So a stuck broker/coordinator does not use up the time of the following steps.
 	 */
 	public static <K, V> Each<K, V> awaitEach(ToolCall call, Map<K, ? extends KafkaFuture<V>> futures,
 			long maxMillis) {
@@ -53,12 +53,12 @@ public final class Futures {
 			awaitAtMost(call, KafkaFuture.allOf(futures.values().toArray(KafkaFuture[]::new)), maxMillis);
 		}
 		catch (ToolException ignored) {
-			// hatalar aşağıda anahtar bazında toplanır
+			// errors are collected per key below
 		}
 		for (Map.Entry<K, ? extends KafkaFuture<V>> e : futures.entrySet()) {
 			KafkaFuture<V> f = e.getValue();
 			if (!f.isDone()) {
-				errors.put(e.getKey(), "zaman aşımı");
+				errors.put(e.getKey(), "No response (timeout)");
 				continue;
 			}
 			try {
@@ -69,7 +69,7 @@ public final class Futures {
 			}
 			catch (InterruptedException ex) {
 				Thread.currentThread().interrupt();
-				throw new ToolException("Araç iptal edildi");
+				throw new ToolException("Tool was cancelled");
 			}
 			catch (RuntimeException ex) {
 				errors.put(e.getKey(), KafkaErrors.explain(ex));
@@ -78,7 +78,7 @@ public final class Futures {
 		return new Each<>(values, errors);
 	}
 
-	/** Future'ı en fazla min(kalan süre, maxMillis) bekler; hata/zaman aşımında Türkçe ToolException. */
+	/** Waits on the future for at most min(remaining time, maxMillis); ToolException on error/timeout. */
 	public static <T> T awaitAtMost(ToolCall call, KafkaFuture<T> future, long maxMillis) {
 		long wait = Math.max(1, Math.min(call.waitMillis(), maxMillis));
 		try {
@@ -86,13 +86,13 @@ public final class Futures {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		catch (ExecutionException e) {
 			throw new ToolException(KafkaErrors.explain(e.getCause()), e.getCause());
 		}
 		catch (TimeoutException e) {
-			throw new ToolException("Yanıt " + wait + " ms içinde gelmedi (zaman aşımı)");
+			throw new ToolException("No response within " + wait + " ms (timeout)");
 		}
 	}
 

@@ -34,35 +34,35 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** acls_list ve acls_audit. */
+/** acls_list and acls_audit. */
 @Component
 public class AclListTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
-			.read("acls_list", "ACL'leri listeler; principal, kaynak tipi/adı, desen, işlem, izin ve host'a göre filtreler")
-			.param("principal", P.string("Principal (ör. User:alice; sadece ad verilirse User: eklenir)"))
-			.param("resourceType", Acls.resourceTypeParam("Kaynak tipi (varsayılan ANY)", true))
-			.param("resourceName", P.string("Kaynak adı (patternType'a göre eşleşir)"))
+			.read("acls_list", "List ACLs, filtered by principal, resource type/name, pattern, operation, permission and host")
+			.param("principal", P.string("Principal (e.g. User:alice; a bare name gets the User: prefix)"))
+			.param("resourceType", Acls.resourceTypeParam("Resource type (default ANY)", true))
+			.param("resourceName", P.string("Resource name (matched according to patternType)"))
 			.param("patternType", P.enumOf(
-					"Desen tipi (varsayılan ANY; MATCH: bu kaynağa uygulanan literal, prefixed ve * binding'leri)",
+					"Pattern type (default ANY; MATCH: literal, prefixed and * bindings that apply to this resource)",
 					Acls.PATTERN_TYPES))
-			.param("operation", Acls.operationParam("İşlem (varsayılan ANY)", true))
-			.param("permission", P.enumOf("İzin (varsayılan ANY)", Acls.PERMISSIONS))
-			.param("host", P.string("Host (varsayılan tümü)"))
+			.param("operation", Acls.operationParam("Operation (default ANY)", true))
+			.param("permission", P.enumOf("Permission (default ANY)", Acls.PERMISSIONS))
+			.param("host", P.string("Host (default all)"))
 			.listParams()
-			.param("filter", P.string("Principal ya da kaynak adı filtresi (regex, kısmi eşleşme)"))
+			.param("filter", P.string("Principal or resource name filter (regex, partial match)"))
 			.handler(this::list),
 				ToolSpec
 					.read("acls_audit",
-							"Riskli ve sahipsiz ACL'leri bulur: User:*, wildcard kaynak, ALL, CLUSTER ALLOW, olmayan topic/group, boşa prefix")
+							"Find risky and orphaned ACLs: User:*, wildcard resource, ALL, CLUSTER ALLOW, missing topic/group, unused prefix")
 					.listParams(20)
-					.param("filter", P.string("Kapsam: principal ya da kaynak adı filtresi (regex, kısmi eşleşme)"))
-					.param("limit", limitParam("Kategori başına en fazla örnek (varsayılan 20)", 20))
+					.param("filter", P.string("Scope: principal or resource name filter (regex, partial match)"))
+					.param("limit", limitParam("Maximum samples per category (default 20)", 20))
 					.handler(this::audit));
 	}
 
-	/** Açıklaması özelleştirilmiş limit parametresi (listParams ile aynı sınırlar). */
+	/** limit parameter with a custom description (same bounds as listParams). */
 	static Map<String, Object> limitParam(String description, int defaultValue) {
 		Map<String, Object> m = P.integer(description, 1, ToolSpec.MAX_LIST_LIMIT);
 		m.put("default", defaultValue);
@@ -89,7 +89,7 @@ public class AclListTools {
 		return Results.page("acls", rows, call.limit());
 	}
 
-	/** Bir denetim kategorisi: açıklama ve eşleşen binding'ler. */
+	/** An audit category: description and matching bindings. */
 	private record Category(String description, List<AclBinding> bindings) {
 
 		Category(String description) {
@@ -114,7 +114,7 @@ public class AclListTools {
 			topics = new TreeSet<>(call.await(topicsFuture));
 		}
 		catch (ToolException e) {
-			notes.add("Topic listesi alınamadı, topic kontrolleri atlandı: " + e.getMessage());
+			notes.add("Could not list topics; topic checks skipped: " + e.getMessage());
 		}
 		Set<String> groups = null;
 		try {
@@ -125,24 +125,24 @@ public class AclListTools {
 		}
 		catch (ToolException e) {
 			groups = null;
-			notes.add("Group listesi alınamadı, group kontrolü atlandı: " + e.getMessage());
+			notes.add("Could not list groups; group check skipped: " + e.getMessage());
 		}
 		BrokerSecurity.SuperUsers superUsers = broker.superUsers(null);
 		if (!superUsers.known()) {
-			notes.add("super.users bilinmiyor: allowOnCluster kategorisinde süper kullanıcılar da listelenebilir");
+			notes.add("super.users unknown: the allowOnCluster category may also list super users");
 		}
 
 		Map<String, Category> categories = new LinkedHashMap<>();
-		categories.put("allowAllPrincipals", new Category("Herkese (User:*) ALLOW veren ACL'ler"));
-		categories.put("allowWildcardResource", new Category("Tüm kaynaklara (LITERAL \"*\") ALLOW veren ACL'ler"));
-		categories.put("allowOperationAll", new Category("İşlemi ALL olan ALLOW ACL'ler (en geniş yetki)"));
-		categories.put("allowOnCluster", new Category("CLUSTER kaynağında ALLOW (süper kullanıcı olmayan principal'lar)"));
-		categories.put("orphanTopicAcls", new Category("Var olmayan topic'e LITERAL ACL (artık kullanılmıyor olabilir)"));
+		categories.put("allowAllPrincipals", new Category("ACLs that ALLOW everyone (User:*)"));
+		categories.put("allowWildcardResource", new Category("ACLs that ALLOW on all resources (LITERAL \"*\")"));
+		categories.put("allowOperationAll", new Category("ALLOW ACLs with operation ALL (broadest permission)"));
+		categories.put("allowOnCluster", new Category("ALLOW on the CLUSTER resource (principals that are not super users)"));
+		categories.put("orphanTopicAcls", new Category("LITERAL ACLs on topics that do not exist (may be unused)"));
 		categories.put("unverifiedTopicAcls", new Category(
-				"Topic'i bu sunucunun Kafka kullanıcısının göremediği (DESCRIBE yetkisi yok) LITERAL ACL'ler; topic var olabilir"));
+				"LITERAL ACLs on topics this server's Kafka user cannot see (no DESCRIBE permission); the topic may exist"));
 		categories.put("orphanGroupAcls",
-				new Category("Var olmayan group'a LITERAL ACL (group ilk kullanımda oluşur; henüz başlamamış uygulama olabilir)"));
-		categories.put("unusedPrefixedTopicAcls", new Category("Hiçbir topic'le eşleşmeyen PREFIXED topic ACL'leri"));
+				new Category("LITERAL ACLs on groups that do not exist (a group is created on first use; the application may not have started yet)"));
+		categories.put("unusedPrefixedTopicAcls", new Category("PREFIXED topic ACLs that match no topic"));
 
 		int scanned = 0;
 		for (AclBinding b : acls) {
@@ -186,8 +186,8 @@ public class AclListTools {
 		}
 		if (!categories.get("orphanGroupAcls").bindings().isEmpty()
 				|| !categories.get("unusedPrefixedTopicAcls").bindings().isEmpty()) {
-			notes.add("Topic/group listesi bu sunucunun Kafka kullanıcısının DESCRIBE yetkisiyle sınırlı: görülemeyen "
-					+ "group/topic'ler sahipsiz ya da eşleşmeyen görünebilir; silmeden önce doğrulayın");
+			notes.add("Topic/group lists are limited by the DESCRIBE permission of this server's Kafka user: groups/topics it "
+					+ "cannot see may look orphaned or unmatched; verify before deleting");
 		}
 
 		Set<AclBinding> flagged = new HashSet<>();
@@ -207,13 +207,13 @@ public class AclListTools {
 	}
 
 	/**
-	 * listTopics sadece DESCRIBE yetkisi olan topic'leri döner. Sahipsiz adaylar tek describeTopics ile
-	 * doğrulanır: yok/geçersiz → sahipsiz kalır; var → çıkarılır; yetki ya da başka hata → doğrulanamadı.
+	 * listTopics only returns topics with DESCRIBE permission. Orphan candidates are verified with a single
+	 * describeTopics: missing/invalid → stays orphaned; exists → removed; authorization or other error → unverified.
 	 */
 	private static void verifyOrphanTopics(ToolCall call, Admin admin, List<AclBinding> orphans,
 			List<AclBinding> unverified, List<String> notes) {
 		if (call.nearDeadline(2_000)) {
-			notes.add("Süre azaldı: sahipsiz topic adayları describeTopics ile doğrulanmadı");
+			notes.add("Running out of time: orphan topic candidates were not verified with describeTopics");
 			return;
 		}
 		Set<String> names = new TreeSet<>();
@@ -246,11 +246,11 @@ public class AclListTools {
 		orphans.stream().filter(b -> unknown.contains(b.pattern().name())).forEach(unverified::add);
 		orphans.removeIf(b -> existing.contains(b.pattern().name()) || unknown.contains(b.pattern().name()));
 		if (otherError != null) {
-			notes.add("Bazı sahipsiz topic adayları doğrulanamadı: " + otherError);
+			notes.add("Some orphan topic candidates could not be verified: " + otherError);
 		}
 	}
 
-	/** Sıralı kümede önekle başlayan eleman var mı (ceiling ile O(log n)). */
+	/** Does the sorted set contain an element starting with the prefix (O(log n) via ceiling)? */
 	static boolean anyStartsWith(NavigableSet<String> sorted, String prefix) {
 		String c = sorted.ceiling(prefix);
 		return c != null && c.startsWith(prefix);

@@ -9,23 +9,23 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.errors.TimeoutException;
-import org.apache.kafka.common.errors.UnsupportedVersionException;
 
 import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
- * Deadline içinde beklenmiş bir Kafka future'ının sonucu: değer ya da (öğe bazında) hata. Toplu admin
- * çağrılarında tek bir grubun/partition'ın hatası ya da yanıtsız kalması aracı düşürmesin diye kullanılır:
- * {@link #within} sonraki adımlara pay bırakarak bekler, yanıt gelmeyenler {@link #timedOut()} olur.
+ * Result of a Kafka future awaited within the deadline: a value or a (per-item) error. Used in batch admin
+ * calls so that an error or a missing response for a single group/partition does not fail the tool:
+ * {@link #within} waits while leaving a share for the following steps, and items without a response become
+ * {@link #timedOut()}.
  */
 public record Settled<T>(T value, Throwable error) {
 
-	/** Yanıt gelmeyen öğelerin (koordinatör yükleniyor, partition leader'ı yok, broker yanıtsız) açıklaması. */
-	public static final String NO_RESPONSE = "Süre içinde yanıt gelmedi (grup koordinatörü yükleniyor/erişilemiyor "
-			+ "ya da partition leader'ı yok olabilir)";
+	/** Explanation for items without a response (coordinator loading, partition without a leader, broker silent). */
+	public static final String NO_RESPONSE = "No response in time (the group coordinator may be loading or "
+			+ "unreachable, or the partition may have no leader)";
 
-	/** Admin isteklerine verilen en kısa timeoutMs. */
+	/** Shortest timeoutMs given to admin requests. */
 	static final int MIN_TIMEOUT_MS = 500;
 
 	private static final long AWAIT_CUSHION_MS = 100;
@@ -34,15 +34,18 @@ public record Settled<T>(T value, Throwable error) {
 		return error == null;
 	}
 
-	/** Süre içinde yanıt gelmedi mi (admin timeoutMs doldu ya da bekleme sınırı aşıldı)? */
+	/** Did no response arrive in time (admin timeoutMs elapsed or the wait limit was exceeded)? */
 	public boolean timedOut() {
 		return error instanceof TimeoutException;
 	}
 
-	/** Eski broker'da olmayan API/sürüm (ör. Kafka 2.x ZooKeeper broker'ında OffsetDelete) için açıklama. */
-	public static final String UNSUPPORTED = "Broker bu işlemi desteklemiyor (sürüm)";
+	/**
+	 * Explanation for an API/version an old broker lacks (e.g. OffsetDelete on a Kafka 2.x ZooKeeper broker);
+	 * same as {@link KafkaErrors#UNSUPPORTED}.
+	 */
+	public static final String UNSUPPORTED = KafkaErrors.UNSUPPORTED;
 
-	/** Hatanın kısa Türkçe açıklaması; başarılıysa null. */
+	/** Short explanation of the error; null on success. */
 	public String errorMessage() {
 		if (error == null) {
 			return null;
@@ -51,21 +54,14 @@ public record Settled<T>(T value, Throwable error) {
 	}
 
 	/**
-	 * {@link KafkaErrors#explain}; ancak kafka-clients 4.x'te UnsupportedVersionException,
-	 * InvalidConfigurationException'ın alt sınıfı olduğundan ortak açıklama onu "Geçersiz istek/config" sanar.
-	 * Eski (ör. ZooKeeper 2.x) broker'ın desteklemediği istekler burada doğru Türkçe notu alır.
+	 * {@link KafkaErrors#explain}: requests an old (e.g. ZooKeeper 2.x) broker does not support are explained as
+	 * {@link KafkaErrors#UNSUPPORTED}.
 	 */
 	public static String explain(Throwable error) {
-		Throwable root = KafkaErrors.unwrap(error);
-		if (root instanceof UnsupportedVersionException) {
-			String m = root.getMessage();
-			return UNSUPPORTED + " (" + root.getClass().getSimpleName() + (m == null || m.isBlank() ? "" : ": " + m)
-					+ ")";
-		}
 		return KafkaErrors.explain(error);
 	}
 
-	/** Future'ı {@link ToolCall#await} ile bekler; future'ın kendi hatası fırlatılmaz, sonuçta taşınır. */
+	/** Waits on the future with {@link ToolCall#await}; the future's own error is carried in the result, not thrown. */
 	public static <T> Settled<T> of(ToolCall call, KafkaFuture<T> future) {
 		CompletableFuture<Settled<T>> settled = new CompletableFuture<>();
 		future.whenComplete((v, e) -> settled.complete(new Settled<>(v, e == null ? null : KafkaErrors.unwrap(e))));
@@ -73,8 +69,9 @@ public record Settled<T>(T value, Throwable error) {
 	}
 
 	/**
-	 * Future'ı en fazla (kalan süre - reserveMillis) bekler; bitmezse {@link #timedOut()} sonucu döner, araç
-	 * düşmez. Böylece sonraki adımlar (ör. end offset'ler, çıktı) için süre kalır.
+	 * Waits on the future for at most (remaining time - reserveMillis); if it does not finish, returns a
+	 * {@link #timedOut()} result instead of failing the tool. This leaves time for the following steps (e.g. end
+	 * offsets, output).
 	 */
 	public static <T> Settled<T> within(ToolCall call, KafkaFuture<T> future, long reserveMillis) {
 		CompletableFuture<Settled<T>> settled = new CompletableFuture<>();
@@ -84,8 +81,8 @@ public record Settled<T>(T value, Throwable error) {
 	}
 
 	/**
-	 * Aynı admin isteğinden gelen anahtar başına future'ları tek bir sınırlı beklemeyle toplar (bkz.
-	 * {@link #within}); süre dolunca bitmemiş olanlar döngüde beklenmez, {@link #timedOut()} olarak döner.
+	 * Collects the per-key futures of the same admin request with a single bounded wait (see {@link #within});
+	 * when the time is up, unfinished ones are not awaited in a loop but returned as {@link #timedOut()}.
 	 */
 	public static <K, T> Map<K, Settled<T>> all(ToolCall call, Map<K, KafkaFuture<T>> futures, long reserveMillis) {
 		Map<K, Settled<T>> out = new LinkedHashMap<>();
@@ -97,7 +94,7 @@ public record Settled<T>(T value, Throwable error) {
 		return out;
 	}
 
-	/** Bitmiş future'ın sonucu (beklemez); bitmemişse {@link #timedOut()}. */
+	/** Result of a completed future (does not wait); {@link #timedOut()} if it has not completed. */
 	public static <T> Settled<T> now(KafkaFuture<T> future) {
 		if (!future.isDone()) {
 			return noResponse();
@@ -114,12 +111,12 @@ public record Settled<T>(T value, Throwable error) {
 		}
 	}
 
-	/** Admin isteğinin timeoutMs'i: kalan süreden sonraki adımlar için reserveMillis düşülür (en az 500 ms). */
+	/** timeoutMs of an admin request: remaining time minus reserveMillis for the following steps (at least 500 ms). */
 	public static int timeoutMs(ToolCall call, long reserveMillis) {
 		return (int) Math.max(MIN_TIMEOUT_MS, Math.min(Integer.MAX_VALUE, call.waitMillis() - reserveMillis));
 	}
 
-	/** Sınırlı bekleme süresi; {@link ToolCall#await}'in kendi zaman aşımından hep biraz önce biter. */
+	/** Bounded wait time; always ends a little before the own timeout of {@link ToolCall#await}. */
 	private static long waitMillis(ToolCall call, long reserveMillis) {
 		return Math.max(0, Math.min(call.waitMillis() - AWAIT_CUSHION_MS, timeoutMs(call, reserveMillis)));
 	}

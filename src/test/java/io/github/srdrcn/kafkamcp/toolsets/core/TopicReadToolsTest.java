@@ -77,7 +77,7 @@ class TopicReadToolsTest extends KafkaIntegrationTest {
 		assertThat(r.get("totalSizeBytes").asLong()).isEqualTo(r.get("sizeBytes").asLong());
 		assertThat(r.get("size").asText()).endsWith("B");
 
-		assertThat(error("topics_get", args("topic", prefix + "-yok"))).contains("Topic bulunamadı");
+		assertThat(error("topics_get", args("topic", prefix + "-missing"))).contains("Topic not found");
 	}
 
 	@Test
@@ -99,7 +99,7 @@ class TopicReadToolsTest extends KafkaIntegrationTest {
 		JsonNode filtered = ok("topics_config_get", args("topic", retention, "filter", "^retention\\."));
 		assertThat(names(filtered.get("configs"))).isNotEmpty().allMatch(n -> n.startsWith("retention."));
 
-		assertThat(error("topics_config_get", args("topic", prefix + "-yok"))).contains("Topic bulunamadı");
+		assertThat(error("topics_config_get", args("topic", prefix + "-missing"))).contains("Topic not found");
 	}
 
 	@Test
@@ -141,9 +141,9 @@ class TopicReadToolsTest extends KafkaIntegrationTest {
 		assertThat(unknown.get("warning").asText()).contains("no.such.key");
 
 		assertThat(error("topics_find_by_config", args("key", "retention.ms", "operator", "gt", "value", "abc")))
-			.contains("sayı olmalı");
+			.contains("must be a number");
 		assertThat(error("topics_find_by_config", args("key", "retention.ms", "operator", "eq")))
-			.contains("value parametresi gerekli");
+			.contains("Missing parameter: value");
 	}
 
 	private static List<String> topics(JsonNode r) {

@@ -5,7 +5,7 @@ metadata:
   annotations:
     haproxy.router.openshift.io/timeout: 60s
 spec:
-  # host: kafka-mcp.<apps-domain>   # boş bırakılırsa OpenShift kafka-mcp-<namespace>.<apps-domain> üretir
+  # host: kafka-mcp.<apps-domain>   # if left empty, OpenShift generates kafka-mcp-<namespace>.<apps-domain>
   to:
     kind: Service
     name: kafka-mcp

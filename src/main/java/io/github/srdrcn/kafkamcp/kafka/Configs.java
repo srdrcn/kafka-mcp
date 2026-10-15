@@ -21,31 +21,31 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Config okuma/yazma yardımcıları: tek describeConfigs, hassas değer maskeleme, önce/sonra ile güncelleme. */
+/** Config helpers: a single describeConfigs, masking of sensitive values, updates with before/after values. */
 public final class Configs {
 
-	/** Hassas config değerlerinin yerine yazılan maske. */
+	/** Mask written in place of sensitive config values. */
 	public static final String MASK = "******";
 
 	private Configs() {
 	}
 
-	/** TOPIC kaynağı. */
+	/** TOPIC resource. */
 	public static ConfigResource topic(String name) {
 		return new ConfigResource(ConfigResource.Type.TOPIC, name);
 	}
 
-	/** BROKER kaynağı (tek broker). */
+	/** BROKER resource (single broker). */
 	public static ConfigResource broker(int id) {
 		return new ConfigResource(ConfigResource.Type.BROKER, String.valueOf(id));
 	}
 
-	/** Cluster geneli dinamik varsayılan broker config'i (BROKER, ad ""). */
+	/** Cluster-wide dynamic default broker config (BROKER, name ""). */
 	public static ConfigResource brokerDefault() {
 		return new ConfigResource(ConfigResource.Type.BROKER, "");
 	}
 
-	/** Tek describeConfigs çağrısı; kaynak bazında hatalar ayrı döner. */
+	/** A single describeConfigs call; per-resource errors are returned separately. */
 	public static Futures.Each<ConfigResource, Config> describe(ToolCall call, Collection<ConfigResource> resources) {
 		if (resources.isEmpty()) {
 			return new Futures.Each<>(new LinkedHashMap<>(), new LinkedHashMap<>());
@@ -53,17 +53,17 @@ public final class Configs {
 		return Futures.awaitEach(call, call.admin().describeConfigs(resources).values());
 	}
 
-	/** Tek kaynak; topic yoksa "Topic bulunamadı". */
+	/** Single resource; "Topic not found" if the topic does not exist. */
 	public static Config describeOne(ToolCall call, ConfigResource r) {
 		return awaitOne(call, r, submitOne(call, r));
 	}
 
-	/** Tek kaynak için describeConfigs isteğini gönderir (beklemez); sonucu {@link #awaitOne} ile alın. */
+	/** Sends describeConfigs for a single resource (does not wait); get the result with {@link #awaitOne}. */
 	public static KafkaFuture<Config> submitOne(ToolCall call, ConfigResource r) {
 		return call.admin().describeConfigs(List.of(r)).values().get(r);
 	}
 
-	/** {@link #submitOne} sonucunu bekler; topic yoksa "Topic bulunamadı". */
+	/** Waits for the {@link #submitOne} result; "Topic not found" if the topic does not exist. */
 	public static Config awaitOne(ToolCall call, ConfigResource r, KafkaFuture<Config> pending) {
 		try {
 			return call.await(pending);
@@ -73,7 +73,7 @@ public final class Configs {
 		}
 	}
 
-	/** Değer; hassas config'lerde maske. */
+	/** Value; the mask for sensitive configs. */
 	public static String value(ConfigEntry e) {
 		if (e == null) {
 			return null;
@@ -81,24 +81,24 @@ public final class Configs {
 		return e.isSensitive() ? MASK : e.value();
 	}
 
-	/** Kaynak adı (ör. DYNAMIC_TOPIC_CONFIG) ya da null. */
+	/** Source name (e.g. DYNAMIC_TOPIC_CONFIG) or null. */
 	public static String source(ConfigEntry e) {
 		return e == null || e.source() == null ? null : e.source().name();
 	}
 
-	/** Varsayılan değer mi (source DEFAULT_CONFIG)? */
+	/** Is it the default value (source DEFAULT_CONFIG)? */
 	public static boolean isDefault(ConfigEntry e) {
 		return e.source() == ConfigSource.DEFAULT_CONFIG || e.source() == ConfigSource.UNKNOWN && e.isDefault();
 	}
 
-	/** Ada göre sıralı config girdileri. */
+	/** Config entries sorted by name. */
 	public static List<ConfigEntry> sorted(Config c) {
 		List<ConfigEntry> out = new ArrayList<>(c.entries());
 		out.sort(Comparator.comparing(ConfigEntry::name));
 		return out;
 	}
 
-	/** Kompakt satır: name, value, source, readOnly (+ isDefault). */
+	/** Compact row: name, value, source, readOnly (+ isDefault). */
 	public static Map<String, Object> row(ConfigEntry e, boolean withIsDefault) {
 		Map<String, Object> m = Results.map("name", e.name(), "value", value(e), "source", source(e));
 		if (withIsDefault) {
@@ -109,22 +109,22 @@ public final class Configs {
 	}
 
 	/**
-	 * incrementalAlterConfigs ile SET/DELETE uygular ve istenen her anahtar için önce/sonra değerini döner.
-	 * Sonraki değer, değişiklik görünene kadar kısa süre (en çok ~2 sn) tekrar okunur.
+	 * Applies SET/DELETE with incrementalAlterConfigs and returns the before/after value of every requested key.
+	 * The new value is re-read for a short while (at most ~2 s) until the change shows up.
 	 */
 	public static List<Map<String, Object>> alter(ToolCall call, ConfigResource r, Map<String, String> set,
 			Collection<String> delete) {
 		if (set.isEmpty() && delete.isEmpty()) {
-			throw new ToolException("set ya da delete parametrelerinden en az biri verilmeli");
+			throw new ToolException("At least one of the set or delete parameters is required");
 		}
 		for (Map.Entry<String, String> e : set.entrySet()) {
 			if (e.getValue() == null) {
-				throw new ToolException("set değeri boş olamaz: " + e.getKey() + " (varsayılana döndürmek için delete)");
+				throw new ToolException("set value cannot be empty: " + e.getKey() + " (use delete to revert to the default)");
 			}
 		}
 		for (String k : delete) {
 			if (set.containsKey(k)) {
-				throw new ToolException("Aynı anahtar hem set hem delete içinde: " + k);
+				throw new ToolException("Same key in both set and delete: " + k);
 			}
 		}
 		Config before = describeOne(call, r);
@@ -154,8 +154,9 @@ public final class Configs {
 	}
 
 	/**
-	 * Değişiklik okunan config'te görünüyor mu? Broker önce kaynağı sonra değeri güncellediği için silmede
-	 * değerin de eski dinamik değerden farklılaşması beklenir (varsayılan aynıysa en çok ~2 sn beklenir).
+	 * Is the change visible in the config that was read? The broker updates the source before the value, so for
+	 * a delete the value is also expected to differ from the old dynamic value (if the default is the same, this
+	 * waits at most ~2 s).
 	 */
 	private static boolean applied(Config before, Config after, ConfigResource r, Map<String, String> set,
 			Collection<String> delete) {

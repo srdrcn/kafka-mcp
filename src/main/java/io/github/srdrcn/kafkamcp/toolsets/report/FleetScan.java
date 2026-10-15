@@ -36,10 +36,10 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 
 /**
- * Rapor araçları için toplu cluster taraması: tek listTopics, tek describeTopics ve istenen her ek için tek
- * admin isteği (earliest/latest/maxTimestamp listOffsets, describeLogDirs, describeConfigs, consumer group
- * offset'leri). İstekler paralel gönderilir, deadline'dan pay bırakılarak beklenir; yetişmeyen ya da hata
- * veren kısımlar {@link #coverage()}'de (skipped/partial/errors) raporlanır, araç düşmez.
+ * Batched cluster scan for the report tools: one listTopics, one describeTopics and one admin request for each
+ * requested extra (earliest/latest/maxTimestamp listOffsets, describeLogDirs, describeConfigs, consumer group
+ * offsets). Requests are sent in parallel and awaited with a margin before the deadline; parts that do not finish
+ * in time or fail are reported in {@link #coverage()} (skipped/partial/errors) and the tool does not fail.
  *
  * <pre>
  * FleetScan scan = FleetScan.of(call).ranges().maxTimestamps().sizes().run();
@@ -48,11 +48,11 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
  */
 public final class FleetScan {
 
-	/** Hesap ve çıktı için deadline'dan ayrılan varsayılan pay. */
+	/** Default margin kept before the deadline for computation and output. */
 	public static final long OUTPUT_RESERVE_MS = 1_500;
 
-	/** maxTimestamp sorgusu desteklenmediğinde (broker &lt; 3.0) son yazma için neden. */
-	public static final String MAX_TIMESTAMP_UNSUPPORTED = "broker maxTimestamp sorgusunu desteklemiyor (Kafka < 3.0)";
+	/** Last-write reason when the maxTimestamp query is not supported (broker &lt; 3.0). */
+	public static final String MAX_TIMESTAMP_UNSUPPORTED = "Broker does not support the maxTimestamp query (Kafka < 3.0)";
 
 	private final ToolCall call;
 
@@ -102,12 +102,12 @@ public final class FleetScan {
 		this.call = call;
 	}
 
-	/** Tarama tanımı; {@link Builder#run()} ile çalışır. Varsayılan topic filtresi {@code filter} parametresidir. */
+	/** Scan definition; runs with {@link Builder#run()}. The default topic filter is the {@code filter} parameter. */
 	public static Builder of(ToolCall call) {
 		return new Builder(call);
 	}
 
-	/** Neyin taranacağı. */
+	/** What to scan. */
 	public static final class Builder {
 
 		private final ToolCall call;
@@ -139,46 +139,46 @@ public final class FleetScan {
 			this.names = call::matches;
 		}
 
-		/** Topic adı filtresi (varsayılan: filter parametresi). */
+		/** Topic name filter (default: the filter parameter). */
 		public Builder names(Predicate<String> names) {
 			this.names = names;
 			return this;
 		}
 
-		/** Topic adı filtresi; uymayanlar skipped altında {@code label} anahtarıyla sayılır. */
+		/** Topic name filter; non-matching topics are counted under skipped with the {@code label} key. */
 		public Builder names(Predicate<String> names, String label) {
 			this.names = names;
 			this.notMatchingLabel = label;
 			return this;
 		}
 
-		/** İç (__*) ve sistem topic'leri (Connect/Schema Registry/MirrorMaker) de taransın mı (varsayılan false). */
+		/** Also scan internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default false). */
 		public Builder includeInternal(boolean includeInternal) {
 			this.includeInternal = includeInternal;
 			return this;
 		}
 
-		/** earliest + latest offset'ler (boşluk, mesaj sayısı). */
+		/** earliest + latest offsets (emptiness, message count). */
 		public Builder ranges() {
 			this.ranges = true;
 			return this;
 		}
 
-		/** Partition başına en büyük zaman damgası (OffsetSpec.maxTimestamp; Kafka 3.0+). */
+		/** Largest timestamp per partition (OffsetSpec.maxTimestamp; Kafka 3.0+). */
 		public Builder maxTimestamps() {
 			this.maxTimestamps = true;
 			return this;
 		}
 
-		/** describeLogDirs ile partition boyutları. */
+		/** Partition sizes via describeLogDirs. */
 		public Builder sizes() {
 			this.sizes = true;
 			return this;
 		}
 
 		/**
-		 * describeLogDirs isteği gönderilir ama beklenmez; boyutlar {@link FleetScan#awaitSizes(long)} çağrılınca
-		 * dolar (ör. yazma hızı örnekleri arasında paralel tamamlansın diye).
+		 * The describeLogDirs request is sent but not awaited; sizes are filled in when
+		 * {@link FleetScan#awaitSizes(long)} is called (e.g. so it completes in parallel between the write-rate samples).
 		 */
 		public Builder deferSizes() {
 			this.sizes = true;
@@ -186,25 +186,25 @@ public final class FleetScan {
 			return this;
 		}
 
-		/** Taranan topic'lerin config'leri (tek describeConfigs). */
+		/** Configs of the scanned topics (one describeConfigs). */
 		public Builder configs() {
 			this.configs = true;
 			return this;
 		}
 
-		/** Bir broker'ın config'i (ör. default.replication.factor); configs ile aynı istekte. */
+		/** One broker's config (e.g. default.replication.factor); in the same request as configs. */
 		public Builder brokerConfig() {
 			this.brokerConfig = true;
 			return this;
 		}
 
-		/** Consumer group'lar ve en fazla maxGroups grubun commit'li offset'leri. */
+		/** Consumer groups and the committed offsets of at most maxGroups groups. */
 		public Builder groups(int maxGroups) {
 			this.maxGroups = maxGroups;
 			return this;
 		}
 
-		/** Bekleme sonrası araca bırakılacak süre (varsayılan {@link #OUTPUT_RESERVE_MS}). */
+		/** Time left to the tool after waiting (default {@link #OUTPUT_RESERVE_MS}). */
 		public Builder reserve(long reserveMillis) {
 			this.reserveMillis = reserveMillis;
 			return this;
@@ -396,7 +396,7 @@ public final class FleetScan {
 			}
 		}
 		if (maxTimestampUnsupported) {
-			coverage.note("Son yazma zamanı bilinmiyor: " + MAX_TIMESTAMP_UNSUPPORTED);
+			coverage.note("Last write time unknown: " + MAX_TIMESTAMP_UNSUPPORTED);
 		}
 		if (!sample.isEmpty()) {
 			coverage.error("maxTimestamp", sample);
@@ -407,8 +407,8 @@ public final class FleetScan {
 	}
 
 	/**
-	 * Gönderilmiş describeLogDirs'i en fazla (kalan süre - reserve) bekleyip boyutları doldurur; sizes() ile
-	 * zaten beklendiyse ya da boyut istenmediyse bir şey yapmaz.
+	 * Waits at most (remaining time - reserve) for the pending describeLogDirs and fills in the sizes; does nothing
+	 * if sizes() already waited or sizes were not requested.
 	 */
 	public void awaitSizes(long reserve) {
 		if (pendingDirs == null) {
@@ -436,7 +436,7 @@ public final class FleetScan {
 			sizesComplete = false;
 			sizeErrorBrokers = Set.copyOf(errors.keySet());
 			coverage.error("logDirs", errors);
-			coverage.note("Bazı broker'ların log dizinleri okunamadı: boyutlar alt sınırdır");
+			coverage.note("Could not read the log dirs of some brokers: sizes are lower bounds");
 		}
 	}
 
@@ -489,44 +489,44 @@ public final class FleetScan {
 		return coverage;
 	}
 
-	/** Taramanın başladığı an (epoch ms); yaş hesapları buna göre. */
+	/** When the scan started (epoch ms); ages are computed from it. */
 	public long nowMs() {
 		return nowMs;
 	}
 
-	/** Cluster'daki tüm topic'ler (iç topic'ler dahil) → internal bayrağı. */
+	/** All topics in the cluster (including internal ones) → internal flag. */
 	public Map<String, Boolean> listing() {
 		return listing;
 	}
 
-	/** Taranan (filtreye uyan ve describe edilen) topic'ler, ada göre sıralı. */
+	/** Scanned (matching and described) topics, sorted by name. */
 	public Map<String, TopicDescription> topics() {
 		return topics;
 	}
 
-	/** Canlı broker'lar (id sırasıyla; describeCluster başarısızsa boş). */
+	/** Live brokers (by id; empty if describeCluster failed). */
 	public List<Node> brokers() {
 		return brokers;
 	}
 
-	/** Partition → earliest/latest (ranges() istendiyse; alınamayanlar yok). */
+	/** Partition → earliest/latest (if ranges() was requested; missing ones are absent). */
 	public Map<TopicPartition, Offsets.Range> ranges() {
 		return ranges == null ? Map.of() : ranges;
 	}
 
-	/** Partition boyutları (sizes() istendiyse). */
+	/** Partition sizes (if sizes() was requested). */
 	public Map<TopicPartition, LogDirs.PartitionSize> sizes() {
 		return sizes == null ? Map.of() : sizes;
 	}
 
-	/** Tüm broker'ların log dizinleri okundu mu (boyutlar tam mı)? */
+	/** Were the log dirs of all brokers read (are the sizes complete)? */
 	public boolean sizesComplete() {
 		return sizes != null && sizesComplete;
 	}
 
 	/**
-	 * Topic'in boyutu tam mı: boyutlar okundu ve topic'in hiçbir replikası log dizini okunamayan bir broker'da
-	 * değil. false ise {@link #sizeBytes} null ya da alt sınırdır.
+	 * Is the topic's size complete: sizes were read and none of the topic's replicas is on a broker whose log dirs
+	 * could not be read. If false, {@link #sizeBytes} is null or a lower bound.
 	 */
 	public boolean sizeComplete(String topic) {
 		TopicDescription d = topics.get(topic);
@@ -546,22 +546,22 @@ public final class FleetScan {
 		return true;
 	}
 
-	/** Topic → config (configs() istendiyse; okunamayanlar yok). */
+	/** Topic → config (if configs() was requested; unreadable ones are absent). */
 	public Map<String, Config> configs() {
 		return configs == null ? Map.of() : configs;
 	}
 
-	/** brokerConfig() istendiyse okunan broker config'i ya da null. */
+	/** The broker config read for brokerConfig(), or null. */
 	public Config brokerConfig() {
 		return brokerConfig;
 	}
 
-	/** Config'i okunan broker'ın id'si ya da null. */
+	/** Id of the broker whose config was read, or null. */
 	public Integer brokerConfigId() {
 		return brokerConfigId;
 	}
 
-	/** Grup taraması; istenmediyse ya da başarısızsa null (neden {@link #groupsError()}). */
+	/** Group scan; null if not requested or failed (reason in {@link #groupsError()}). */
 	public GroupScan groups() {
 		return groups;
 	}
@@ -570,15 +570,15 @@ public final class FleetScan {
 		return groupsError;
 	}
 
-	/** Grup taraması zorunluysa: başarısızsa Türkçe hata. */
+	/** For tools that need the group scan: throws an error if it failed. */
 	public GroupScan requireGroups() {
 		if (groups == null) {
-			throw new ToolException("Consumer group'lar okunamadı: " + (groupsError == null ? "bilinmeyen hata" : groupsError));
+			throw new ToolException("Could not read consumer groups: " + (groupsError == null ? "unknown error" : groupsError));
 		}
 		return groups;
 	}
 
-	/** maxTimestamp bazı partition'larda desteklenmedi mi? */
+	/** Was maxTimestamp unsupported on some partitions? */
 	public boolean maxTimestampUnsupported() {
 		return maxTimestampUnsupported;
 	}
@@ -594,19 +594,19 @@ public final class FleetScan {
 	}
 
 	/**
-	 * Topic'in mantıksal boyutu (lider replikalar). Boyut istenmediyse ya da topic'in hiçbir replikasının boyutu
-	 * okunamadıysa (broker hatası) null; bazı broker'lar okunamadıysa alt sınır.
+	 * Logical size of the topic (leader replicas). Null if sizes were not requested or no replica size of the topic
+	 * could be read (broker error); a lower bound if some brokers could not be read.
 	 */
 	public Long sizeBytes(String topic) {
 		return topicSize(topic, 0);
 	}
 
-	/** Tüm replikaların toplam boyutu; bilinmiyorsa null (bkz. {@link #sizeBytes}). */
+	/** Total size of all replicas; null if unknown (see {@link #sizeBytes}). */
 	public Long totalSizeBytes(String topic) {
 		return topicSize(topic, 1);
 	}
 
-	/** index 0: lider, 1: tüm replikalar (ternary ile long/null karışımı unboxing NPE'si verir; açık if). */
+	/** index 0: leader, 1: all replicas (a ternary mixing long/null would NPE on unboxing; explicit if). */
 	private Long topicSize(String topic, int index) {
 		if (sizes == null) {
 			return null;
@@ -618,7 +618,7 @@ public final class FleetScan {
 		return sizesComplete ? Long.valueOf(0) : null;
 	}
 
-	/** Çıktı için boyut alanları: sizeBytes ve okunur size. */
+	/** Size fields for the output: sizeBytes and a human-readable size. */
 	public Map<String, Object> sizeFields(String topic) {
 		Long bytes = sizeBytes(topic);
 		return bytes == null ? new LinkedHashMap<>() : Results.map("sizeBytes", bytes, "size", Format.bytes(bytes));
@@ -636,7 +636,7 @@ public final class FleetScan {
 		return topicSizes;
 	}
 
-	/** Topic'in boşluk/son yazma özeti (ranges ve maxTimestamps taramasından). */
+	/** Emptiness/last-write summary of the topic (from the ranges and maxTimestamps scans). */
 	public TopicActivity activity(String topic) {
 		return activities.computeIfAbsent(topic, this::computeActivity);
 	}
@@ -644,7 +644,7 @@ public final class FleetScan {
 	private TopicActivity computeActivity(String topic) {
 		TopicDescription d = topics.get(topic);
 		if (d == null) {
-			return new TopicActivity(topic, null, false, null, null, false, "topic describe edilemedi");
+			return new TopicActivity(topic, null, false, null, null, false, "Could not describe the topic");
 		}
 		long messages = 0;
 		boolean allKnown = true;
@@ -674,7 +674,7 @@ public final class FleetScan {
 				lastComplete = false;
 				if (reason == null) {
 					String err = maxTimestampErrors.get(tp);
-					reason = err != null ? err : r == null ? "offset alınamadı" : "kayıtlarda zaman damgası yok";
+					reason = err != null ? err : r == null ? "Could not get offsets" : "Records have no timestamp";
 				}
 			}
 		}
@@ -687,7 +687,7 @@ public final class FleetScan {
 				lastComplete, lastComplete ? null : reason);
 	}
 
-	/** Kısa topic satırı: partitions, replicationFactor ve (varsa) boyut. */
+	/** Short topic row: partitions, replicationFactor and size (if known). */
 	public Map<String, Object> topicRow(String topic) {
 		Map<String, Object> m = Results.map("topic", topic, "partitions", partitions(topic), "replicationFactor",
 				replicationFactor(topic));

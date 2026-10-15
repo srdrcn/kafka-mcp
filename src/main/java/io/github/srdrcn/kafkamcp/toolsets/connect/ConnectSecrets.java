@@ -6,9 +6,9 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Connector config'lerindeki gizli değerleri maskeler: anahtar (büyük/küçük harf duyarsız)
- * password/secret/token/credential/jaas/user.info içeriyorsa ya da son noktalı segmenti "key" içeriyorsa
- * (api.key, private.key, apikey; ama key.converter/key.serializer değil).
+ * Masks secret values in connector configs: a key is secret if it contains (case-insensitive)
+ * password/secret/token/credential/jaas/user.info, or if its last dotted segment contains "key" (api.key,
+ * private.key, apikey; but not key.converter/key.serializer).
  */
 public final class ConnectSecrets {
 
@@ -20,7 +20,7 @@ public final class ConnectSecrets {
 	private ConnectSecrets() {
 	}
 
-	/** Bu config anahtarının değeri gizli mi? */
+	/** Is the value of this config key secret? */
 	public static boolean isSecret(String key) {
 		if (key == null) {
 			return false;
@@ -35,12 +35,12 @@ public final class ConnectSecrets {
 		return last.contains("key");
 	}
 
-	/** Gizli anahtarın (null olmayan) değerini {@link #MASK} ile değiştirir; diğerlerini olduğu gibi döner. */
+	/** Replaces the (non-null) value of a secret key with {@link #MASK}; returns other values unchanged. */
 	public static Object mask(String key, Object value) {
 		return value != null && isSecret(key) ? MASK : value;
 	}
 
-	/** Config'in maskelenmiş, anahtara göre sıralı kopyası. */
+	/** Masked copy of the config, sorted by key. */
 	public static Map<String, Object> mask(Map<String, ?> config) {
 		Map<String, Object> out = new TreeMap<>();
 		if (config != null) {

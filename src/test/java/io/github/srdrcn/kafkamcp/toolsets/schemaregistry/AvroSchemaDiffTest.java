@@ -20,7 +20,7 @@ class AvroSchemaDiffTest {
 			.stream()
 			.filter(c -> c.path().equals(path) && c.kind().equals(kind))
 			.findFirst()
-			.orElseThrow(() -> new AssertionError(path + " " + kind + " yok: " + r.changes()));
+			.orElseThrow(() -> new AssertionError(path + " " + kind + " missing: " + r.changes()));
 	}
 
 	@Test
@@ -38,20 +38,20 @@ class AvroSchemaDiffTest {
 				 {"name":"email","type":"string"},
 				 {"name":"nick","type":["null","string","int"],"default":null}]}""");
 		AvroSchemaDiff.Result r = AvroSchemaDiff.diff(a, b);
-		assertThat(find(r, "User.id", "TYPE_CHANGED").detail()).contains("uyumsuz");
+		assertThat(find(r, "User.id", "TYPE_CHANGED").detail()).contains("incompatible");
 		Change age = find(r, "User.age", "TYPE_CHANGED");
 		assertThat(age.from()).isEqualTo("int");
 		assertThat(age.to()).isEqualTo("long");
-		assertThat(age.detail()).contains("BACKWARD uyumlu");
+		assertThat(age.detail()).contains("BACKWARD compatible");
 		Change def = find(r, "User.age", "DEFAULT_CHANGED");
 		assertThat(def.from()).isEqualTo("0");
 		assertThat(def.to()).isEqualTo("1");
-		assertThat(find(r, "User.email", "FIELD_ADDED").detail()).contains("varsayılanı yok");
+		assertThat(find(r, "User.email", "FIELD_ADDED").detail()).contains("without a default");
 		assertThat(find(r, "User.old", "FIELD_REMOVED").detail()).contains("FORWARD");
 		assertThat(find(r, "User.nick", "UNION_BRANCH_ADDED").to()).isEqualTo("int");
 		assertThat(r.backward()).isFalse();
 		assertThat(r.forward()).isFalse();
-		assertThat(r.hint()).contains("Uyumsuz");
+		assertThat(r.hint()).contains("Incompatible");
 		assertThat(r.backwardIssues()).isNotEmpty();
 		assertThat(r.satisfies("NONE")).isTrue();
 		assertThat(r.satisfies("BACKWARD")).isFalse();
@@ -87,7 +87,7 @@ class AvroSchemaDiffTest {
 		find(r, "Order.status", "ENUM_DEFAULT_CHANGED");
 		find(r, "Order.items[].qty", "TYPE_CHANGED");
 		find(r, "Order.items[].note", "FIELD_ADDED");
-		assertThat(find(r, "Order.tags{}", "TYPE_CHANGED").detail()).contains("BACKWARD uyumlu");
+		assertThat(find(r, "Order.tags{}", "TYPE_CHANGED").detail()).contains("BACKWARD compatible");
 		find(r, "Order.address.zip", "FIELD_ADDED");
 		assertThat(find(r, "Order.ts", "LOGICAL_TYPE_CHANGED").to()).isEqualTo("timestamp-millis");
 		assertThat(find(r, "Order.hash", "FIXED_SIZE_CHANGED").to()).isEqualTo(32);
@@ -111,9 +111,9 @@ class AvroSchemaDiffTest {
 				 {"name":"next","type":["null","Node"],"default":null},
 				 {"name":"heading","type":"string","aliases":["title"]}]}""");
 		AvroSchemaDiff.Result r = AvroSchemaDiff.diff(a, b);
-		assertThat(find(r, "Node.value", "TYPE_CHANGED").detail()).contains("union'a");
+		assertThat(find(r, "Node.value", "TYPE_CHANGED").detail()).contains("to a union");
 		find(r, "Node.value", "DEFAULT_ADDED");
-		assertThat(find(r, "Node.label", "TYPE_CHANGED").detail()).contains("tek tipe");
+		assertThat(find(r, "Node.label", "TYPE_CHANGED").detail()).contains("to a single type");
 		Change count = find(r, "Node.count", "TYPE_CHANGED");
 		assertThat(count.from()).isEqualTo("int");
 		assertThat(count.to()).isEqualTo("long");
@@ -140,30 +140,31 @@ class AvroSchemaDiffTest {
 				 {"name":"s","type":["int","long"]},
 				 {"name":"x","type":"string","default":""}]}""");
 		AvroSchemaDiff.Result r = AvroSchemaDiff.diff(a, b);
-		// int → ["null","long"]: int long dalına yükseltilerek okunur
+		// int → ["null","long"]: int is read by promoting it to the long branch
 		String n = find(r, "P.n", "TYPE_CHANGED").detail();
-		assertThat(n).contains("union'a").contains("BACKWARD uyumlu, tip yükseltmesiyle")
-			.contains("FORWARD uyumsuz: eski okuyucular null")
-			.doesNotContain("BACKWARD uyumsuz");
-		// union'da int → long: silinen int dalı long dalıyla okunur
-		assertThat(find(r, "P.u", "UNION_BRANCH_REMOVED").detail()).contains("long dalıyla okunur")
-			.contains("BACKWARD uyumlu");
-		assertThat(find(r, "P.u", "UNION_BRANCH_ADDED").detail()).contains("FORWARD uyumsuz");
-		// ["int","long"] → long: her iki dal da long ile okunur; long eski union'da da var
-		assertThat(find(r, "P.w", "TYPE_CHANGED").detail()).contains("tek tipe")
-			.contains("BACKWARD uyumlu, tip yükseltmesiyle")
-			.contains("FORWARD uyumlu");
-		// long → ["int","long"]: eski okuyucu (long) yeni int dalını yükselterek okur
-		assertThat(find(r, "P.s", "TYPE_CHANGED").detail()).contains("BACKWARD uyumlu;")
-			.contains("FORWARD uyumlu, tip yükseltmesiyle");
-		// ["null","string"] → string: null ile yazılmış eski veri okunamaz
-		assertThat(find(r, "P.x", "TYPE_CHANGED").detail()).contains("BACKWARD uyumsuz: null")
-			.contains("FORWARD uyumlu");
-		// tek BACKWARD uyumsuzluğu x alanındaki null dalı
+		assertThat(n).contains("to a union").contains("BACKWARD compatible, via type promotion")
+			.contains("FORWARD incompatible: old readers cannot read new data written with null")
+			.doesNotContain("BACKWARD incompatible");
+		// int → long inside the union: the removed int branch is read by the long branch
+		assertThat(find(r, "P.u", "UNION_BRANCH_REMOVED").detail()).contains("is read by the long branch")
+			.contains("BACKWARD compatible");
+		assertThat(find(r, "P.u", "UNION_BRANCH_ADDED").detail()).contains("FORWARD incompatible");
+		// ["int","long"] → long: both branches are read as long; long is also in the old union
+		assertThat(find(r, "P.w", "TYPE_CHANGED").detail()).contains("to a single type")
+			.contains("BACKWARD compatible, via type promotion")
+			.contains("FORWARD compatible");
+		// long → ["int","long"]: the old reader (long) reads the new int branch by promoting it
+		assertThat(find(r, "P.s", "TYPE_CHANGED").detail()).contains("BACKWARD compatible;")
+			.contains("FORWARD compatible, via type promotion");
+		// ["null","string"] → string: old data written with null cannot be read
+		assertThat(find(r, "P.x", "TYPE_CHANGED").detail())
+			.contains("BACKWARD incompatible: old data written with null cannot be read")
+			.contains("FORWARD compatible");
+		// the only BACKWARD incompatibility is the null branch of field x
 		assertThat(r.backward()).isFalse();
 		assertThat(r.backwardIssueCount()).isEqualTo(1);
 
-		// x olmadan: alan notları Avro uyumluluk sonucuyla çelişmez (BACKWARD uyumlu, FORWARD değil)
+		// without x: the field notes agree with the Avro compatibility result (BACKWARD compatible, not FORWARD)
 		AvroSchemaDiff.Result promoted = AvroSchemaDiff.diff(parse("""
 				{"type":"record","name":"P","fields":[
 				 {"name":"n","type":"int"},
@@ -175,8 +176,8 @@ class AvroSchemaDiffTest {
 				 {"name":"w","type":"long"}]}"""));
 		assertThat(promoted.backward()).isTrue();
 		assertThat(promoted.forward()).isFalse();
-		assertThat(promoted.changes()).noneMatch(c -> c.detail().contains("BACKWARD uyumsuz"));
-		assertThat(promoted.changes()).anyMatch(c -> c.detail().contains("FORWARD uyumsuz"));
+		assertThat(promoted.changes()).noneMatch(c -> c.detail().contains("BACKWARD incompatible"));
+		assertThat(promoted.changes()).anyMatch(c -> c.detail().contains("FORWARD incompatible"));
 	}
 
 	@Test
@@ -197,7 +198,7 @@ class AvroSchemaDiffTest {
 		java.util.Map<String, Object> compat = (java.util.Map<String, Object>) r.toMap().get("compatibility");
 		assertThat(compat).containsEntry("backwardIssuesOmitted", 2).doesNotContainKey("forwardIssuesOmitted");
 
-		// sınırın altında omitted alanı yok
+		// below the cap there is no omitted field
 		java.util.Map<String, Object> small = AvroSchemaDiff.diff(a, parse("""
 				{"type":"record","name":"R","fields":[{"name":"id","type":"string"},{"name":"z","type":"int"}]}"""))
 			.toMap();

@@ -17,20 +17,20 @@ import io.github.srdrcn.kafkamcp.config.ConfigException;
 import io.github.srdrcn.kafkamcp.config.ConfigLoader;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 
-// Toolset'lerde aynı adlı sınıflar olabilir (ör. messages.SchemaTools / schemaregistry.SchemaTools):
-// bean adları paket dahil üretilir.
+// Toolsets may contain classes with the same name (e.g. messages.SchemaTools / schemaregistry.SchemaTools):
+// bean names are generated including the package.
 @SpringBootApplication(nameGenerator = FullyQualifiedAnnotationBeanNameGenerator.class)
 public class KafkaMcpApplication {
 
 	static final String USAGE = """
-			Kullanım: java -jar kafka-mcp.jar --config kafka-mcp.yaml [seçenekler]
+			Usage: java -jar kafka-mcp.jar --config kafka-mcp.yaml [options]
 
-			  --config <dosya>        Ana config dosyası (YAML)
-			  --config-dir <dizin>    Drop-in .yaml/.yml dosyaları (ad sırasıyla ana config'in üzerine birleştirilir)
-			  --port <port>           HTTP portu (config'teki port'u ezer)
+			  --config <file>         Main config file (YAML)
+			  --config-dir <dir>      Drop-in .yaml/.yml files (merged over the main config in name order)
+			  --port <port>           HTTP port (overrides the port in the config)
 			  --transport <http|stdio>
-			                          Varsayılan: port tanımlıysa http (Streamable HTTP, /mcp), değilse stdio
-			  --help                  Bu yardımı gösterir
+			                          Default: http if a port is set (Streamable HTTP, /mcp), otherwise stdio
+			  --help                  Show this help
 			""";
 
 	public static void main(String[] args) {
@@ -43,7 +43,7 @@ public class KafkaMcpApplication {
 				return;
 			}
 			if (cli.config == null && cli.configDir == null) {
-				throw new ConfigException("--config ya da --config-dir verilmeli\n\n" + USAGE);
+				throw new ConfigException("--config or --config-dir is required\n\n" + USAGE);
 			}
 			config = ConfigLoader.load(cli.config, cli.configDir);
 			if (cli.port != null) {
@@ -109,7 +109,7 @@ public class KafkaMcpApplication {
 					case "--config", "--config-dir", "--port", "--transport" -> {
 						if (value == null) {
 							if (i + 1 >= args.length) {
-								throw new IllegalArgumentException(name + " için değer eksik");
+								throw new IllegalArgumentException("Missing value for " + name);
 							}
 							value = args[++i];
 						}
@@ -121,12 +121,12 @@ public class KafkaMcpApplication {
 									cli.port = Integer.parseInt(value);
 								}
 								catch (NumberFormatException e) {
-									throw new IllegalArgumentException("--port sayı olmalı: " + value);
+									throw new IllegalArgumentException("--port must be a number: " + value);
 								}
 							}
 							default -> {
 								if (!value.equals("http") && !value.equals("stdio")) {
-									throw new IllegalArgumentException("--transport http ya da stdio olmalı: " + value);
+									throw new IllegalArgumentException("--transport must be http or stdio: " + value);
 								}
 								cli.transport = value;
 							}

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
 
-/** brokers_config_drift karşılaştırma mantığı (çok broker'lı durum; test cluster'ı tek broker). */
+/** brokers_config_drift comparison logic (multi-broker case; the test cluster has a single broker). */
 class BrokerConfigDriftTest {
 
 	@Test
@@ -44,12 +44,12 @@ class BrokerConfigDriftTest {
 		assertThat(io.get(1)).containsEntry("value", "16").containsEntry("brokers", List.of(2));
 		@SuppressWarnings("unchecked")
 		List<Map<String, Object>> retention = (List<Map<String, Object>>) diffs.get(0).get("values");
-		assertThat(retention.get(1)).containsEntry("value", "(yok)").containsEntry("brokers", List.of(3));
+		assertThat(retention.get(1)).containsEntry("value", "(missing)").containsEntry("brokers", List.of(3));
 	}
 
 	@Test
 	void mixedZooKeeperAndKraftBrokersSkipModeSpecificKeys() {
-		// ZooKeeper→KRaft geçişi: broker 1 hâlâ ZooKeeper, broker 2 KRaft broker'ı
+		// ZooKeeper→KRaft migration: broker 1 is still ZooKeeper, broker 2 is a KRaft broker
 		Map<Integer, Config> byBroker = new TreeMap<>();
 		byBroker.put(1, config(entry("zookeeper.connect", "zk:2181", ConfigSource.STATIC_BROKER_CONFIG),
 				entry("process.roles", "", ConfigSource.DEFAULT_CONFIG),
@@ -70,7 +70,7 @@ class BrokerConfigDriftTest {
 		List<Map<String, Object>> mixed = BrokerTools.differences(byBroker,
 				name -> !BrokerTools.PER_BROKER_KEYS.contains(name) && !BrokerTools.modeSpecific(name));
 		assertThat(mixed).extracting(d -> d.get("name")).containsExactly("num.io.threads");
-		// aynı modda olsalardı zookeeper.connect / controller.quorum.voters farkı gerçek drift olurdu
+		// in the same mode, a zookeeper.connect / controller.quorum.voters difference would be real drift
 		List<Map<String, Object>> all = BrokerTools.differences(byBroker,
 				name -> !BrokerTools.PER_BROKER_KEYS.contains(name));
 		assertThat(all).extracting(d -> d.get("name"))
@@ -83,7 +83,7 @@ class BrokerConfigDriftTest {
 
 	@Test
 	void mixedModesSkipAuthorizerOnlyWhenEachBrokerUsesItsModesAuthorizer() {
-		// geçiş kılavuzu: KRaft'a taşınan broker StandardAuthorizer'a geçer, ZooKeeper broker'ları AclAuthorizer'da kalır
+		// migration guide: a broker moved to KRaft switches to StandardAuthorizer, ZooKeeper brokers keep AclAuthorizer
 		Map<Integer, Config> expected = new TreeMap<>();
 		expected.put(1, zkBroker("kafka.security.authorizer.AclAuthorizer"));
 		expected.put(2, zkBroker("kafka.security.auth.SimpleAclAuthorizer"));
@@ -93,7 +93,7 @@ class BrokerConfigDriftTest {
 			.extracting(d -> d.get("name"))
 			.containsExactly("num.io.threads");
 
-		// KRaft broker'ında authorizer yok (ACL kapalı): gerçek güvenlik farkı, raporlanır
+		// no authorizer on the KRaft broker (ACLs disabled): a real security difference, reported
 		Map<Integer, Config> noAcl = new TreeMap<>();
 		noAcl.put(1, zkBroker("kafka.security.authorizer.AclAuthorizer"));
 		noAcl.put(2, kraftBroker(""));
@@ -102,7 +102,7 @@ class BrokerConfigDriftTest {
 			.extracting(d -> d.get("name"))
 			.contains(BrokerTools.AUTHORIZER);
 
-		// ZooKeeper broker'ında özel authorizer: beklenen kombinasyon değil, raporlanır
+		// custom authorizer on the ZooKeeper broker: not an expected combination, reported
 		Map<Integer, Config> custom = new TreeMap<>();
 		custom.put(1, zkBroker("com.example.CustomAuthorizer"));
 		custom.put(2, kraftBroker("org.apache.kafka.metadata.authorizer.StandardAuthorizer"));
@@ -110,7 +110,7 @@ class BrokerConfigDriftTest {
 			.extracting(d -> d.get("name"))
 			.contains(BrokerTools.AUTHORIZER);
 
-		// aynı modda farklı authorizer her zaman drift
+		// a different authorizer in the same mode is always drift
 		Map<Integer, Config> sameMode = new TreeMap<>();
 		sameMode.put(1, zkBroker("kafka.security.authorizer.AclAuthorizer"));
 		sameMode.put(2, zkBroker("kafka.security.auth.SimpleAclAuthorizer"));
@@ -136,7 +136,7 @@ class BrokerConfigDriftTest {
 
 	@Test
 	void keysMissingOnSomeBrokersWithOnlyDefaultsAreNotDrift() {
-		// 3.9 broker'ında olan ama 4.x'te hiç olmayan anahtar (varsayılan değerli): sürüm farkı, drift değil
+		// key present on a 3.9 broker but absent on 4.x (at its default value): a version difference, not drift
 		Map<Integer, Config> byBroker = new TreeMap<>();
 		byBroker.put(1, config(entry("log.message.format.version", "3.0-IV1", ConfigSource.DEFAULT_CONFIG),
 				entry("zookeeper.ssl.client.enable", "false", ConfigSource.DEFAULT_CONFIG),

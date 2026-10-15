@@ -45,15 +45,15 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.Committed;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.OffsetLookup;
 
-/** Geri alınamaz offset/grup araçları: offsets_reset, offsets_delete, delete. */
+/** Irreversible offset/group tools: offsets_reset, offsets_delete, delete. */
 @Component
 public class OffsetTools {
 
 	static final List<String> TARGETS = List.of("earliest", "latest", "offset", "timestamp", "shift");
 
 	/**
-	 * reset'in okuma adımları için deadline'dan ayrılan paylar: leader'ı olmayan partition okuma adımlarında
-	 * bütün süreyi yiyemez, offset'leri değiştiren son istek için en az ~3 sn kalır.
+	 * Shares of the deadline kept by the read steps of reset: a partition without a leader cannot use up all the
+	 * time in the read steps; at least ~3 s is left for the final request that changes the offsets.
 	 */
 	private static final long RESET_DESCRIBE_RESERVE_MS = 10_000;
 
@@ -65,7 +65,7 @@ public class OffsetTools {
 
 	private static final long RESET_COMMITTED_RESERVE_MS = 3_500;
 
-	/** Bir partition'ın hedef offset'i (clamp öncesi) ya da atlanma sebebi. */
+	/** Target offset of a partition (before clamping) or the reason it was skipped. */
 	record Target(Long offset, String skipped) {
 
 		static Target of(long offset) {
@@ -79,28 +79,30 @@ public class OffsetTools {
 	}
 
 	public List<ToolSpec> tools() {
-		Map<String, Object> offset = P.integer("to=offset için hedef offset");
+		Map<String, Object> offset = P.integer("Target offset for to=offset");
 		offset.put("minimum", 0);
 		return List.of(
 				ToolSpec
 					.destructive("consumer_groups_offsets_reset",
-							"Grubun bir topic'teki offset'lerini earliest/latest/offset/timestamp/shift'e taşır; grup Empty olmalı (aktif üye yok)")
+							"Move the group's offsets on a topic to earliest/latest/offset/timestamp/shift; the group must be Empty (no active members)")
 					.required("group", Params.group())
-					.required("topic", P.string("Topic adı"))
-					.param("partitions", Params.intArray("Partition numaraları (boşsa topic'in tüm partition'ları)"))
-					.required("to", P.enumOf("Hedef: earliest, latest, offset, timestamp ya da shift", TARGETS))
+					.required("topic", P.string("Topic name"))
+					.param("partitions", Params.intArray("Partition numbers (default: all partitions of the topic)"))
+					.required("to", P.enumOf("Target: earliest, latest, offset, timestamp or shift", TARGETS))
 					.param("offset", offset)
-					.param("timestamp", P.string("to=timestamp için zaman (ISO-8601 ya da epoch ms)"))
-					.param("shiftBy", P.integer("to=shift için mevcut commit'e eklenecek miktar (negatif olabilir)"))
+					.param("timestamp", P.string("Time for to=timestamp (ISO-8601 or epoch ms)"))
+					.param("shiftBy", P.integer("Amount added to the current committed offset for to=shift (can be negative)"))
 					.handler(this::reset),
 				ToolSpec
 					.destructive("consumer_groups_offsets_delete",
-							"Grubun bir topic'teki commit edilmiş offset'lerini siler (tüm ya da seçili partition'lar)")
+							"Delete the group's committed offsets on a topic (all or selected partitions)")
 					.required("group", Params.group())
-					.required("topic", P.string("Topic adı"))
-					.param("partitions", Params.intArray("Partition numaraları (boşsa commit'i olan tüm partition'lar)"))
+					.required("topic", P.string("Topic name"))
+					.param("partitions", Params.intArray("Partition numbers (default: all partitions with a commit)"))
 					.handler(this::deleteOffsets),
-				ToolSpec.destructive("consumer_groups_delete", "Consumer group'u siler; grup boş olmalı (aktif üye yok)")
+				ToolSpec
+					.destructive("consumer_groups_delete",
+							"Delete a consumer group; the group must be empty (no active members)")
 					.required("group", Params.group())
 					.handler(this::deleteGroup));
 	}
@@ -110,7 +112,7 @@ public class OffsetTools {
 		String topic = call.str("topic");
 		String to = call.str("to").toLowerCase(Locale.ROOT);
 		if (!TARGETS.contains(to)) {
-			throw new ToolException("Geçersiz to: " + to + " (geçerli: " + TARGETS + ")");
+			throw new ToolException("Invalid value for to: " + to + " (valid: " + TARGETS + ")");
 		}
 		Long offset = null;
 		Long shiftBy = null;
@@ -119,13 +121,13 @@ public class OffsetTools {
 			case "offset" -> {
 				offset = call.optLong("offset");
 				if (offset == null) {
-					throw new ToolException("to=offset için offset parametresi gerekli");
+					throw new ToolException("The offset parameter is required for to=offset");
 				}
 			}
 			case "shift" -> {
 				shiftBy = call.optLong("shiftBy");
 				if (shiftBy == null) {
-					throw new ToolException("to=shift için shiftBy parametresi gerekli");
+					throw new ToolException("The shiftBy parameter is required for to=shift");
 				}
 			}
 			case "timestamp" -> timestamp = parseTimestamp(call.str("timestamp", null));
@@ -142,8 +144,8 @@ public class OffsetTools {
 		Committed committed = GroupLag.committed(call, List.of(group), topic::equals, RESET_COMMITTED_RESERVE_MS)
 			.get(group);
 		if (committed.error() != null && !committed.notFound()) {
-			throw new ToolException("'" + group + "' grubunun mevcut offset'leri okunamadı; offset'ler değiştirilmedi: "
-					+ committed.error());
+			throw new ToolException("Could not read the current offsets of group '" + group
+					+ "'; the offsets were not changed: " + committed.error());
 		}
 		Map<TopicPartition, Long> before = committed.error() == null ? committed.offsets() : Map.of();
 
@@ -156,7 +158,7 @@ public class OffsetTools {
 			if (lo == null || hi == null) {
 				String err = lo == null ? earliest.errors().get(tp) : latest.errors().get(tp);
 				rows.put(tp.partition(), Results.map("partition", tp.partition(), "before", current, "skipped",
-						"Offset aralığı alınamadı: " + err));
+						"Could not fetch the offset range: " + err));
 				continue;
 			}
 			Target target = target(to, tp, lo, hi, current, offset, shiftBy, byTime);
@@ -171,7 +173,7 @@ public class OffsetTools {
 					"earliest", lo, "latest", hi, "clamped", clamped != target.offset() ? Boolean.TRUE : null));
 		}
 		if (targets.isEmpty()) {
-			throw new ToolException("Hiçbir partition için hedef offset hesaplanamadı: " + rows.values());
+			throw new ToolException("Could not compute a target offset for any partition: " + rows.values());
 		}
 		AlterConsumerGroupOffsetsResult r = call.admin().alterConsumerGroupOffsets(group, targets);
 		Settled<Void> all = Settled.of(call, r.all());
@@ -193,19 +195,20 @@ public class OffsetTools {
 			}
 			if (changed == 0) {
 				Throwable e = first == null ? all.error() : first;
-				throw new ToolException("Offset'ler değiştirilemedi: " + resetError(group, e), e);
+				throw new ToolException("Could not change the offsets: " + resetError(group, e), e);
 			}
 		}
 		return Results.map("group", group, "topic", topic, "to", to, "timestamp",
 				timestamp == null ? null : timestamp.toString(), "groupState", groupNote,
 				"note",
-				groupNote == null ? "Grup mevcut değildi; offset commit'i ile yeni (üyesiz) grup oluşturuldu" : null,
+				groupNote == null
+						? "The group did not exist; the offset commit created a new group (without members)" : null,
 				"changedPartitions", changed, "partitions", new ArrayList<>(rows.values()));
 	}
 
 	/**
-	 * Partition'ın hedef offset'i (clamp öncesi). timestamp: o andan sonra kayıt yoksa (offset -1) latest;
-	 * timestamp sorgusu o partition için başarısız olduysa atlanır (asla sessizce latest'e taşınmaz).
+	 * Target offset of the partition (before clamping). timestamp: latest if there is no record after that time
+	 * (offset -1); skipped if the timestamp query failed for that partition (never silently moved to latest).
 	 */
 	static Target target(String to, TopicPartition tp, long earliest, long latest, Long current, Long offset,
 			Long shiftBy, OffsetLookup byTime) {
@@ -217,16 +220,16 @@ public class OffsetTools {
 				Long t = byTime.offsets().get(tp);
 				if (t == null) {
 					String err = byTime.errors().get(tp);
-					yield Target.skip("Timestamp offset'i alınamadı: " + (err == null ? "yanıt yok" : err));
+					yield Target.skip("Could not fetch the timestamp offset: " + (err == null ? "no response" : err));
 				}
 				yield Target.of(t < 0 ? latest : t);
 			}
-			default -> current == null ? Target.skip("Commit edilmiş offset yok; shift uygulanamaz")
+			default -> current == null ? Target.skip("No committed offset; cannot apply shift")
 					: Target.of(current + shiftBy);
 		};
 	}
 
-	/** Grubun offset'i sıfırlanabilir mi; değilse ToolException. Grup state'ini, grup yoksa null döner. */
+	/** Can the group's offsets be reset; ToolException if not. Returns the group state, null if there is no group. */
 	private static String checkResettable(ToolCall call, String group) {
 		Settled<ConsumerGroupDescription> s = ConsumerGroups.describe(call, List.of(group), RESET_DESCRIBE_RESERVE_MS)
 			.get(group);
@@ -239,8 +242,8 @@ public class OffsetTools {
 		ConsumerGroupDescription d = s.value();
 		String state = ConsumerGroups.state(d.groupState());
 		if (!d.members().isEmpty()) {
-			throw new ToolException("'" + group + "' grubunda " + d.members().size() + " aktif üye var (state=" + state
-					+ "); offset sıfırlamak için grup Empty olmalı. Önce consumer'ları durdurun.");
+			throw new ToolException("Group '" + group + "' has " + d.members().size() + " active member(s) (state="
+					+ state + "); the group must be Empty to reset offsets. Stop the consumers first.");
 		}
 		GroupState gs = d.groupState();
 		if (gs == GroupState.EMPTY) {
@@ -249,11 +252,11 @@ public class OffsetTools {
 		if (ConsumerGroups.deadOrUnknown(d)) {
 			return null;
 		}
-		throw new ToolException("'" + group + "' grubu " + state
-				+ " durumunda; offset sıfırlamak için grup Empty olmalı (aktif üye olmamalı).");
+		throw new ToolException("Group '" + group + "' is in state " + state
+				+ "; the group must be Empty (no active members) to reset offsets.");
 	}
 
-	/** partitions parametresi ya da topic'in tüm partition'ları (tek describeTopics). */
+	/** The partitions parameter, or all partitions of the topic (single describeTopics). */
 	private static List<TopicPartition> targetPartitions(ToolCall call, String topic) {
 		TopicDescription td = call.await(call.admin().describeTopics(List.of(topic)).topicNameValues().get(topic));
 		Set<Integer> existing = new TreeSet<>();
@@ -266,7 +269,7 @@ public class OffsetTools {
 		}
 		List<Integer> missing = requested.stream().filter(p -> !existing.contains(p)).toList();
 		if (!missing.isEmpty()) {
-			throw new ToolException("'" + topic + "' topic'inde olmayan partition: " + missing + " (partition sayısı "
+			throw new ToolException("Partitions not in topic '" + topic + "': " + missing + " (partition count "
 					+ existing.size() + ")");
 		}
 		return requested.stream().map(p -> new TopicPartition(topic, p)).toList();
@@ -274,20 +277,20 @@ public class OffsetTools {
 
 	private static String resetError(String group, Throwable e) {
 		Throwable root = KafkaErrors.unwrap(e);
-		// classic: UnknownMemberId/RebalanceInProgress/IllegalGeneration/FencedInstanceId; KIP-848 consumer tipi
-		// gruplar (KRaft): StaleMemberEpoch/FencedMemberEpoch.
+		// classic: UnknownMemberId/RebalanceInProgress/IllegalGeneration/FencedInstanceId; KIP-848 consumer-type
+		// groups (KRaft): StaleMemberEpoch/FencedMemberEpoch.
 		if (root instanceof UnknownMemberIdException || root instanceof RebalanceInProgressException
 				|| root instanceof FencedInstanceIdException || root instanceof IllegalGenerationException
 				|| root instanceof StaleMemberEpochException || root instanceof FencedMemberEpochException) {
-			return "'" + group + "' grubuna arada aktif üye katıldı; grup Empty olmalı (" + Settled.explain(root)
-					+ ")";
+			return "An active member joined group '" + group + "' in the meantime; the group must be Empty ("
+					+ Settled.explain(root) + ")";
 		}
 		return Settled.explain(root);
 	}
 
 	static Instant parseTimestamp(String value) {
 		if (value == null) {
-			throw new ToolException("to=timestamp için timestamp parametresi gerekli (ISO-8601 ya da epoch ms)");
+			throw new ToolException("The timestamp parameter is required for to=timestamp (ISO-8601 or epoch ms)");
 		}
 		String v = value.trim();
 		if (v.matches("-?\\d+")) {
@@ -297,32 +300,32 @@ public class OffsetTools {
 			return Instant.parse(v);
 		}
 		catch (DateTimeParseException ignored) {
-			// diğer biçimler
+			// other formats
 		}
 		try {
 			return OffsetDateTime.parse(v).toInstant();
 		}
 		catch (DateTimeParseException ignored) {
-			// diğer biçimler
+			// other formats
 		}
 		try {
 			return ZonedDateTime.parse(v).toInstant();
 		}
 		catch (DateTimeParseException ignored) {
-			// diğer biçimler
+			// other formats
 		}
 		try {
 			return LocalDateTime.parse(v).toInstant(ZoneOffset.UTC);
 		}
 		catch (DateTimeParseException ignored) {
-			// diğer biçimler
+			// other formats
 		}
 		try {
 			return LocalDate.parse(v).atStartOfDay().toInstant(ZoneOffset.UTC);
 		}
 		catch (DateTimeParseException e) {
-			throw new ToolException("Geçersiz timestamp: " + v
-					+ " (ISO-8601, ör. 2024-05-01T10:00:00Z / 2024-05-01T13:00:00+03:00, ya da epoch ms)");
+			throw new ToolException("Invalid timestamp: " + v
+					+ " (ISO-8601, e.g. 2024-05-01T10:00:00Z / 2024-05-01T13:00:00+03:00, or epoch ms)");
 		}
 	}
 
@@ -333,8 +336,8 @@ public class OffsetTools {
 		if (committed.error() != null) {
 			throw committed.notFound() ? ConsumerGroups.notFoundError(group) : new ToolException(committed.error());
 		}
-		// Sadece commit'i olan partition'lar silinir: broker commit'i olmayan (ya da olmayan) partition için de
-		// hatasız döner; bunlar "silindi" diye raporlanmasın.
+		// Only partitions with a commit are deleted: the broker also returns without an error for a partition without
+		// a commit (or one that does not exist); these must not be reported as "deleted".
 		Set<TopicPartition> tps = new TreeSet<>(
 				Comparator.comparing(TopicPartition::topic).thenComparingInt(TopicPartition::partition));
 		List<Integer> requested = Params.partitions(call);
@@ -350,19 +353,19 @@ public class OffsetTools {
 				}
 				else {
 					rows.put(p, Results.map("partition", p, "deleted", false, "note",
-							"Commit edilmiş offset yoktu (silinecek bir şey yok)"));
+							"No committed offset (nothing to delete)"));
 				}
 			}
 		}
 		if (tps.isEmpty()) {
-			// ZooKeeper (classic coordinator) olmayan grubun offset sorgusunda hata değil boş sonuç döner:
-			// "commit yok" yerine KRaft'taki gibi "grup bulunamadı" denmesi için grup varlığı kontrol edilir.
+			// ZooKeeper (classic coordinator) returns an empty result instead of an error for the offsets of a missing
+			// group: the group's existence is checked so that "group not found" is reported, as on KRaft, instead of
+			// "no commit".
 			if (committed.isEmpty() && !groupExists(call, group)) {
 				throw ConsumerGroups.notFoundError(group);
 			}
-			throw new ToolException("'" + group + "' grubunun '" + topic + "' topic'inde"
-					+ (requested.isEmpty() ? "" : " istenen partition'larda " + requested)
-					+ " commit edilmiş offset'i yok");
+			throw new ToolException("Group '" + group + "' has no committed offsets on topic '" + topic + "'"
+					+ (requested.isEmpty() ? "" : " in the requested partitions " + requested));
 		}
 		DeleteConsumerGroupOffsetsResult r = call.admin().deleteConsumerGroupOffsets(group, tps);
 		Settled<Void> all = Settled.of(call, r.all());
@@ -387,7 +390,7 @@ public class OffsetTools {
 			if (ConsumerGroups.notFound(e)) {
 				throw ConsumerGroups.notFoundError(group);
 			}
-			throw new ToolException("Offset'ler silinemedi: " + deleteOffsetsError(group, topic, e), e);
+			throw new ToolException("Could not delete the offsets: " + deleteOffsetsError(group, topic, e), e);
 		}
 		int withoutCommit = rows.size() - tps.size();
 		return Results.map("group", group, "topic", topic, "deletedPartitions", deleted, "failedPartitions",
@@ -396,8 +399,9 @@ public class OffsetTools {
 	}
 
 	/**
-	 * Grup var mı: KRaft (4.x) olmayan grup için GroupIdNotFound, ZooKeeper/eski broker'lar Dead + üyesiz
-	 * döner. Describe başarısızsa (yetki, yanıt yok) var sayılır: yanlışlıkla "bulunamadı" denmez.
+	 * Does the group exist: KRaft (4.x) returns GroupIdNotFound for a missing group, ZooKeeper/old brokers return
+	 * Dead with no members. If describe fails (authorization, no response), the group is assumed to exist, so "not
+	 * found" is never reported by mistake.
 	 */
 	private static boolean groupExists(ToolCall call, String group) {
 		Settled<ConsumerGroupDescription> s = ConsumerGroups.describe(call, List.of(group)).get(group);
@@ -413,8 +417,8 @@ public class OffsetTools {
 	private static String deleteOffsetsError(String group, String topic, Throwable e) {
 		Throwable root = KafkaErrors.unwrap(e);
 		if (root instanceof GroupSubscribedToTopicException) {
-			return "'" + group + "' grubu '" + topic + "' topic'ine hâlâ abone (aktif üyeler bu topic'i tüketiyor); "
-					+ "Kafka silmeyi reddetti. Önce consumer'ları durdurun";
+			return "Group '" + group + "' is still subscribed to topic '" + topic
+					+ "' (active members are consuming it); Kafka rejected the delete. Stop the consumers first";
 		}
 		return Settled.explain(root);
 	}
@@ -431,11 +435,12 @@ public class OffsetTools {
 			if (root instanceof GroupNotEmptyException) {
 				Settled<ConsumerGroupDescription> d = ConsumerGroups.describe(call, List.of(group)).get(group);
 				String detail = d != null && d.ok() ? " (state=" + ConsumerGroups.state(d.value().groupState())
-						+ ", üye=" + d.value().members().size() + ")" : "";
-				throw new ToolException("'" + group + "' grubu silinemedi: grup boş değil, aktif üyeleri var" + detail
-						+ ". Önce consumer'ları durdurun; grup Empty olunca tekrar deneyin.", root);
+						+ ", members=" + d.value().members().size() + ")" : "";
+				throw new ToolException("Could not delete group '" + group
+						+ "': the group is not empty, it has active members" + detail
+						+ ". Stop the consumers first; retry when the group is Empty.", root);
 			}
-			throw new ToolException("'" + group + "' grubu silinemedi: " + Settled.explain(root), root);
+			throw new ToolException("Could not delete group '" + group + "': " + Settled.explain(root), root);
 		}
 		Map<String, Object> offsets = null;
 		if (committed != null && committed.error() == null) {

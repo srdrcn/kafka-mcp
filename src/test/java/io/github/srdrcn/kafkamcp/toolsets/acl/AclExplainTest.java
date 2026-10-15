@@ -48,22 +48,22 @@ class AclExplainTest extends KafkaIntegrationTest {
 		assertThat(read.at("/matchedAllow/0/principal").asText()).isEqualTo(p);
 		assertThat(read.get("resourceAclCount").asInt()).isEqualTo(2);
 
-		// WRITE → DESCRIBE çıkarımı; CREATE izni yok
+		// WRITE implies DESCRIBE; no CREATE permission
 		JsonNode describe = explain(p, "DESCRIBE", "TOPIC", topic);
 		assertThat(describe.get("decision").asText()).isEqualTo("ALLOW");
-		assertThat(describe.get("reason").asText()).contains("çıkarıldı");
+		assertThat(describe.get("reason").asText()).contains("is implied by");
 		JsonNode createOp = explain(p, "CREATE", "TOPIC", topic);
 		assertThat(createOp.get("decision").asText()).isEqualTo("DENY");
-		assertThat(createOp.get("reason").asText()).contains("eşleşen ALLOW yok");
+		assertThat(createOp.get("reason").asText()).contains("no matching ALLOW");
 
-		// DENY her zaman kazanır
+		// DENY always wins
 		create(testAdmin(), denyTopic(topic, p, AclOperation.READ));
 		JsonNode denied = explain(p, "READ", "TOPIC", topic);
 		assertThat(denied.get("decision").asText()).isEqualTo("DENY");
 		assertThat(denied.get("matchedDeny")).hasSize(1);
 		assertThat(denied.get("matchedAllow")).hasSize(1);
 		assertThat(denied.get("reason").asText()).contains("DENY");
-		// principal sadece adla da verilebilir
+		// the principal can also be given as a bare name
 		assertThat(explain(p.substring("User:".length()), "WRITE", "TOPIC", topic).get("decision").asText())
 			.isEqualTo("ALLOW");
 	}
@@ -102,11 +102,11 @@ class AclExplainTest extends KafkaIntegrationTest {
 	@Test
 	void superUserNoAclAndHost() throws Exception {
 		String topic = unique("su-topic");
-		// Kafka 4.x super.users'ı sensitive döndürür: bilinmiyorsa not düşülür
+		// Kafka 4.x returns super.users as sensitive: if unknown, a note is added
 		JsonNode admin = explain("User:admin", "WRITE", "TOPIC", topic);
 		assertThat(admin.get("decision").asText()).isEqualTo("DENY");
-		// değer gizli: karar kesinmiş gibi değil, varsayım olarak ifade edilir
-		assertThat(admin.get("reason").asText()).contains("false varsayıldı").contains("true ise ALLOW");
+		// value hidden: the decision is phrased as an assumption, not as certain
+		assertThat(admin.get("reason").asText()).contains("assumed false").contains("ALLOW if it is true");
 		assertThat(admin.get("allowEveryoneIfNoAclFound").asBoolean()).isFalse();
 		assertThat(admin.get("resourceAclCount").asInt()).isZero();
 		assertThat(admin.get("notes").toString()).contains("super.users").contains("allow.everyone.if.no.acl.found");
@@ -114,7 +114,7 @@ class AclExplainTest extends KafkaIntegrationTest {
 		JsonNode su = explain("User:admin", "WRITE", "TOPIC", topic, "superUsers", List.of("User:admin"));
 		assertThat(su.get("decision").asText()).isEqualTo("ALLOW");
 		assertThat(su.get("superUser").asBoolean()).isTrue();
-		assertThat(su.get("reason").asText()).contains("süper kullanıcı");
+		assertThat(su.get("reason").asText()).contains("super user");
 
 		String p = "User:" + unique("host");
 		create(testAdmin(), binding(ResourceType.TOPIC, topic, PatternType.LITERAL, p, "10.1.2.3", AclOperation.READ,
@@ -127,7 +127,7 @@ class AclExplainTest extends KafkaIntegrationTest {
 
 		assertThat(error("acls_explain", args("principal", p, "operation", "ANY", "resourceType", "TOPIC",
 				"resourceName", topic)))
-			.contains("Geçersiz operation");
+			.contains("Invalid operation");
 		assertThat(error("acls_explain", args("principal", p, "operation", "READ", "resourceType", "TOPIC")))
 			.contains("resourceName");
 	}
@@ -155,14 +155,14 @@ class AclExplainTest extends KafkaIntegrationTest {
 		JsonNode readerEntry = find(r.at("/operations/READ/allowed"), "principal", reader);
 		assertThat(readerEntry.at("/via/0/operation").asText()).isEqualTo("READ");
 
-		// DESCRIBE: READ/WRITE'tan çıkarılır; DENY READ, DESCRIBE'ı engellemez
+		// DESCRIBE: implied by READ/WRITE; DENY READ does not block DESCRIBE
 		JsonNode describe = ok("acls_who_can_access_topic", args("topic", topic, "operation", "DESCRIBE",
 				"superUsers", List.of("User:admin")));
 		assertThat(describe.get("operations").has("READ")).isFalse();
 		assertThat(field(describe.at("/operations/DESCRIBE/allowed"), "principal")).contains(reader, writer, blocked);
 		assertThat(describe.get("superUsers").toString()).contains("User:admin");
 
-		// host'a özel DENY, host * ALLOW'u olan principal'da da görünür
+		// a host-specific DENY also shows up for a principal with a host * ALLOW
 		String hostDenied = "User:" + unique("hostdeny");
 		create(testAdmin(), allowTopic(topic, hostDenied, AclOperation.READ), binding(ResourceType.TOPIC, topic,
 				PatternType.LITERAL, hostDenied, "10.0.0.1", AclOperation.READ, AclPermissionType.DENY));
@@ -178,7 +178,7 @@ class AclExplainTest extends KafkaIntegrationTest {
 		JsonNode missing = ok("acls_who_can_access_topic", args("topic", unique("no-such-topic")));
 		assertThat(missing.get("topicExists").asBoolean()).isFalse();
 		assertThat(missing.get("aclCount").asInt()).isZero();
-		assertThat(missing.get("notes").toString()).contains("hiç ACL yok");
+		assertThat(missing.get("notes").toString()).contains("No ACLs apply to the topic");
 	}
 
 	@Test
@@ -211,7 +211,7 @@ class AclExplainTest extends KafkaIntegrationTest {
 		assertThat(withWildcard.get("total").asInt()).isEqualTo(1);
 		assertThat(withWildcard.at("/resources/0/bindings/0/principal").asText()).isEqualTo("User:*");
 
-		// Başka desenden gelen DENY/ALLOW (PREFIXED) LITERAL satırın etkin izinlerine yansır; acls_explain ile aynı
+		// DENY/ALLOW from another pattern (PREFIXED) affects the effective permissions of the LITERAL row; same as acls_explain
 		String p2 = "User:" + unique("perm2");
 		String pfx = unique("perm-pay");
 		String payments = pfx + "ments";
@@ -236,7 +236,7 @@ class AclExplainTest extends KafkaIntegrationTest {
 		JsonNode none = ok("acls_principal_permissions",
 				args("principal", unique("ghost"), "includeWildcardPrincipal", false));
 		assertThat(none.get("total").asInt()).isZero();
-		assertThat(none.get("notes").toString()).contains("ACL yok");
+		assertThat(none.get("notes").toString()).contains("No ACLs apply to this principal");
 	}
 
 }

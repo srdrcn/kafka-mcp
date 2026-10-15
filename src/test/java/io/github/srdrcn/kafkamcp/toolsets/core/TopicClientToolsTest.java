@@ -60,7 +60,7 @@ class TopicClientToolsTest extends KafkaIntegrationTest {
 
 		JsonNode none = ok("topics_consumers", args("topic", other, "filter", "^g-behind"));
 		assertThat(none.get("total").asInt()).isZero();
-		assertThat(error("topics_consumers", args("topic", unique("yok")))).contains("Topic bulunamadı");
+		assertThat(error("topics_consumers", args("topic", unique("missing")))).contains("Topic not found");
 	}
 
 	@Test
@@ -114,7 +114,7 @@ class TopicClientToolsTest extends KafkaIntegrationTest {
 
 			tx.abortTransaction();
 		}
-		// abort sonrası coordinator kısa süre PrepareAbort'ta kalabilir
+		// after an abort the coordinator can stay in PrepareAbort for a short while
 		JsonNode after = ok("topics_transactions", args("topic", topic));
 		for (int i = 0; i < 50 && !after.get("openTransactions").isEmpty(); i++) {
 			Thread.sleep(200);
@@ -143,7 +143,7 @@ class TopicClientToolsTest extends KafkaIntegrationTest {
 			assertThat(p.get("producerCount").asInt()).isEqualTo(2);
 			assertThat(p.get("partitionsWithOpenTransaction").asInt()).isEqualTo(1);
 
-			// iki taze açık transaction: askıda şüphesi yok
+			// two fresh open transactions: no hanging suspects
 			JsonNode t = ok("topics_transactions", args("topic", topic));
 			assertThat(t.get("partitionsWithOpenTransaction")).hasSize(2);
 			assertThat(t.get("hangingSuspects").asInt()).isZero();

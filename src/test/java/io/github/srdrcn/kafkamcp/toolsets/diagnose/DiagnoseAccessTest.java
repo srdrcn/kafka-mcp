@@ -33,8 +33,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
 /**
- * diagnose_access: eksik ACL'ler acls_create biçiminde önerilir; tam olarak önerilenler oluşturulunca araç izin
- * verildiğini söyler ve alice gerçek producer/consumer ile yazıp okuyabilir (KRaft ve ZooKeeper).
+ * diagnose_access: missing ACLs are suggested in the acls_create format; once exactly the suggested ones are created,
+ * the tool reports access as allowed and alice can write and read with a real producer/consumer (KRaft and
+ * ZooKeeper).
  */
 class DiagnoseAccessTest extends DiagnoseTestBase {
 
@@ -68,7 +69,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 						AclPermissionType.valueOf((String) m.get("permission"))));
 	}
 
-	/** Önerilen her binding'i olduğu gibi acls_create'e verir (parametre biçimi birebir aynı). */
+	/** Passes every suggested binding to acls_create as is (the parameter format is identical). */
 	private void createSuggested(String cluster, List<Map<String, Object>> suggested, List<AclBinding> created) {
 		for (Map<String, Object> b : suggested) {
 			Map<String, Object> a = new LinkedHashMap<>(b);
@@ -87,7 +88,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 			createTopic(cluster, topic, 1, Map.of());
 			List<AclBinding> created = new ArrayList<>();
 			try {
-				// produce: TOPIC WRITE + DESCRIBE eksik
+				// produce: TOPIC WRITE + DESCRIBE missing
 				JsonNode r = ok("diagnose_access",
 						on(cluster, "principal", "alice", "intent", "produce", "topic", topic));
 				assertThat(r.get("allowed").asBoolean()).isFalse();
@@ -100,8 +101,8 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 				assertThat(r.at("/preset/tool").asText()).isEqualTo("acls_create");
 				assertThat(r.at("/preset/args/preset").asText()).isEqualTo("producer");
 				assertThat(r.at("/preset/args/topic").asText()).isEqualTo(topic);
-				assertThat(r.get("explanation").asText()).contains("yapamaz", "WRITE");
-				assertThat(r.at("/facts/idempotentWrite").asText()).contains("gerekmez");
+				assertThat(r.get("explanation").asText()).contains("User:alice cannot produce", "WRITE");
+				assertThat(r.at("/facts/idempotentWrite").asText()).contains("does not need");
 				assertThat(r.at("/facts/topicExists").asBoolean()).isTrue();
 				assertThat(r.toString()).doesNotContain("Jikkou", "apiVersion");
 
@@ -112,10 +113,10 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 				assertThat(allowed.get("missingAcls")).isEmpty();
 				assertThat(codes(allowed)).doesNotContain("MISSING_PERMISSION", "DENIED_BY_ACL");
 				assertThat(allowed.get("status").asText()).isNotEqualTo("critical");
-				assertThat(allowed.get("explanation").asText()).contains("yapabilir");
+				assertThat(allowed.get("explanation").asText()).contains("User:alice can produce");
 				produceAs(cluster, "alice", topic);
 
-				// consume: TOPIC DESCRIBE produce adımında verildi; TOPIC READ + GROUP READ eksik
+				// consume: TOPIC DESCRIBE was granted in the produce step; TOPIC READ + GROUP READ missing
 				JsonNode c = ok("diagnose_access",
 						on(cluster, "principal", "alice", "intent", "consume", "topic", topic, "group", group));
 				assertThat(c.get("allowed").asBoolean()).isFalse();
@@ -165,7 +166,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 			assertThat(deny.get("recommendation").asText()).contains("acls_delete");
 			assertThat(deny.at("/evidence/deny/0/permission").asText()).isEqualTo("DENY");
 			assertThat(r.at("/blockingDenies/0/operation").asText()).isEqualTo("READ");
-			// READ için ALLOW zaten var: eklenecek tek binding GROUP READ; DESCRIBE, READ ALLOW'undan çıkarılır
+			// an ALLOW for READ already exists: the only binding to add is GROUP READ; DESCRIBE is implied by the READ ALLOW
 			assertThat(r.get("missingAcls")).hasSize(1);
 			assertThat(r.at("/missingAcls/0/resourceType").asText()).isEqualTo("GROUP");
 			assertThat(r.at("/missingAcls/0/principal").asText()).isEqualTo("User:bob");
@@ -190,7 +191,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 		JsonNode admin = ok("diagnose_access", on(cluster, "principal", "alice", "intent", "admin-topic", "topic", topic));
 		assertThat(missing(admin)).extracting(m -> m.get("operation"))
 			.containsExactly("CREATE", "ALTER", "DELETE", "DESCRIBE_CONFIGS", "ALTER_CONFIGS");
-		assertThat(admin.at("/preset/note").asText()).contains("preset yok");
+		assertThat(admin.at("/preset/note").asText()).contains("No preset");
 		assertThat(finding(admin, "TOPIC_NOT_FOUND").get("severity").asText()).isEqualTo("info");
 
 		AclBinding clusterCreate = new AclBinding(
@@ -219,11 +220,11 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 			assertThat(finding(r, "SUPER_USERS_HIDDEN").get("message").asText()).contains("super.users");
 		}
 		assertThat(error("diagnose_access", args("principal", "alice", "intent", "consume", "topic", "t")))
-			.contains("group zorunlu");
+			.contains("group is required");
 		assertThat(error("diagnose_access",
 				args("principal", "alice", "intent", "transactional-produce", "topic", "t"))).contains("transactionalId");
 		assertThat(error("diagnose_access", args("principal", "alice", "intent", "nope", "topic", "t")))
-			.contains("Geçersiz intent");
+			.contains("Invalid intent");
 	}
 
 	private static void waitVisible(String cluster, List<AclBinding> acls) {
@@ -235,7 +236,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 			catch (Exception e) {
 				return false;
 			}
-		}, "ACL'ler görünmedi");
+		}, "ACLs not visible");
 	}
 
 	private static void deleteAcls(String cluster, List<AclBinding> acls) throws Exception {
@@ -244,7 +245,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 		}
 	}
 
-	/** alice olarak gerçek producer ile yazar (ACL yayılımı için kısa yeniden deneme). */
+	/** Writes as alice with a real producer (short retries for ACL propagation). */
 	private static void produceAs(String cluster, String user, String topic) throws Exception {
 		Map<String, Object> p = clientProperties(cluster, user);
 		p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
@@ -261,10 +262,10 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 				Thread.sleep(1_000);
 			}
 		}
-		throw new AssertionError(user + " yazamadı", last);
+		throw new AssertionError(user + " could not write", last);
 	}
 
-	/** alice olarak gerçek consumer (group) ile okur ve commit eder. */
+	/** Reads and commits as alice with a real consumer (group). */
 	private static void consumeAs(String cluster, String user, String topic, String group) {
 		Map<String, Object> p = clientProperties(cluster, user);
 		p.put(ConsumerConfig.GROUP_ID_CONFIG, group);
@@ -280,7 +281,7 @@ class DiagnoseAccessTest extends DiagnoseTestBase {
 				ConsumerRecords<byte[], byte[]> records = consumer.poll(Duration.ofMillis(500));
 				read += records.count();
 			}
-			assertThat(read).as(user + " okuyamadı").isPositive();
+			assertThat(read).as(user + " could not read").isPositive();
 			consumer.commitSync(Duration.ofSeconds(30));
 		}
 	}

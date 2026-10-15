@@ -1,28 +1,28 @@
 [ {
   "name" : "subjects_list",
-  "description" : "Schema Registry subject adlarını listeler (sıralı); deleted=true soft-delete edilmişleri de getirir",
+  "description" : "List Schema Registry subject names (sorted); deleted=true also returns soft-deleted ones",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "filter" : {
         "type" : "string",
-        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+        "description" : "Name filter (regex, partial match; use (?i) for case-insensitive)"
       },
       "limit" : {
         "type" : "integer",
-        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "description" : "Maximum number of items to return (default 100)",
         "minimum" : 1,
         "maximum" : 5000,
         "default" : 100
       },
       "deleted" : {
         "type" : "boolean",
-        "description" : "Soft-delete edilmiş subject'leri de getir (varsayılan false)"
+        "description" : "Also return soft-deleted subjects (default false)"
       }
     },
     "required" : [ "cluster" ]
@@ -33,18 +33,18 @@
   }
 }, {
   "name" : "subjects_for_topic",
-  "description" : "Topic'in subject'lerini bulur (<topic>-key/-value ve <topic>-<KayıtAdı>); her birinin son versiyonu, id ve tipiyle",
+  "description" : "Find the subjects of a topic (<topic>-key/-value and <topic>-<RecordName>) with the latest version, id and type of each",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "topic" : {
         "type" : "string",
-        "description" : "Topic adı"
+        "description" : "Topic name"
       }
     },
     "required" : [ "cluster", "topic" ]
@@ -55,22 +55,22 @@
   }
 }, {
   "name" : "schemas_versions_list",
-  "description" : "Subject'in versiyon numaralarını listeler; deleted=true ile soft-delete edilmiş versiyonlar da işaretlenir",
+  "description" : "List the version numbers of a subject; with deleted=true soft-deleted versions are included and marked",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı"
+        "description" : "Subject name"
       },
       "deleted" : {
         "type" : "boolean",
-        "description" : "Soft-delete edilmiş versiyonları da getir (varsayılan false)"
+        "description" : "Also return soft-deleted versions (default false)"
       }
     },
     "required" : [ "cluster", "subject" ]
@@ -81,26 +81,26 @@
   }
 }, {
   "name" : "schemas_get",
-  "description" : "Subject versiyonundaki şemayı getirir: id, versiyon, schemaType, referanslar ve şema metni (AVRO/JSON girintili)",
+  "description" : "Get the schema of a subject version: id, version, schemaType, references and schema text (AVRO/JSON pretty-printed)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı"
+        "description" : "Subject name"
       },
       "version" : {
         "type" : "string",
-        "description" : "Versiyon numarası ya da latest (varsayılan latest)"
+        "description" : "Version number or latest (default latest)"
       },
       "maxChars" : {
         "type" : "integer",
-        "description" : "Şema metni için en fazla karakter (varsayılan 20000); aşan kısım kesilir",
+        "description" : "Maximum number of characters of the schema text (default 20000); the rest is truncated",
         "minimum" : 200,
         "maximum" : 1000000,
         "default" : 20000
@@ -114,26 +114,26 @@
   }
 }, {
   "name" : "schemas_diff",
-  "description" : "İki şema versiyonunu karşılaştırır: AVRO'da alan bazlı fark + uyumluluk ipucu, JSON/PROTOBUF'ta satır farkı",
+  "description" : "Compare two schema versions: field-level diff and compatibility hint for AVRO, line diff for JSON/PROTOBUF",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı"
+        "description" : "Subject name"
       },
       "fromVersion" : {
         "type" : "string",
-        "description" : "Eski versiyon (varsayılan: toVersion'dan önceki versiyon)"
+        "description" : "Old version (default: the version before toVersion)"
       },
       "toVersion" : {
         "type" : "string",
-        "description" : "Yeni versiyon ya da latest (varsayılan latest)"
+        "description" : "New version or latest (default latest)"
       }
     },
     "required" : [ "cluster", "subject" ]
@@ -144,45 +144,45 @@
   }
 }, {
   "name" : "schemas_register",
-  "description" : "YAZMA: Subject'e şema kaydeder, id ve versiyonu döner; uyumsuz (409) ya da geçersiz (422) şemada SR mesajını verir",
+  "description" : "WRITE: Register a schema under a subject; returns its id and version, or the SR message for an incompatible (409) or invalid (422) schema",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı (ör. <topic>-value)"
+        "description" : "Subject name (e.g. <topic>-value)"
       },
       "schema" : {
         "type" : "string",
-        "description" : "Şema metni (Avro ya da JSON Schema JSON'u, PROTOBUF için .proto içeriği)"
+        "description" : "Schema text (Avro or JSON Schema JSON, .proto content for PROTOBUF)"
       },
       "schemaType" : {
         "type" : "string",
-        "description" : "Şema tipi (varsayılan AVRO)",
+        "description" : "Schema type (default AVRO)",
         "enum" : [ "AVRO", "JSON", "PROTOBUF" ]
       },
       "references" : {
         "type" : "array",
-        "description" : "Şema referansları (opsiyonel)",
+        "description" : "Schema references (optional)",
         "items" : {
           "type" : "object",
           "properties" : {
             "name" : {
               "type" : "string",
-              "description" : "Referans adı (Avro'da tam tip adı, JSON/PROTOBUF'ta dosya/URL adı)"
+              "description" : "Reference name (full type name for Avro, file/URL name for JSON/PROTOBUF)"
             },
             "subject" : {
               "type" : "string",
-              "description" : "Referans verilen subject"
+              "description" : "Referenced subject"
             },
             "version" : {
               "type" : "integer",
-              "description" : "Referans verilen versiyon"
+              "description" : "Referenced version"
             }
           },
           "required" : [ "name", "subject", "version" ]
@@ -197,26 +197,26 @@
   }
 }, {
   "name" : "schemas_delete_version",
-  "description" : "YAZMA: Şema versiyonunu siler (soft); permanent=true kalıcı siler (gerekirse önce soft delete yapar)",
+  "description" : "WRITE: Delete a schema version (soft); permanent=true deletes it permanently (soft-deleting it first if needed)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı"
+        "description" : "Subject name"
       },
       "version" : {
         "type" : "string",
-        "description" : "Silinecek versiyon numarası ya da latest"
+        "description" : "Version number to delete or latest"
       },
       "permanent" : {
         "type" : "boolean",
-        "description" : "Kalıcı sil, geri alınamaz (varsayılan false: soft delete)"
+        "description" : "Delete permanently, cannot be undone (default false: soft delete)"
       }
     },
     "required" : [ "cluster", "subject", "version" ]
@@ -227,18 +227,18 @@
   }
 }, {
   "name" : "schemas_compatibility_get",
-  "description" : "Compatibility seviyesini verir: subject seviyesi, global seviye ve hangisinin geçerli olduğu",
+  "description" : "Get the compatibility level: subject level, global level and which one applies",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı (verilmezse sadece global seviye)"
+        "description" : "Subject name (omit to get only the global level)"
       }
     },
     "required" : [ "cluster" ]
@@ -249,49 +249,49 @@
   }
 }, {
   "name" : "schemas_compatibility_check",
-  "description" : "Şemanın subject versiyonuyla uyumlu olup olmadığını kaydetmeden test eder; SR'ın ayrıntılı mesajlarını verir",
+  "description" : "Test whether a schema is compatible with a subject version without registering it; returns the detailed SR messages",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı"
+        "description" : "Subject name"
       },
       "schema" : {
         "type" : "string",
-        "description" : "Şema metni (Avro ya da JSON Schema JSON'u, PROTOBUF için .proto içeriği)"
+        "description" : "Schema text (Avro or JSON Schema JSON, .proto content for PROTOBUF)"
       },
       "schemaType" : {
         "type" : "string",
-        "description" : "Şema tipi (varsayılan AVRO)",
+        "description" : "Schema type (default AVRO)",
         "enum" : [ "AVRO", "JSON", "PROTOBUF" ]
       },
       "version" : {
         "type" : "string",
-        "description" : "Karşılaştırılacak versiyon ya da latest (varsayılan latest)"
+        "description" : "Version to check against or latest (default latest)"
       },
       "references" : {
         "type" : "array",
-        "description" : "Şema referansları (opsiyonel)",
+        "description" : "Schema references (optional)",
         "items" : {
           "type" : "object",
           "properties" : {
             "name" : {
               "type" : "string",
-              "description" : "Referans adı (Avro'da tam tip adı, JSON/PROTOBUF'ta dosya/URL adı)"
+              "description" : "Reference name (full type name for Avro, file/URL name for JSON/PROTOBUF)"
             },
             "subject" : {
               "type" : "string",
-              "description" : "Referans verilen subject"
+              "description" : "Referenced subject"
             },
             "version" : {
               "type" : "integer",
-              "description" : "Referans verilen versiyon"
+              "description" : "Referenced version"
             }
           },
           "required" : [ "name", "subject", "version" ]
@@ -306,22 +306,22 @@
   }
 }, {
   "name" : "schemas_compatibility_set",
-  "description" : "YAZMA: Subject'in (verilmezse global) compatibility seviyesini değiştirir; önceki ve yeni değeri döner",
+  "description" : "WRITE: Change the compatibility level of a subject (or the global level if omitted); returns the old and new value",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
       "cluster" : {
         "type" : "string",
-        "description" : "Cluster adı",
+        "description" : "Cluster name",
         "enum" : [ "alpha" ]
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject adı (verilmezse global seviye değişir)"
+        "description" : "Subject name (if omitted, the global level is changed)"
       },
       "level" : {
         "type" : "string",
-        "description" : "Yeni compatibility seviyesi",
+        "description" : "New compatibility level",
         "enum" : [ "BACKWARD", "BACKWARD_TRANSITIVE", "FORWARD", "FORWARD_TRANSITIVE", "FULL", "FULL_TRANSITIVE", "NONE" ]
       }
     },

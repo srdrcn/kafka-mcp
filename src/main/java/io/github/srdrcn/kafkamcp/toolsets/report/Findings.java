@@ -10,12 +10,12 @@ import java.util.Map;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Denetim bulguları: kontrol başına tek satır (check, severity, açıklama, toplam sayı) ve en fazla
- * {@code itemLimit} örnek; kalan örnek sayısı {@code itemsOmitted} ile belirtilir (sessiz kırpma yok).
+ * Audit findings: one row per check (check, severity, message, total count) and at most {@code itemLimit}
+ * sample items; the number of remaining items is given in {@code itemsOmitted} (no silent truncation).
  */
 public final class Findings {
 
-	/** Önem derecesi (çıktıda küçük harf). */
+	/** Severity (lower case in the output). */
 	public enum Severity {
 
 		CRITICAL, HIGH, MEDIUM, LOW, INFO;
@@ -37,30 +37,30 @@ public final class Findings {
 		this.itemLimit = Math.max(1, itemLimit);
 	}
 
-	/** Bulgu ekler; aynı check'in ilk çağrısındaki severity/açıklama geçerlidir. */
+	/** Adds a finding; the severity/message of the first call for a check wins. */
 	public void add(String check, Severity severity, String message, Map<String, Object> item) {
 		checks.computeIfAbsent(check, k -> new Check(check, severity, message, new ArrayList<>())).items().add(item);
 	}
 
-	/** Toplam bulgu (öğe) sayısı. */
+	/** Total number of findings (items). */
 	public int total() {
 		return checks.values().stream().mapToInt(c -> c.items().size()).sum();
 	}
 
-	/** check → öğe sayısı. */
+	/** check → item count. */
 	public Map<String, Integer> counts() {
 		Map<String, Integer> out = new LinkedHashMap<>();
 		checks.forEach((k, c) -> out.put(k, c.items().size()));
 		return out;
 	}
 
-	/** Bir check'in öğeleri (yoksa boş). */
+	/** Items of a check (empty if none). */
 	public List<Map<String, Object>> items(String check) {
 		Check c = checks.get(check);
 		return c == null ? List.of() : c.items();
 	}
 
-	/** Önem derecesine göre öğe sayıları (critical..info, sıfır olanlar hariç). */
+	/** Item counts by severity (critical..info, zero counts omitted). */
 	public Map<String, Integer> bySeverity() {
 		Map<String, Integer> out = new LinkedHashMap<>();
 		for (Severity s : Severity.values()) {
@@ -72,7 +72,7 @@ public final class Findings {
 		return out;
 	}
 
-	/** Önem derecesine, sonra sayıya göre sıralı bulgu satırları. */
+	/** Finding rows sorted by severity, then by count. */
 	public List<Map<String, Object>> render() {
 		List<Check> sorted = new ArrayList<>(checks.values());
 		sorted.sort(Comparator.comparing(Check::severity)

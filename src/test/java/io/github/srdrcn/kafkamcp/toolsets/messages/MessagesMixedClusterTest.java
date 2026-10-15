@@ -31,36 +31,36 @@ import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * messages araçları ZooKeeper modlu cluster'da ({@code zk}, Kafka 3.9) ve KRaft cluster'ında ({@code test},
- * Kafka 4.1). zk testlerinin verisi sadece zk'da vardır (ya da KRaft'takinden farklıdır): çağrı yanlışlıkla
- * KRaft'a giderse test düşer. Mod bağımsız olduğu için iki cluster'daki birebir aynı veriye ({@link #same})
- * aynı yanıt döner.
+ * The messages tools on the ZooKeeper-mode cluster ({@code zk}, Kafka 3.9) and the KRaft cluster ({@code test},
+ * Kafka 4.1). The data of the zk tests exists only on zk (or differs from KRaft): the test fails if a call goes to
+ * KRaft by mistake. Since the behaviour does not depend on the mode, identical data on both clusters
+ * ({@link #same}) gives identical answers.
  */
 class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 
 	/**
-	 * Sadece zk'da, 3 partition. i = 0..29: partition i%3, zaman BASE+i sn, key k{i%5}, JSON value
-	 * {id, level (i%4==0 ? ERROR : INFO), user.name, tags (çift i)}; header trace=t-i (çift i), source=svc-a
-	 * (i%3==0). Ayrıca p0'da BASE+30 sn'de tombstone (key k-del). Offset'ler: p0 0..10, p1 0..9, p2 0..9.
+	 * Only on zk, 3 partitions. i = 0..29: partition i%3, time BASE+i s, key k{i%5}, JSON value
+	 * {id, level (i%4==0 ? ERROR : INFO), user.name, tags (even i)}; header trace=t-i (even i), source=svc-a
+	 * (i%3==0). Plus a tombstone on p0 at BASE+30 s (key k-del). Offsets: p0 0..10, p1 0..9, p2 0..9.
 	 */
 	private static String topic;
 
 	/**
-	 * Key'li, partition'sız gönderilen kayıtlar (varsayılan partitioner). Aynı ad iki cluster'da farklı partition
-	 * sayısıyla: zk'da 4, KRaft'ta 6.
+	 * Records sent with a key and no partition (default partitioner). The same name on both clusters with different
+	 * partition counts: 4 on zk, 6 on KRaft.
 	 */
 	private static String keyed;
 
-	/** zk'da producer'ın key başına seçtiği partition. */
+	/** The partition the producer picked per key on zk. */
 	private static Map<String, Integer> zkKeyPartitions;
 
-	/** KRaft'ta producer'ın key başına seçtiği partition. */
+	/** The partition the producer picked per key on KRaft. */
 	private static Map<String, Integer> kraftKeyPartitions;
 
-	/** İki cluster'da birebir aynı veri ({@link #topic} ile aynı yapı). */
+	/** Identical data on both clusters (same structure as {@link #topic}). */
 	private static String same;
 
-	/** Sadece KRaft'ta. */
+	/** Only on KRaft. */
 	private static String kraftOnly;
 
 	@BeforeAll
@@ -89,7 +89,7 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 			kraftKeyPartitions = sendKeyed(p);
 			send(p, List.of(TestData.record(kraftOnly, 0, null, "k", "v")));
 		}
-		assertThat(kraftKeyPartitions).as("farklı partition sayısı: key'lerin bir kısmı farklı partition'a düşmeli")
+		assertThat(kraftKeyPartitions).as("different partition counts: some keys must map to different partitions")
 			.isNotEqualTo(zkKeyPartitions);
 	}
 
@@ -188,7 +188,7 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 		JsonNode all = ok("messages_consume", zkArgs("topic", topic, "from", "earliest", "maxRecords", 500));
 		assertThat(all.get("returned").asInt()).isEqualTo(31);
 		assertThat(all.get("reachedEnd").asBoolean()).isTrue();
-		// group'suz, commit'siz okuma: ZooKeeper cluster'ında da grup oluşmaz
+		// reading without a group or commit: no group is created on the ZooKeeper cluster either
 		assertThat(groupIds(zkAdmin())).isSubsetOf(groupsBefore);
 	}
 
@@ -231,8 +231,8 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(rec.get("value").asText()).isEqualTo(RecordDecoder.hex(TestData.utf8(json(0))).substring(0, 16));
 		assertThat(rec.get("valueTruncated").asBoolean()).isTrue();
 
-		assertThat(error("messages_consume", zkArgs("topic", unique("mx-yok")))).contains("bulunamadı");
-		assertThat(error("messages_consume", zkArgs("topic", topic, "partition", 7))).contains("Partition 7 yok");
+		assertThat(error("messages_consume", zkArgs("topic", unique("mx-missing")))).contains("not found");
+		assertThat(error("messages_consume", zkArgs("topic", topic, "partition", 7))).contains("Partition 7 does not exist");
 	}
 
 	@Test
@@ -248,12 +248,12 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 		JsonNode tombstone = ok("messages_get", zkArgs("topic", topic, "partition", 0, "offset", 10));
 		assertThat(tombstone.get("tombstone").asBoolean()).isTrue();
 		assertThat(error("messages_get", zkArgs("topic", topic, "partition", 0, "offset", 11)))
-			.contains("aralık dışında")
+			.contains("out of range")
 			.contains("0..10");
 
 		JsonNode h = ok("messages_headers", zkArgs("topic", topic, "from", "earliest", "maxRecords", 500));
 		assertThat(h.get("recordsRead").asInt()).isEqualTo(31);
-		// çift i (15) ∪ 3'ün katı (10) = 20 kayıt
+		// even i (15) ∪ multiples of 3 (10) = 20 records
 		assertThat(h.get("withHeaders").asInt()).isEqualTo(20);
 		assertThat(h.get("withoutHeaders").asInt()).isEqualTo(11);
 		assertThat(h.get("headerKeys").asInt()).isEqualTo(2);
@@ -277,7 +277,7 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 		for (int p = 0; p < 3; p++) {
 			JsonNode row = at.get("partitions").get(p);
 			assertThat(row.get("partition").asInt()).isEqualTo(p);
-			// p'deki 5,5 sn sonrası ilk kayıt i = 6 + p, offset 2
+			// the first record in p after 5.5 s is i = 6 + p, offset 2
 			assertThat(row.get("offset").asLong()).isEqualTo(2);
 			assertThat(row.get("timestamp").asText()).isEqualTo(Timestamps.iso(TestData.BASE_TS + (6 + p) * 1000L));
 		}
@@ -308,8 +308,8 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 			assertThat(r.get("partitionCount").asInt()).isEqualTo(4);
 			computed.put(key, r.get("partition").asInt());
 		}
-		assertThat(computed).as("araç, producer'ın gerçekte seçtiği partition'ı bulmalı").isEqualTo(zkKeyPartitions);
-		// aynı ad KRaft'ta 6 partition: partition sayısı her cluster'ın kendisinden okunur
+		assertThat(computed).as("the tool must find the partition the producer actually picked").isEqualTo(zkKeyPartitions);
+		// the same name has 6 partitions on KRaft: the partition count is read from each cluster itself
 		Map<String, Integer> kraft = new HashMap<>();
 		for (String key : kraftKeyPartitions.keySet()) {
 			JsonNode r = ok("messages_partition_for_key", args("topic", keyed, "key", key));
@@ -332,7 +332,7 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(paths).containsKeys("id", "level", "user", "user.name", "tags", "tags[]");
 		assertThat(paths.get("id").get("types").get("integer").asInt()).isEqualTo(30);
 		assertThat(paths.get("tags").get("missingRatio").asDouble()).isEqualTo(0.5);
-		// zk cluster'ında schemaRegistryUrl yok: avro açık Türkçe hatayla reddedilir
+		// the zk cluster has no schemaRegistryUrl: avro is rejected with a clear error
 		assertThat(error("messages_sample_schema", zkArgs("topic", topic, "format", "avro")))
 			.contains("schemaRegistryUrl")
 			.contains("zk");
@@ -350,9 +350,9 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 
 	@Test
 	void sameDataGivesSameAnswersOnKraftAndZookeeper() {
-		// çağrılar gerçekten ayrı cluster'lara gider: birinde olan topic diğerinde yok
-		assertThat(error("messages_consume", args("topic", topic))).contains("bulunamadı");
-		assertThat(error("messages_consume", zkArgs("topic", kraftOnly))).contains("bulunamadı");
+		// the calls really go to separate clusters: a topic on one does not exist on the other
+		assertThat(error("messages_consume", args("topic", topic))).contains("not found");
+		assertThat(error("messages_consume", zkArgs("topic", kraftOnly))).contains("not found");
 		assertThat(ok("messages_consume", args("topic", kraftOnly)).get("returned").asInt()).isEqualTo(1);
 		List<Object[]> calls = List.of(
 				new Object[] { "messages_consume", "topic", same, "maxRecords", 7, "format", "json" },

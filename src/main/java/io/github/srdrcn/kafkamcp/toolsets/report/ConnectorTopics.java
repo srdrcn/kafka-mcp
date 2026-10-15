@@ -12,16 +12,16 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 /**
- * Connector config'inin hangi topic'lere referans verdiğini bulur: adında "topic" geçen anahtarlar; değer
- * virgülle ayrılmış topic listesi, {@code *regex}/{@code *pattern} ise regex, {@code *prefix} ise önek olarak
- * yorumlanır. Sadece config'e bakar (çalışan connector'ın aktif topic'leri ayrıca sorgulanmaz).
+ * Finds which topics a connector config references: keys whose name contains "topic"; the value is read as a
+ * comma-separated topic list, as a regex for {@code *regex}/{@code *pattern} keys and as a prefix for
+ * {@code *prefix} keys. Only the config is inspected (the active topics of the running connector are not queried).
  */
 public final class ConnectorTopics {
 
-	/** Config'in topic referansları: literal adlar, regex'ler ve önekler (anahtar adlarıyla). */
+	/** Topic references of the config: literal names, regexes and prefixes (with the key names). */
 	public record References(Set<String> literals, List<Pattern> regexes, Set<String> prefixes, Set<String> keys) {
 
-		/** Topic bu config tarafından kapsanıyor mu? */
+		/** Is the topic covered by this config? */
 		public boolean covers(String topic) {
 			if (literals.contains(topic)) {
 				return true;
@@ -48,7 +48,7 @@ public final class ConnectorTopics {
 	private ConnectorTopics() {
 	}
 
-	/** Config'teki topic referanslarını ayrıştırır (geçersiz regex'ler atlanır). */
+	/** Parses the topic references in the config (invalid regexes are skipped). */
 	public static References parse(Map<String, String> config) {
 		Set<String> literals = new TreeSet<>();
 		List<Pattern> regexes = new ArrayList<>();
@@ -69,7 +69,7 @@ public final class ConnectorTopics {
 					keys.add(e.getKey());
 				}
 				catch (PatternSyntaxException ignored) {
-					// geçersiz regex: referans sayılmaz
+					// invalid regex: not counted as a reference
 				}
 			}
 			else if (key.endsWith("prefix")) {
@@ -88,7 +88,7 @@ public final class ConnectorTopics {
 		return new References(literals, regexes, prefixes, keys);
 	}
 
-	/** Verilen topic'lerden config'in kapsadıkları (sıralı). */
+	/** The given topics that the config covers (sorted). */
 	public static Set<String> covered(References refs, Collection<String> topics) {
 		Set<String> out = new TreeSet<>();
 		if (refs.isEmpty()) {

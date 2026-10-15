@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** diagnose: tek çağrıda sağlık teşhisi araçları (topic, consumer group, connector, cluster, erişim, bağlantı). */
+/** diagnose: single-call health diagnosis tools (topic, consumer group, connector, cluster, access, connectivity). */
 @Component
 public class DiagnoseToolset implements Toolset {
 
@@ -42,7 +42,7 @@ public class DiagnoseToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Teşhis araçları: topic, consumer group, connector, cluster, erişim ve bağlantı sağlık özetleri";
+		return "Diagnosis tools: health summaries for topics, consumer groups, connectors, the cluster, access and connectivity";
 	}
 
 	@Override

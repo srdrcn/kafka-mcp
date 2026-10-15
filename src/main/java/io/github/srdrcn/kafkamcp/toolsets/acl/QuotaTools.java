@@ -19,20 +19,20 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** quotas_list ve quotas_update (client kotaları: user, client-id, ip; varsayılan entity "<default>"). */
+/** quotas_list and quotas_update (client quotas: user, client-id, ip; default entity "<default>"). */
 @Component
 public class QuotaTools {
 
 	public static final String DEFAULT = "<default>";
 
-	/** user/client-id entity'leri için geçerli kota anahtarları. */
+	/** Valid quota keys for user/client-id entities. */
 	public static final List<String> CLIENT_KEYS = List.of("producer_byte_rate", "consumer_byte_rate",
 			"request_percentage", "controller_mutation_rate");
 
-	/** ip entity'leri için geçerli kota anahtarları. */
+	/** Valid quota keys for ip entities. */
 	public static final List<String> IP_KEYS = List.of("connection_creation_rate");
 
-	/** Parametre adı → Kafka entity tipi. */
+	/** Parameter name → Kafka entity type. */
 	private static final Map<String, String> ENTITY_PARAMS = new LinkedHashMap<>();
 
 	static {
@@ -43,19 +43,19 @@ public class QuotaTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
-			.read("quotas_list", "Client kotalarını (user/client-id/ip, <default> dahil) ve değerlerini listeler")
+			.read("quotas_list", "List client quotas (user/client-id/ip, <default> included) and their values")
 			.listParams()
-			.param("filter", P.string("Entity filtresi (regex; ör. user=alice, client-id=<default>, ip=10\\.)"))
+			.param("filter", P.string("Entity filter (regex; e.g. user=alice, client-id=<default>, ip=10\\.)"))
 			.handler(this::list),
 				ToolSpec
 					.write("quotas_update",
-							"Client kotası ayarlar/kaldırır (user, clientId, ip; <default> destekli); önce/sonra değerleri döner")
-					.param("user", P.string("Kullanıcı (varsayılan kullanıcı için <default>)"))
-					.param("clientId", P.string("client.id (varsayılan için <default>)"))
-					.param("ip", P.string("IP adresi (varsayılan için <default>); user/clientId ile birlikte verilmez"))
-					.param("set", P.object("Ayarlanacak kotalar: anahtar → sayı (ör. {\"producer_byte_rate\": 1048576}). "
-							+ "Anahtarlar: " + String.join(", ", CLIENT_KEYS) + "; ip için " + IP_KEYS.get(0)))
-					.param("remove", P.stringArray("Kaldırılacak kota anahtarları"))
+							"Set or remove client quotas (user, clientId, ip; <default> supported); returns the before/after values")
+					.param("user", P.string("User (<default> for the default user)"))
+					.param("clientId", P.string("client.id (<default> for the default)"))
+					.param("ip", P.string("IP address (<default> for the default); cannot be combined with user/clientId"))
+					.param("set", P.object("Quotas to set: key → number (e.g. {\"producer_byte_rate\": 1048576}). "
+							+ "Keys: " + String.join(", ", CLIENT_KEYS) + "; " + IP_KEYS.get(0) + " for ip"))
+					.param("remove", P.stringArray("Quota keys to remove"))
 					.handler(this::update));
 	}
 
@@ -90,11 +90,11 @@ public class QuotaTools {
 			}
 		});
 		if (entries.isEmpty()) {
-			throw new ToolException("En az bir entity verilmeli: user, clientId ya da ip");
+			throw new ToolException("At least one entity is required: user, clientId or ip");
 		}
 		boolean ip = entries.containsKey(ClientQuotaEntity.IP);
 		if (ip && entries.size() > 1) {
-			throw new ToolException("ip, user/clientId ile birlikte kullanılamaz (ip kotaları ayrı entity'dir)");
+			throw new ToolException("ip cannot be combined with user/clientId (ip quotas are a separate entity)");
 		}
 		List<String> allowed = ip ? IP_KEYS : CLIENT_KEYS;
 		Map<String, Double> set = new LinkedHashMap<>();
@@ -102,12 +102,12 @@ public class QuotaTools {
 		List<String> remove = new ArrayList<>();
 		for (String k : call.strings("remove")) {
 			if (set.containsKey(k)) {
-				throw new ToolException(k + " hem set hem remove içinde olamaz");
+				throw new ToolException(k + " cannot be in both set and remove");
 			}
 			remove.add(checkKey(k, allowed));
 		}
 		if (set.isEmpty() && remove.isEmpty()) {
-			throw new ToolException("set ya da remove verilmeli");
+			throw new ToolException("set or remove is required");
 		}
 		ClientQuotaEntity entity = new ClientQuotaEntity(entries);
 		Map<String, Double> before = describe(call, entity);
@@ -120,7 +120,7 @@ public class QuotaTools {
 		expected.putAll(set);
 		remove.forEach(expected::remove);
 		Map<String, Double> after = describe(call, entity);
-		// Broker metadata'yı controller'dan biraz geç alabilir: kısa süre beklenen değerleri bekle.
+		// The broker may get the metadata from the controller a little later: briefly wait for the expected values.
 		while (!after.equals(expected) && !call.nearDeadline(2_000)) {
 			call.sleep(150);
 			after = describe(call, entity);
@@ -128,12 +128,12 @@ public class QuotaTools {
 		return Results.map("entity", renderEntity(entity), "before", renderQuotas(before), "after",
 				renderQuotas(after), "set", set.isEmpty() ? null : renderQuotas(set), "removed",
 				remove.isEmpty() ? null : remove, "note", after.equals(expected) ? null
-						: "Broker kota bilgisini henüz güncellememiş olabilir; birkaç saniye sonra quotas_list ile kontrol edin");
+						: "The broker may not have updated the quotas yet; check with quotas_list in a few seconds");
 	}
 
 	private static String checkKey(String key, List<String> allowed) {
 		if (!allowed.contains(key)) {
-			throw new ToolException("Geçersiz kota anahtarı: " + key + " (geçerli: " + String.join(", ", allowed) + ")");
+			throw new ToolException("Invalid quota key: " + key + " (valid: " + String.join(", ", allowed) + ")");
 		}
 		return key;
 	}
@@ -146,11 +146,11 @@ public class QuotaTools {
 			return Double.parseDouble(String.valueOf(v).trim());
 		}
 		catch (NumberFormatException | NullPointerException e) {
-			throw new ToolException("Kota değeri sayı olmalı: " + key + "=" + v);
+			throw new ToolException("Quota value must be a number: " + key + "=" + v);
 		}
 	}
 
-	/** Tek entity'nin kotaları (containsOnly ile tam eşleşme); yoksa boş. */
+	/** Quotas of a single entity (exact match via containsOnly); empty if none. */
 	public static Map<String, Double> describe(ToolCall call, ClientQuotaEntity entity) {
 		List<ClientQuotaFilterComponent> components = new ArrayList<>();
 		entity.entries()
@@ -166,7 +166,7 @@ public class QuotaTools {
 		return new TreeMap<>();
 	}
 
-	/** {user, clientId, ip}; varsayılan entity "<default>". */
+	/** {user, clientId, ip}; default entity "<default>". */
 	public static Map<String, Object> renderEntity(ClientQuotaEntity entity) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		ENTITY_PARAMS.forEach((param, type) -> {
@@ -178,7 +178,7 @@ public class QuotaTools {
 		return m;
 	}
 
-	/** "user=alice,client-id=<default>" (filtre ve sıralama için). */
+	/** "user=alice,client-id=<default>" (for filtering and sorting). */
 	public static String entityText(ClientQuotaEntity entity) {
 		List<String> parts = new ArrayList<>();
 		for (String type : ENTITY_PARAMS.values()) {
@@ -190,7 +190,7 @@ public class QuotaTools {
 		return String.join(",", parts);
 	}
 
-	/** Tam sayı değerler long olarak (1048576.0 yerine 1048576). */
+	/** Integral values as long (1048576 instead of 1048576.0). */
 	public static Map<String, Object> renderQuotas(Map<String, Double> quotas) {
 		Map<String, Object> m = new TreeMap<>();
 		quotas.forEach((k, v) -> m.put(k, v != null && v == Math.rint(v) && Math.abs(v) < 1e15 ? (Object) v.longValue() : v));

@@ -12,8 +12,8 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Kayıt filtresi: keyRegex/valueRegex (çözülmüş metinde kısmi eşleşme), headerKey (+ headerValueRegex). Tüm
- * koşullar VE ile birleşir; null key/value regex'e uymaz.
+ * Record filter: keyRegex/valueRegex (partial match on the decoded text), headerKey (+ headerValueRegex). All
+ * conditions are combined with AND; a null key/value never matches a regex.
  */
 public final class RecordFilter implements Predicate<ConsumerRecord<byte[], byte[]>> {
 
@@ -34,7 +34,7 @@ public final class RecordFilter implements Predicate<ConsumerRecord<byte[], byte
 	public RecordFilter(Pattern key, Pattern value, String headerKey, Pattern headerValue, RecordDecoder decoder,
 			MessageFormat keyFormat, MessageFormat valueFormat) {
 		if (headerValue != null && headerKey == null) {
-			throw new ToolException("headerValueRegex için headerKey de verilmeli");
+			throw new ToolException("headerValueRegex requires headerKey");
 		}
 		this.key = key;
 		this.value = value;
@@ -46,8 +46,8 @@ public final class RecordFilter implements Predicate<ConsumerRecord<byte[], byte
 	}
 
 	/**
-	 * keyRegex, valueRegex, headerKey, headerValueRegex parametrelerinden filtre; hiçbiri yoksa null. Değerler
-	 * trim edilmez (ör. "ERROR " sondaki boşlukla eşleşir).
+	 * Filter from the keyRegex, valueRegex, headerKey and headerValueRegex parameters; null if none is given. Values
+	 * are not trimmed (e.g. "ERROR " matches with the trailing space).
 	 */
 	public static RecordFilter fromParams(ToolCall call, RecordDecoder decoder, MessageFormat keyFormat,
 			MessageFormat valueFormat) {
@@ -61,7 +61,7 @@ public final class RecordFilter implements Predicate<ConsumerRecord<byte[], byte
 		return key == null && value == null && headerKey == null;
 	}
 
-	/** Çıktı için filtre özeti. */
+	/** Filter summary for the output. */
 	public Map<String, Object> describe() {
 		return Results.map("keyRegex", key == null ? null : key.pattern(), "valueRegex",
 				value == null ? null : value.pattern(), "headerKey", headerKey, "headerValueRegex",

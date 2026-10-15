@@ -17,23 +17,23 @@ import org.apache.kafka.common.TopicPartitionInfo;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
-/** Disk kullanımı: tek describeLogDirs ile broker/dizin/replika boyutları. */
+/** Disk usage: broker/directory/replica sizes with a single describeLogDirs. */
 public final class LogDirs {
 
 	private LogDirs() {
 	}
 
-	/** Partition boyutu: lider replika (mantıksal) ve tüm replikaların toplamı. */
+	/** Partition size: the leader replica (logical) and the sum of all replicas. */
 	public record PartitionSize(long leaderBytes, long totalBytes, int replicas) {
 	}
 
-	/** Cluster metadata'sında olmayan (kapalı/fenced) broker için hata mesajı. */
-	public static final String OFFLINE = "broker erişilemiyor (cluster metadata'sında yok)";
+	/** Error message for a broker missing from the cluster metadata (down/fenced). */
+	public static final String OFFLINE = "Broker unreachable (not in the cluster metadata)";
 
 	/**
-	 * Broker → (dizin yolu → açıklama); tek describeLogDirs, broker bazında hatalar ayrı. Canlı broker'lar
-	 * describeCluster ile alınır; replika listesinde kalmış ama kapalı broker'lar sorgulanmaz (admin client
-	 * onlar için isteği zaman aşımına kadar bekletir), {@link #OFFLINE} hatasıyla döner.
+	 * Broker → (directory path → description); a single describeLogDirs, per-broker errors separately. Live
+	 * brokers come from describeCluster; brokers still in replica lists but down are not queried (the admin
+	 * client would hold the request until the timeout) and are returned with the {@link #OFFLINE} error.
 	 */
 	public static Futures.Each<Integer, Map<String, LogDirDescription>> describe(ToolCall call,
 			Collection<Integer> brokerIds) {
@@ -44,7 +44,7 @@ public final class LogDirs {
 		return describe(call, brokerIds, live);
 	}
 
-	/** {@link #describe(ToolCall, Collection)}; canlı broker id'leri zaten biliniyorsa. */
+	/** {@link #describe(ToolCall, Collection)} when the live broker ids are already known. */
 	public static Futures.Each<Integer, Map<String, LogDirDescription>> describe(ToolCall call,
 			Collection<Integer> brokerIds, Collection<Integer> liveBrokerIds) {
 		Set<Integer> query = new LinkedHashSet<>();
@@ -64,7 +64,7 @@ public final class LogDirs {
 		return each;
 	}
 
-	/** Verilen topic'lerin replikalarını barındıran broker id'leri (kapalı olanlar dahil). */
+	/** Ids of the brokers hosting replicas of the given topics (including brokers that are down). */
 	public static Set<Integer> brokersHosting(Collection<TopicDescription> topics) {
 		Set<Integer> out = new LinkedHashSet<>();
 		for (TopicDescription d : topics) {
@@ -78,8 +78,8 @@ public final class LogDirs {
 	}
 
 	/**
-	 * Partition başına boyut (future replikalar hariç). Liderin boyutu okunamadıysa (offline ya da broker
-	 * hatası) en büyük replika lider boyutu sayılır. Sadece {@code topics} içindeki partition'lar döner.
+	 * Size per partition (future replicas excluded). If the leader's size could not be read (offline or broker
+	 * error), the largest replica counts as the leader size. Only partitions in {@code topics} are returned.
 	 */
 	public static Map<TopicPartition, PartitionSize> partitionSizes(Map<Integer, Map<String, LogDirDescription>> dirs,
 			Map<String, TopicDescription> topics) {

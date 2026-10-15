@@ -8,8 +8,8 @@ import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Paylaşılan Kafka Connect worker'ı (apache/kafka imajındaki connect-distributed.sh). Kafka'ya Docker ağı
- * içinden PLAINTEXT ile bağlanır. FileStream connector'ları ve MirrorMaker connector'ları yüklüdür.
+ * Shared Kafka Connect worker (connect-distributed.sh from the apache/kafka image). Connects to Kafka over
+ * PLAINTEXT inside the Docker network. The FileStream and MirrorMaker connectors are installed.
  */
 public final class ConnectTestCluster {
 

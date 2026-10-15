@@ -20,10 +20,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 /**
- * kafka-mcp.yaml'ı ve --config-dir altındaki drop-in .yaml/.yml dosyalarını (dosya adı sırasıyla)
- * okuyup birleştirir. Map'ler derin birleştirilir; {@code clusters} listesi {@code name} alanına göre
- * birleştirilir (drop-in yeni cluster ekleyebilir ya da mevcut cluster'ın alanlarını ezebilir); diğer
- * listeler tamamen değiştirilir.
+ * Reads and merges kafka-mcp.yaml and the drop-in .yaml/.yml files under --config-dir (in file name
+ * order). Maps are deep-merged; the {@code clusters} list is merged by the {@code name} field (a drop-in can
+ * add a new cluster or override fields of an existing one); other lists are replaced entirely.
  */
 public final class ConfigLoader {
 
@@ -50,7 +49,7 @@ public final class ConfigLoader {
 			config = YAML.treeToValue(root, KafkaMcpConfig.class);
 		}
 		catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-			throw new ConfigException("Config okunamadı: " + e.getOriginalMessage() + location(e), e);
+			throw new ConfigException("Could not read config: " + e.getOriginalMessage() + location(e), e);
 		}
 		validate(config);
 		return config;
@@ -68,24 +67,24 @@ public final class ConfigLoader {
 			return config;
 		}
 		catch (IOException e) {
-			throw new ConfigException("Config okunamadı: " + e.getMessage(), e);
+			throw new ConfigException("Could not read config: " + e.getMessage(), e);
 		}
 	}
 
 	private static String location(com.fasterxml.jackson.core.JsonProcessingException e) {
 		if (e instanceof com.fasterxml.jackson.databind.JsonMappingException jme && !jme.getPath().isEmpty()) {
-			StringBuilder sb = new StringBuilder(" (alan: ");
+			StringBuilder sb = new StringBuilder(" (field: ");
 			for (com.fasterxml.jackson.databind.JsonMappingException.Reference r : jme.getPath()) {
 				sb.append(r.getFieldName() != null ? "." + r.getFieldName() : "[" + r.getIndex() + "]");
 			}
-			return sb.append(")").toString().replace("(alan: .", "(alan: ");
+			return sb.append(")").toString().replace("(field: .", "(field: ");
 		}
 		return "";
 	}
 
 	static List<Path> dropIns(Path dir) {
 		if (!Files.isDirectory(dir)) {
-			throw new ConfigException("--config-dir bir dizin değil: " + dir);
+			throw new ConfigException("--config-dir is not a directory: " + dir);
 		}
 		try (Stream<Path> files = Files.list(dir)) {
 			return files.filter(Files::isRegularFile)
@@ -97,7 +96,7 @@ public final class ConfigLoader {
 				.toList();
 		}
 		catch (IOException e) {
-			throw new ConfigException("--config-dir okunamadı: " + dir + " (" + e.getMessage() + ")", e);
+			throw new ConfigException("Could not read --config-dir: " + dir + " (" + e.getMessage() + ")", e);
 		}
 	}
 
@@ -108,12 +107,12 @@ public final class ConfigLoader {
 				return YAML.createObjectNode();
 			}
 			if (!node.isObject()) {
-				throw new ConfigException("Config dosyası bir YAML map olmalı: " + file);
+				throw new ConfigException("Config file must be a YAML map: " + file);
 			}
 			return (ObjectNode) node;
 		}
 		catch (IOException e) {
-			throw new ConfigException("Config dosyası okunamadı: " + file + " (" + e.getMessage() + ")", e);
+			throw new ConfigException("Could not read config file: " + file + " (" + e.getMessage() + ")", e);
 		}
 	}
 
@@ -164,22 +163,22 @@ public final class ConfigLoader {
 	static void validate(KafkaMcpConfig config) {
 		List<String> errors = new ArrayList<>();
 		if (config.getPort() != null && (config.getPort() < 0 || config.getPort() > 65535)) {
-			errors.add("port 0-65535 aralığında olmalı");
+			errors.add("port must be between 0 and 65535");
 		}
 		if (config.getClusters().isEmpty()) {
-			errors.add("en az bir cluster tanımlanmalı (clusters)");
+			errors.add("at least one cluster must be defined (clusters)");
 		}
 		Set<String> names = new HashSet<>();
 		for (ClusterConfig c : config.getClusters()) {
 			if (c.getName() == null || !CLUSTER_NAME.matcher(c.getName()).matches()) {
-				errors.add("geçersiz cluster adı: " + c.getName() + " (harf, rakam, _ . - ; en fazla 63 karakter)");
+				errors.add("invalid cluster name: " + c.getName() + " (letters, digits, _ . - ; at most 63 characters)");
 				continue;
 			}
 			if (!names.add(c.getName())) {
-				errors.add("cluster adı tekrar ediyor: " + c.getName());
+				errors.add("duplicate cluster name: " + c.getName());
 			}
 			if (c.getBootstrapServers() == null || c.getBootstrapServers().isBlank()) {
-				errors.add("cluster " + c.getName() + ": bootstrapServers zorunlu");
+				errors.add("cluster " + c.getName() + ": bootstrapServers is required");
 			}
 			checkUrl(errors, c.getName(), "connectUrl", c.getConnectUrl());
 			checkUrl(errors, c.getName(), "schemaRegistryUrl", c.getSchemaRegistryUrl());
@@ -187,10 +186,10 @@ public final class ConfigLoader {
 		KerberosConfig k = config.getKerberos();
 		if (k != null) {
 			if (k.getPrincipal() == null || k.getPrincipal().isBlank()) {
-				errors.add("kerberos.principal zorunlu");
+				errors.add("kerberos.principal is required");
 			}
 			if (k.getKeytab() == null || k.getKeytab().isBlank()) {
-				errors.add("kerberos.keytab zorunlu");
+				errors.add("kerberos.keytab is required");
 			}
 			if (k.getServiceName() == null || k.getServiceName().isBlank()) {
 				k.setServiceName("kafka");
@@ -199,14 +198,14 @@ public final class ConfigLoader {
 		Set<String> toolsets = new HashSet<>();
 		for (String t : config.getToolsets()) {
 			if (t == null || t.isBlank()) {
-				errors.add("toolsets listesinde boş değer var");
+				errors.add("the toolsets list contains an empty value");
 			}
 			else if (!toolsets.add(t)) {
-				errors.add("toolset tekrar ediyor: " + t);
+				errors.add("duplicate toolset: " + t);
 			}
 		}
 		if (!errors.isEmpty()) {
-			throw new ConfigException("Geçersiz config:\n - " + String.join("\n - ", errors));
+			throw new ConfigException("Invalid config:\n - " + String.join("\n - ", errors));
 		}
 	}
 
@@ -215,7 +214,7 @@ public final class ConfigLoader {
 			return;
 		}
 		if (!url.startsWith("http://") && !url.startsWith("https://")) {
-			errors.add("cluster " + cluster + ": " + field + " http:// veya https:// ile başlamalı");
+			errors.add("cluster " + cluster + ": " + field + " must start with http:// or https://");
 		}
 	}
 

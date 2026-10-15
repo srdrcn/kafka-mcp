@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** diagnose_cluster: KRaft (quorum) ve ZooKeeper (controller) cluster'larında sağlık özeti. */
+/** diagnose_cluster: health summary on KRaft (quorum) and ZooKeeper (controller) clusters. */
 class DiagnoseClusterTest extends DiagnoseTestBase {
 
 	@Test

@@ -18,7 +18,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 import io.github.srdrcn.kafkamcp.toolsets.messages.MessageReader.From;
 
-/** Yapı/format araçları: messages_sample_schema, serdes_list. */
+/** Structure/format tools: messages_sample_schema, serdes_list. */
 @Component
 public class SchemaTools {
 
@@ -36,7 +36,7 @@ public class SchemaTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("messages_sample_schema",
-					"Son mesajlardan value yapısını çıkarır: JSON yolları, tipler, null/eksik oranları, örnek değer")
+					"Infer the value structure from recent messages: JSON paths, types, null/missing ratios, example values")
 			.required("topic", MessageParams.topic())
 			.param("partition", MessageParams.partition())
 			.param("format", MessageParams.format("Value", List.of("json", "avro"), "json"))
@@ -44,7 +44,7 @@ public class SchemaTools {
 			.handler(this::sampleSchema),
 				ToolSpec
 					.read("serdes_list",
-							"Desteklenen mesaj formatları (string/json/hex/long/avro) ve cluster başına avro desteği")
+							"List supported message formats (string/json/hex/long/avro) and avro support per cluster")
 					.clusterOptional()
 					.handler(this::serdesList));
 	}
@@ -53,7 +53,7 @@ public class SchemaTools {
 		String topic = call.str("topic");
 		MessageFormat format = MessageFormat.parse("format", call.str("format", null), MessageFormat.JSON);
 		if (format != MessageFormat.JSON && format != MessageFormat.AVRO) {
-			throw new ToolException("messages_sample_schema için format json ya da avro olmalı");
+			throw new ToolException("format must be json or avro for messages_sample_schema");
 		}
 		RecordDecoder.requireSupported(call, format);
 		Integer partition = call.optInt("partition");
@@ -93,7 +93,7 @@ public class SchemaTools {
 			out.put("pathsSkipped", shape.skippedPaths());
 		}
 		if (shape.arraysSampled()) {
-			out.put("arraysSampled", "Dizilerin sadece ilk " + ShapeInference.MAX_ARRAY_ELEMENTS + " elemanı incelendi");
+			out.put("arraysSampled", "Only the first " + ShapeInference.MAX_ARRAY_ELEMENTS + " elements of each array were inspected");
 		}
 		ConsumeTools.status(out, r, decoder);
 		out.put("paths", shape.paths());
@@ -114,7 +114,7 @@ public class SchemaTools {
 			}
 		}
 		return Results.map("formats", formats, "clusters", clusters, "usage",
-				"messages_consume/messages_get: format (value) ve keyFormat (key); messages_sample_schema: format json|avro");
+				"messages_consume/messages_get: format (value) and keyFormat (key); messages_sample_schema: format json|avro");
 	}
 
 }

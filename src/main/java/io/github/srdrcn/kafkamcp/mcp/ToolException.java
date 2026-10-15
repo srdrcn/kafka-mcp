@@ -1,7 +1,7 @@
 package io.github.srdrcn.kafkamcp.mcp;
 
 /**
- * Kullanıcıya (LLM'e) olduğu gibi gösterilecek Türkçe hata. Araç sonucu {@code isError: true} olur.
+ * Error shown as is to the user (the LLM). The tool result gets {@code isError: true}.
  */
 public class ToolException extends RuntimeException {
 

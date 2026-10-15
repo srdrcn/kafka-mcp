@@ -26,8 +26,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
 /**
- * diagnose_consumer_group: KRaft ve ZooKeeper cluster'larında takılı/boş grup, seyrek commit eden sağlıklı grup
- * (yanlış pozitif yok), lag, log başı ve ACL tespiti.
+ * diagnose_consumer_group: detection of stuck/empty groups, a healthy group that commits rarely (no false
+ * positive), lag, log start and ACLs on KRaft and ZooKeeper clusters.
  */
 class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 
@@ -37,7 +37,7 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			String topic = unique("diag-gstuck");
 			String group = topic + "-g";
 			createTopic(cluster, topic, 1, Map.of());
-			// backlog 30 dk önce yazılmış: commit'i 3'te duran consumer gerçekten takılı (kayıt yaşı kanıtı)
+			// backlog written 30 min ago: the consumer whose commit stays at 3 is really stuck (record age as evidence)
 			produceAged(cluster, topic, 0, 10, 30 * 60_000L);
 			joinAndCommit(cluster, group, topic, Map.of(0, 3L));
 			produceInBackground(cluster, topic, 0);
@@ -75,9 +75,9 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 	}
 
 	/**
-	 * Sağlıklı ama seyrek commit eden grup (Streams 30 sn, Connect sink 60 sn gibi): ölçüm penceresinde commit
-	 * ilerlemez ve lag büyür görünür; bekleyen kayıtlar yeni olduğu için kritik takılma ya da büyüyen lag uyarısı
-	 * verilmez, sadece bilgi notu.
+	 * Healthy group that commits rarely (like Streams 30 s, Connect sink 60 s): the commit does not advance in the
+	 * measurement window and the lag looks like growing; since the pending records are recent, there is no critical
+	 * stuck finding or growing-lag warning, only an info note.
 	 */
 	@Test
 	void healthyGroupThatCommitsRarelyIsNotReportedAsStuckOnBothClusters() throws Exception {
@@ -88,7 +88,7 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			produceInBackground(cluster, topic, 0);
 			consumeWithRareCommits(cluster, group, topic);
 
-			// intervalSeconds verilmedi: varsayılan pencere (5 sn)
+			// no intervalSeconds: default window (5 s)
 			JsonNode r = ok("diagnose_consumer_group", on(cluster, "group", group));
 			assertThat(r.get("status").asText()).as(r.toString()).isNotEqualTo("critical");
 			assertThat(codes(r)).as(r.toString())
@@ -96,15 +96,15 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			JsonNode facts = r.get("facts");
 			assertThat(facts.get("state").asText()).isEqualTo("Stable");
 			assertThat(facts.at("/lag/stuckPartitions").asInt()).isZero();
-			// pencerede commit yok, yeni mesaj var: takılma adayı ama bekleyen kayıtlar yeni → sadece bilgi notu
+			// no commit in the window, new messages arrive: stuck candidate but the pending records are recent → info note only
 			assertThat(facts.at("/lag/commitNotAdvancedPartitions").asInt()).as(r.toString()).isEqualTo(1);
 			JsonNode note = finding(r, "COMMIT_NOT_ADVANCED");
 			assertThat(note.get("severity").asText()).isEqualTo("info");
-			assertThat(note.get("message").asText()).contains("periyodik commit");
+			assertThat(note.get("message").asText()).contains("periodic commit");
 			assertThat(note.at("/evidence/partitions/0/ageBasis").asText()).isEqualTo("recordAge");
 			assertThat(note.at("/evidence/partitions/0/oldestPendingAgeSeconds").asLong())
 				.isLessThan(StuckCheck.COMMIT_ALLOWANCE_SECONDS);
-			// topic teşhisi de aynı grubu takılı/büyüyen saymaz
+			// the topic diagnosis does not count the same group as stuck/growing either
 			JsonNode t = ok("diagnose_topic", on(cluster, "topic", topic));
 			assertThat(codes(t)).as(t.toString())
 				.doesNotContain("CONSUMER_STUCK", "CONSUMER_STUCK_SUSPECT", "CONSUMER_LAG_GROWING");
@@ -114,7 +114,7 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 		}
 	}
 
-	/** ACL kontrolü en fazla 20 topic'i değerlendirir; kalanı ve gösterilmeyen listeler sayıyla raporlanır. */
+	/** The ACL check evaluates at most 20 topics; the rest and the lists not shown are reported as counts. */
 	@Test
 	void aclCheckReportsTopicsItDidNotEvaluate() throws Exception {
 		String cluster = TestConfigs.CLUSTER;
@@ -141,12 +141,12 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 				catch (Exception e) {
 					return false;
 				}
-			}, "ACL görünmedi");
+			}, "ACL not visible");
 			JsonNode r = ok("diagnose_consumer_group", on(cluster, "group", group, "intervalSeconds", 1));
 			String last = prefix + "-" + String.format("%02d", DiagnoseGroupTools.MAX_ACL_TOPICS);
 			JsonNode skipped = finding(r, "ACL_TOPICS_NOT_EVALUATED");
 			assertThat(skipped.get("severity").asText()).isEqualTo("info");
-			assertThat(skipped.get("message").asText()).startsWith("1 topic").contains("en fazla 20");
+			assertThat(skipped.get("message").asText()).startsWith("1 topic").contains("at most 20");
 			assertThat(texts(skipped.at("/evidence/topics"))).containsExactly(last);
 			JsonNode missing = finding(r, "ACL_TOPIC_READ_MISSING");
 			assertThat(missing.at("/evidence/principals/0/principal").asText()).isEqualTo("User:bob");
@@ -158,7 +158,7 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 			assertThat(facts.at("/access/topicsNotEvaluated").asInt()).isEqualTo(1);
 			assertThat(facts.get("topics").size()).isEqualTo(DiagnoseGroupTools.MAX_TOPICS);
 			assertThat(facts.get("topicsOmitted").asInt()).isEqualTo(1);
-			assertThat(r.has("partial")).as("üst sınır örneklemedir, zaman aşımı değil").isFalse();
+			assertThat(r.has("partial")).as("the cap is sampling, not a timeout").isFalse();
 		}
 		finally {
 			admin(cluster).deleteAcls(List.of(groupRead.toFilter())).all().get(30, TimeUnit.SECONDS);
@@ -188,7 +188,7 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 					catch (Exception e) {
 						return false;
 					}
-				}, "ACL görünmedi");
+				}, "ACL not visible");
 
 				JsonNode r = ok("diagnose_consumer_group", on(cluster, "group", group, "intervalSeconds", 1));
 				assertThat(r.get("status").asText()).as(r.toString()).isEqualTo("warning");
@@ -219,10 +219,11 @@ class DiagnoseConsumerGroupTest extends DiagnoseTestBase {
 
 	@Test
 	void unknownGroupIsAnError() {
-		assertThat(error("diagnose_consumer_group", args("group", unique("diag-nogroup"))))
-			.contains("Consumer group bulunamadı");
-		assertThat(error("diagnose_consumer_group", zkArgs("group", unique("diag-nogroup"))))
-			.contains("Consumer group bulunamadı");
+		// the message comes from the consumers toolset; the group name and the hint tool name are wording-independent
+		String group = unique("diag-nogroup");
+		assertThat(error("diagnose_consumer_group", args("group", group))).contains(group, "consumer_groups_list");
+		String zkGroup = unique("diag-nogroup");
+		assertThat(error("diagnose_consumer_group", zkArgs("group", zkGroup))).contains(zkGroup, "consumer_groups_list");
 	}
 
 }

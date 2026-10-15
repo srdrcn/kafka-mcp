@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import io.github.srdrcn.kafkamcp.kafka.Offsets;
 
-/** Temizlik adayı kuralları, önek ACL erişimi, connector topic referansları ve küçük yardımcılar (broker'sız). */
+/** Cleanup candidate rules, prefix ACL access, connector topic references and small helpers (no broker). */
 class InventoryRulesTest {
 
 	static final long NOW = 1_800_000_000_000L;
@@ -26,7 +26,7 @@ class InventoryRulesTest {
 	static final long THRESHOLD = TopicActivity.threshold(NOW, 30);
 
 	static TopicActivity activity(Boolean empty, boolean neverWritten, Long lastWrite, boolean complete) {
-		return new TopicActivity("t", empty, neverWritten, null, lastWrite, complete, complete ? null : "bilinmiyor");
+		return new TopicActivity("t", empty, neverWritten, null, lastWrite, complete, complete ? null : "unknown");
 	}
 
 	static AclBinding acl(ResourceType type, String name, PatternType pattern, String principal, AclOperation op,
@@ -55,10 +55,10 @@ class InventoryRulesTest {
 		CleanupRules.Candidate unknown = CleanupRules.topic("e", activity(false, false, null, false), THRESHOLD, 0,
 				Map.of());
 		assertThat(unknown.risk()).isEqualTo(CleanupRules.MEDIUM);
-		// eksik son yazma (bazı partition'lar okunamadı) eski görünse de idle sayılmaz
+		// an incomplete last write (some partitions unreadable) is not idle even if it looks old
 		assertThat(CleanupRules.topic("f", activity(false, false, old, false), THRESHOLD, 1, Map.of())).isNull();
 		assertThat(CleanupRules.topic("g", activity(false, false, recent, true), THRESHOLD, 1, Map.of())).isNull();
-		// grup taraması başarısız (consumer sayısı bilinmiyor): boş/boşta topic yine aday, risk en az medium
+		// group scan failed (consumer count unknown): an empty/idle topic is still a candidate, risk at least medium
 		CleanupRules.Candidate neverUnknown = CleanupRules.topic("h", activity(true, true, null, true), THRESHOLD,
 				null, Map.of());
 		assertThat(neverUnknown.reasons()).containsExactly("never_written");
@@ -90,7 +90,7 @@ class InventoryRulesTest {
 		assertThat(CleanupRules.group("g", "Empty", Map.of(a0, 10L), existing, ranges, t -> false)).isNull();
 		assertThat(CleanupRules.group("g", "Empty", Map.of(a0, 3L), existing, ranges, t -> true)).isNull();
 		assertThat(CleanupRules.group("g", "Empty", Map.of(new TopicPartition("a", 1), 3L), existing, ranges, t -> true))
-			.as("end offset'i bilinmeyen partition").isNull();
+			.as("partition with unknown end offset").isNull();
 	}
 
 	@Test
@@ -115,7 +115,7 @@ class InventoryRulesTest {
 			.doesNotContainKey("principalsOmitted");
 		assertThat(c.get(0).risk()).isEqualTo(CleanupRules.MEDIUM);
 		assertThat(c.get(0).reasons()).containsExactly("orphan_group_acl");
-		// çok principal: ilk 10 ad, toplam ve kalan sayı
+		// many principals: first 10 names, total and remaining count
 		List<AclBinding> many = new java.util.ArrayList<>();
 		for (int i = 0; i < 25; i++) {
 			many.add(acl(ResourceType.TOPIC, "crowded", PatternType.LITERAL, "User:p" + (char) ('a' + i), AclOperation.READ,
@@ -126,7 +126,7 @@ class InventoryRulesTest {
 			.containsEntry("principalCount", 25)
 			.containsEntry("principalsOmitted", 15);
 		assertThat((List<?>) crowded.details().get("principals")).hasSize(10);
-		// grup listesi bilinmiyorsa grup ACL'leri aday olmaz
+		// if the group list is unknown, group ACLs are not candidates
 		assertThat(CleanupRules.orphanAcls(bindings, Set.of("live"), Set.of(), false))
 			.extracting(CleanupRules.Candidate::name)
 			.containsExactly("ghost");

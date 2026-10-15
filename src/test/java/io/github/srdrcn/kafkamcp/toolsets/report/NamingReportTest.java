@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** report_naming_check ve report_duplicate_like_topics (KRaft ve ZooKeeper). */
+/** report_naming_check and report_duplicate_like_topics (KRaft and ZooKeeper). */
 class NamingReportTest extends ReportTestBase {
 
 	@ParameterizedTest(name = "zk={0}")
@@ -33,11 +33,11 @@ class NamingReportTest extends ReportTestBase {
 		assertThat(r.get("nonMatchingPct").asDouble()).isEqualTo(66.7);
 		assertThat(texts(r.get("topics"), null)).containsExactly(noVersion, upper);
 		assertThat(r.get("nonMatchingByFirstToken").fieldNames().next()).isEqualTo("rep");
-		// kısmi eşleşme yetmez: tam ad eşleşmeli
+		// a partial match is not enough: the full name must match
 		JsonNode partial = ok("report_naming_check", on(zk, "pattern", "orders", "filter", Pattern.quote(p)));
 		assertThat(partial.get("matching").asInt()).isZero();
 
-		assertThat(error("report_naming_check", on(zk, "pattern", "([a-z"))).contains("Geçersiz regex");
+		assertThat(error("report_naming_check", on(zk, "pattern", "([a-z"))).contains("Invalid regex");
 	}
 
 	@ParameterizedTest(name = "zk={0}")

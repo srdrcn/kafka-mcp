@@ -14,7 +14,7 @@ import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourceType;
 import org.junit.jupiter.api.Test;
 
-/** StandardAuthorizer kurallarının birim testleri (Kafka gerekmez). */
+/** Unit tests of the StandardAuthorizer rules (no Kafka needed). */
 class AclEvaluatorTest {
 
 	private static AclBinding acl(ResourceType type, String name, PatternType pattern, String principal,
@@ -44,11 +44,11 @@ class AclEvaluatorTest {
 		assertThat(bob.allowed()).isFalse();
 		assertThat(bob.noAclOnResource()).isFalse();
 		assertThat(bob.resourceAclCount()).isEqualTo(1);
-		assertThat(bob.reason()).contains("eşleşen ALLOW yok");
+		assertThat(bob.reason()).contains("no matching ALLOW");
 
 		assertThat(topic(acls, "User:alice", AclOperation.WRITE, "orders").allowed()).isFalse();
 		assertThat(topic(acls, "User:alice", AclOperation.READ, "orders-2").allowed()).isFalse();
-		// aynı ada sahip GROUP binding'i TOPIC'e uygulanmaz
+		// a GROUP binding with the same name does not apply to the TOPIC
 		List<AclBinding> group = List.of(acl(ResourceType.GROUP, "orders", PatternType.LITERAL, "User:alice",
 				AclOperation.READ, AclPermissionType.ALLOW));
 		assertThat(topic(group, "User:alice", AclOperation.READ, "orders").noAclOnResource()).isTrue();
@@ -82,7 +82,7 @@ class AclEvaluatorTest {
 		assertThat(topic(acls, "User:alice", AclOperation.READ, "pa").allowed()).isFalse();
 		assertThat(topic(acls, "User:carol", AclOperation.DESCRIBE, "anything").allowed()).isTrue();
 		assertThat(topic(acls, "User:dave", AclOperation.READ, "public").allowed()).isTrue();
-		// "*" literal binding'i her topic'te ACL var sayılır
+		// the "*" literal binding counts as an ACL on every topic
 		assertThat(topic(acls, "User:dave", AclOperation.READ, "other").noAclOnResource()).isFalse();
 	}
 
@@ -99,10 +99,10 @@ class AclEvaluatorTest {
 						AclPermissionType.DENY));
 		AclEvaluator.Decision describe = topic(acls, "User:alice", AclOperation.DESCRIBE, "t");
 		assertThat(describe.allowed()).isTrue();
-		assertThat(describe.reason()).contains("çıkarıldı");
+		assertThat(describe.reason()).contains("is implied by");
 		assertThat(topic(acls, "User:alice", AclOperation.DESCRIBE_CONFIGS, "t").allowed()).isTrue();
 		assertThat(topic(acls, "User:alice", AclOperation.READ, "t").allowed()).isFalse();
-		// DENY READ, DESCRIBE'ı reddetmez; ALLOW READ ise DESCRIBE verir
+		// DENY READ does not deny DESCRIBE; ALLOW READ grants DESCRIBE
 		assertThat(topic(acls, "User:bob", AclOperation.DESCRIBE, "t").allowed()).isTrue();
 		assertThat(topic(acls, "User:bob", AclOperation.READ, "t").allowed()).isFalse();
 	}
@@ -177,7 +177,7 @@ class AclEvaluatorTest {
 				"User:ANONYMOUS");
 	}
 
-	/** Kafka JaasConfig tek tırnağı da kabul eder: maskeleme ve seçenek okuma ikisini de desteklemeli. */
+	/** Kafka JaasConfig also accepts single quotes: masking and option parsing must support both. */
 	@Test
 	void singleQuotedJaasValues() {
 		String masked = ClientSecurity.maskJaas(

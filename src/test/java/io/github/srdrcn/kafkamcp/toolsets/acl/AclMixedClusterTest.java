@@ -46,9 +46,9 @@ import io.github.srdrcn.kafkamcp.support.TestConfigs;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * acl ACL araçları ZooKeeper (AclAuthorizer, Kafka 3.9) cluster'ında: acls_list, acls_explain,
- * acls_who_can_access_topic, acls_principal_permissions, acls_audit, acls_create, acls_delete. Kararlar
- * her iki modda gerçek broker yetkilendirmesiyle karşılaştırılır.
+ * acl ACL tools on a ZooKeeper (AclAuthorizer, Kafka 3.9) cluster: acls_list, acls_explain,
+ * acls_who_can_access_topic, acls_principal_permissions, acls_audit, acls_create, acls_delete. Decisions are
+ * compared with real broker authorization in both modes.
  */
 class AclMixedClusterTest extends MixedClusterIntegrationTest {
 
@@ -82,7 +82,7 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 		return ok("acls_explain", argsOn(cluster, kv));
 	}
 
-	/** Kullanıcı olarak describeTopics: başarılıysa null, değilse kök Kafka hatası. */
+	/** describeTopics as the user: null on success, otherwise the root Kafka error. */
 	private static Throwable describeError(String cluster, String user, String topic) {
 		Map<String, Object> props = clientProps(cluster, user);
 		props.put("default.api.timeout.ms", 10_000);
@@ -96,7 +96,7 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** ZooKeeper cluster'ına kullanıcı olarak tek mesaj üretir: başarılıysa null, değilse kök Kafka hatası. */
+	/** Produces a single message to the ZooKeeper cluster as the user: null on success, otherwise the root Kafka error. */
 	private static Throwable zkProduceError(String user, String topic) {
 		Map<String, Object> o = new java.util.HashMap<>(KafkaTestCluster.saslProperties(user));
 		o.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, false);
@@ -126,13 +126,13 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 			admin.deleteTopics(List.of(topics)).all().get(15, TimeUnit.SECONDS);
 		}
 		catch (Exception ignored) {
-			// temizlik
+			// cleanup
 		}
 	}
 
 	/**
-	 * acls_explain her iki modda broker'ın gerçek kararıyla aynı: PREFIXED READ → DESCRIBE çıkarımı (ALLOW),
-	 * LITERAL DENY (DENY), ACL'i olmayan principal (DENY). authorizer alanı moda göre doğru.
+	 * acls_explain matches the broker's real decision in both modes: PREFIXED READ → implied DESCRIBE (ALLOW),
+	 * LITERAL DENY (DENY), principal without ACLs (DENY). The authorizer field is correct for the mode.
 	 */
 	@ParameterizedTest
 	@ValueSource(strings = { ZK_CLUSTER, TestConfigs.CLUSTER })
@@ -150,10 +150,10 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 		try {
 			JsonNode allow = explain(cluster, "alice", "DESCRIBE", "TOPIC", open);
 			assertThat(allow.get("decision").asText()).isEqualTo("ALLOW");
-			assertThat(allow.get("reason").asText()).contains("READ").contains("çıkarıldı");
+			assertThat(allow.get("reason").asText()).contains("READ").contains("is implied by");
 			assertThat(allow.at("/matchedAllow/0/patternType").asText()).isEqualTo("PREFIXED");
 			assertThat(allow.get("authorizer").asText()).isEqualTo(zk(cluster) ? ACL_AUTHORIZER : STANDARD_AUTHORIZER);
-			assertThat(allow.path("notes").toString()).doesNotContain("yerleşik değil");
+			assertThat(allow.path("notes").toString()).doesNotContain("is not built in");
 			await().atMost(Duration.ofSeconds(30))
 				.pollInterval(Duration.ofMillis(500))
 				.untilAsserted(() -> assertThat(describeError(cluster, "alice", open)).isNull());
@@ -170,10 +170,10 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 
 			JsonNode bob = explain(cluster, "bob", "DESCRIBE", "TOPIC", open);
 			assertThat(bob.get("decision").asText()).isEqualTo("DENY");
-			assertThat(bob.get("reason").asText()).contains("eşleşen ALLOW yok");
+			assertThat(bob.get("reason").asText()).contains("no matching ALLOW");
 			assertThat(describeError(cluster, "bob", open)).isInstanceOf(TopicAuthorizationException.class);
 
-			// super.users her iki modda gizli: parametreyle verilen süper kullanıcı ALLOW
+			// super.users is hidden in both modes: a super user given as parameter gets ALLOW
 			JsonNode admin1 = explain(cluster, "admin", "DESCRIBE", "TOPIC", denied, "superUsers", List.of("User:admin"));
 			assertThat(admin1.get("decision").asText()).isEqualTo("ALLOW");
 			assertThat(admin1.get("superUser").asBoolean()).isTrue();
@@ -213,7 +213,7 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 			JsonNode deny = ok("acls_list", zkArgs("principal", p, "permission", "DENY"));
 			assertThat(deny.get("total").asInt()).isEqualTo(1);
 			assertThat(ok("acls_list", zkArgs("filter", prefix + "-orders$")).get("total").asInt()).isEqualTo(1);
-			// aynı principal KRaft cluster'ında yok: cluster'lar karışmıyor
+			// the same principal does not exist on the KRaft cluster: clusters do not mix
 			assertThat(ok("acls_list", args("principal", p)).get("total").asInt()).isZero();
 		}
 		finally {
@@ -235,9 +235,9 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 			JsonNode r = ok("acls_who_can_access_topic", zkArgs("topic", topic, "superUsers", List.of("admin")));
 			assertThat(r.get("topicExists").asBoolean()).isTrue();
 			assertThat(r.get("aclCount").asInt()).isEqualTo(3);
-			// super.users ZooKeeper 3.9'da da gizli: parametreyle verilen liste kullanılır
+			// super.users is hidden on ZooKeeper 3.9 too: the list given as parameter is used
 			assertThat(r.get("superUsers").toString()).contains("User:admin");
-			assertThat(r.get("notes").toString()).contains("superUsers parametresindeki liste");
+			assertThat(r.get("notes").toString()).contains("list from the superUsers parameter");
 			JsonNode read = r.at("/operations/READ");
 			assertThat(field(read.get("allowed"), "principal")).containsExactly(alice);
 			assertThat(find(read.get("allowed"), "principal", alice).at("/via/0/resourceName").asText()).isEqualTo(topic);
@@ -246,9 +246,9 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 			JsonNode write = r.at("/operations/WRITE");
 			assertThat(write.get("allowed")).isEmpty();
 
-			JsonNode missing = ok("acls_who_can_access_topic", zkArgs("topic", prefix + "-yok"));
+			JsonNode missing = ok("acls_who_can_access_topic", zkArgs("topic", prefix + "-missing"));
 			assertThat(missing.get("topicExists").asBoolean()).isFalse();
-			// bob'un PREFIXED ACL'i olmayan topic'e de uygulanır
+			// bob's PREFIXED ACL also applies to the missing topic
 			assertThat(field(missing.at("/operations/READ/allowed"), "principal")).containsExactly(bob);
 		}
 		finally {
@@ -273,7 +273,7 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 			assertThat(r.at("/summary/deny").asInt()).isEqualTo(1);
 			assertThat(r.at("/summary/byResourceType/TOPIC").asInt()).isEqualTo(3);
 			JsonNode in = find(r.get("resources"), "resourceName", topic);
-			// LITERAL READ + PREFIXED WRITE kapsıyor → READ, WRITE, DESCRIBE
+			// LITERAL READ + covering PREFIXED WRITE → READ, WRITE, DESCRIBE
 			assertThat(in.get("effectiveAllow").toString()).contains("READ", "WRITE", "DESCRIBE");
 			assertThat(in.get("alsoAllowedBy").toString()).contains("PREFIXED:" + prefix);
 			JsonNode secret = find(r.get("resources"), "resourceName", prefix + "-secret");
@@ -293,7 +293,7 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 		String topic = token + "-live";
 		String group = token + "-grp";
 		createTopic(zkAdmin(), topic);
-		// group'u ZooKeeper cluster'ında oluştur (commit edilmiş offset'li boş Classic group)
+		// create the group on the ZooKeeper cluster (empty Classic group with a committed offset)
 		zkAdmin().alterConsumerGroupOffsets(group, Map.of(new TopicPartition(topic, 0), new OffsetAndMetadata(0)))
 			.all()
 			.get(15, TimeUnit.SECONDS);
@@ -332,15 +332,15 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 				zkAdmin().deleteConsumerGroups(List.of(group)).all().get(15, TimeUnit.SECONDS);
 			}
 			catch (Exception ignored) {
-				// temizlik
+				// cleanup
 			}
 			deleteTopics(zkAdmin(), topic);
 		}
 	}
 
 	/**
-	 * acls_create (preset + tek DENY binding) ve acls_delete ZooKeeper cluster'ında: etki zkAdmin ve
-	 * gerçek producer ile doğrulanır.
+	 * acls_create (preset + single DENY binding) and acls_delete on the ZooKeeper cluster: the effect is verified
+	 * with zkAdmin and a real producer.
 	 */
 	@Test
 	void createAndDeleteOnZooKeeper() throws Exception {
@@ -395,7 +395,7 @@ class AclMixedClusterTest extends MixedClusterIntegrationTest {
 			assertThat(aclsOf(zkAdmin(), p)).noneMatch(b -> b.pattern().name().startsWith(topic));
 			JsonNode none = ok("acls_delete", zkArgs("principal", user, "resourceType", "TOPIC", "resourceName", topic));
 			assertThat(none.get("deleted").asInt()).isZero();
-			assertThat(none.get("note").asText()).contains("hiçbir şey silinmedi");
+			assertThat(none.get("note").asText()).contains("nothing was deleted");
 		}
 		finally {
 			for (AclBinding b : aclsOf(zkAdmin(), p)) {

@@ -18,8 +18,8 @@ import io.github.srdrcn.kafkamcp.KafkaMcpApplication;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 
 /**
- * {@link KafkaIntegrationTest} + paylaşılan Kafka Connect worker'ı ({@link ConnectTestCluster}); her iki
- * cluster'ın da connectUrl'i tanımlıdır. Connector'ları hazırlamak için küçük REST yardımcıları içerir.
+ * {@link KafkaIntegrationTest} + the shared Kafka Connect worker ({@link ConnectTestCluster}); both clusters
+ * have a connectUrl. Contains small REST helpers for setting up connectors.
  */
 @SpringBootTest(classes = { KafkaMcpApplication.class, ConnectIntegrationTest.Config.class },
 		webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -42,7 +42,7 @@ public abstract class ConnectIntegrationTest extends KafkaIntegrationTest {
 
 	}
 
-	/** Connect REST çağrısı (test hazırlığı); gövde JSON'a çevrilir, yanıt JSON döner. */
+	/** Connect REST call (test setup); the body is serialized to JSON, the response is returned as JSON. */
 	protected static JsonNode connectRest(String method, String path, Object body) throws Exception {
 		HttpRequest.BodyPublisher publisher = body == null ? HttpRequest.BodyPublishers.noBody()
 				: HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body));
@@ -60,18 +60,18 @@ public abstract class ConnectIntegrationTest extends KafkaIntegrationTest {
 		return resp.body() == null || resp.body().isBlank() ? MAPPER.nullNode() : MAPPER.readTree(resp.body());
 	}
 
-	/** Connector oluşturur (PUT /connectors/{name}/config; varsa günceller). */
+	/** Creates a connector (PUT /connectors/{name}/config; updates it if it exists). */
 	protected static void putConnector(String name, Map<String, String> config) throws Exception {
 		connectRest("PUT", "/connectors/" + name + "/config", config);
 	}
 
-	/** Connector'ı siler; hata yutulur (temizlik). */
+	/** Deletes the connector; errors are swallowed (cleanup). */
 	protected static void deleteConnectorQuietly(String name) {
 		try {
 			connectRest("DELETE", "/connectors/" + name, null);
 		}
 		catch (Exception ignored) {
-			// temizlik
+			// cleanup
 		}
 	}
 

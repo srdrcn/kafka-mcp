@@ -23,65 +23,65 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Cluster metadata'sı: broker'lar, aktif controller, cluster modu (KRaft/ZooKeeper) ve (KRaft'ta) metadata
- * quorum'u.
+ * Cluster metadata: brokers, active controller, cluster mode (KRaft/ZooKeeper) and (on KRaft) the metadata
+ * quorum.
  *
  * <p>
- * Mod tespiti: describeMetadataQuorum başarılıysa KRaft. Değilse (yetki yok, zaman aşımı, desteklenmiyor)
- * describeFeatures'a bakılır: finalize edilmiş {@code metadata.version} varsa KRaft, finalize edilmiş feature
- * yoksa ZooKeeper (ZooKeeper broker'ları metadata.version finalize etmez). describeFeatures ApiVersions
- * üzerinden gider ve yetki istemez; ikisi de yanıtsızsa mod {@link Mode#UNKNOWN}.
+ * Mode detection: KRaft if describeMetadataQuorum succeeds. Otherwise (not authorized, timeout, not supported)
+ * describeFeatures is checked: a finalized {@code metadata.version} means KRaft, no finalized features means
+ * ZooKeeper (ZooKeeper brokers do not finalize metadata.version). describeFeatures goes through ApiVersions
+ * and needs no authorization; if neither answers, the mode is {@link Mode#UNKNOWN}.
  *
  * <p>
- * Aktif controller: KRaft'ta quorum lideri (broker'lar describeCluster'da rastgele bir canlı broker'ı
- * "controller" diye döndürür; client'lar controller'lara erişemez), ZooKeeper'da describeCluster controller'ı.
- * ZooKeeper→KRaft geçişinde ({@value #MIGRATION_ENABLE}=true) KRaft controller'ı devraldıktan sonra ZooKeeper
- * broker'ları da rastgele broker döndürür; bu yüzden ZooKeeper modunda controller broker'ının bu bayrağına bakılır
- * ve geçiş açıksa controller raporlanmaz ({@link Info#zkMigration()}). Geçiş sırasında (bazı broker'lar KRaft)
- * mod, isteği yanıtlayan broker'a göre değişebilir.
+ * Active controller: on KRaft the quorum leader (brokers return a random live broker as the "controller" in
+ * describeCluster; clients cannot reach the controllers), on ZooKeeper the describeCluster controller.
+ * During a ZooKeeper→KRaft migration ({@value #MIGRATION_ENABLE}=true), once KRaft has taken over the
+ * controller, ZooKeeper brokers also return a random broker; so in ZooKeeper mode this flag is read from the
+ * controller broker and no controller is reported while the migration is on ({@link Info#zkMigration()}).
+ * During the migration (some brokers on KRaft) the mode can depend on the broker that answers the request.
  */
 public final class ClusterMeta {
 
-	/** {@link Info#mode()} değeri: KRaft. */
+	/** {@link Info#mode()} value: KRaft. */
 	public static final String KRAFT = "KRaft";
 
-	/** {@link Info#mode()} değeri: ZooKeeper (describeMetadataQuorum desteklenmiyor). */
+	/** {@link Info#mode()} value: ZooKeeper (describeMetadataQuorum not supported). */
 	public static final String ZOOKEEPER = "ZooKeeper";
 
-	/** Mod belirlenemediğinde çıktıda kullanılan değer ({@link Mode#UNKNOWN}). */
+	/** Value used in the output when the mode cannot be determined ({@link Mode#UNKNOWN}). */
 	public static final String UNKNOWN = "unknown";
 
-	/** KRaft'ın finalize ettiği metadata sürümü feature'ı; ZooKeeper cluster'larında yoktur. */
+	/** Metadata version feature finalized by KRaft; absent on ZooKeeper clusters. */
 	public static final String METADATA_VERSION_FEATURE = "metadata.version";
 
 	/**
-	 * describeMetadataQuorum için en fazla bekleme. Quorum lideri yokken istek deadline'a kadar asılı kalır;
-	 * broker'lar topic/config sorgularına cache'ten yanıt verebildiği için kalan süre onlara bırakılır.
+	 * Maximum wait for describeMetadataQuorum. Without a quorum leader the request hangs until the deadline;
+	 * brokers can answer topic/config queries from their cache, so the remaining time is left for those.
 	 */
 	static final long QUORUM_WAIT_MS = 4_000;
 
-	/** describeFeatures (ApiVersions) için en fazla bekleme. */
+	/** Maximum wait for describeFeatures (ApiVersions). */
 	static final long FEATURES_WAIT_MS = 4_000;
 
-	/** ZooKeeper→KRaft geçiş bayrağı (broker config'i); ZooKeeper ve geçişteki KRaft broker'larında true. */
+	/** ZooKeeper→KRaft migration flag (broker config); true on ZooKeeper brokers and on migrating KRaft brokers. */
 	public static final String MIGRATION_ENABLE = "zookeeper.metadata.migration.enable";
 
-	/** ZooKeeper modunda geçiş bayrağı için controller broker'ının config'ini en fazla bekleme. */
+	/** Maximum wait for the controller broker's config when reading the migration flag in ZooKeeper mode. */
 	static final long MIGRATION_WAIT_MS = 4_000;
 
 	private ClusterMeta() {
 	}
 
-	/** Cluster modu. */
+	/** Cluster mode. */
 	public enum Mode {
 
-		/** KRaft (metadata quorum'u ya da finalize edilmiş metadata.version var). */
+		/** KRaft (has a metadata quorum or a finalized metadata.version). */
 		KRAFT(ClusterMeta.KRAFT),
 
-		/** ZooKeeper (DescribeQuorum desteklenmiyor / finalize edilmiş feature yok). */
+		/** ZooKeeper (DescribeQuorum not supported / no finalized features). */
 		ZOOKEEPER(ClusterMeta.ZOOKEEPER),
 
-		/** Belirlenemedi (quorum ve feature sorguları başarısız). */
+		/** Could not be determined (quorum and feature queries failed). */
 		UNKNOWN(ClusterMeta.UNKNOWN);
 
 		private final String label;
@@ -90,7 +90,7 @@ public final class ClusterMeta {
 			this.label = label;
 		}
 
-		/** Çıktıda kullanılan ad: "KRaft", "ZooKeeper" ya da "unknown". */
+		/** Name used in the output: "KRaft", "ZooKeeper" or "unknown". */
 		public String label() {
 			return label;
 		}
@@ -107,7 +107,7 @@ public final class ClusterMeta {
 			return this != UNKNOWN;
 		}
 
-		/** {@link Info#mode()} değerinden (null = bilinmiyor). */
+		/** From an {@link Info#mode()} value (null = unknown). */
 		public static Mode of(String label) {
 			if (ClusterMeta.KRAFT.equals(label)) {
 				return KRAFT;
@@ -126,46 +126,46 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * describeCluster sonucu. {@code controllerId} KRaft'ta quorum lideri, ZooKeeper'da describeCluster
-	 * controller'ıdır; quorum sorgulanmadıysa, KRaft'ta quorum sorgusu başarısızsa ya da ZooKeeper→KRaft geçişi
-	 * açıksa null (bu durumlarda broker'lar describeCluster'da rastgele bir broker'ı controller diye döndürür).
-	 * {@code mode} quorum sorgulanmadıysa ya da belirlenemediyse null. {@code finalizedFeatures} finalize edilmiş
-	 * feature'lar (ad → en yüksek seviye; ZooKeeper'da boş), sorgulanmadıysa ya da sorgu başarısızsa null.
-	 * {@code zkMigration} ZooKeeper modunda controller broker'ının {@value #MIGRATION_ENABLE} değeri; KRaft'ta,
-	 * sorgulanmadıysa ya da config okunamadıysa null.
+	 * describeCluster result. {@code controllerId} is the quorum leader on KRaft and the describeCluster
+	 * controller on ZooKeeper; null if the quorum was not queried, if the quorum query failed on KRaft or if a
+	 * ZooKeeper→KRaft migration is on (in these cases brokers return a random broker as the controller in
+	 * describeCluster). {@code mode} is null if the quorum was not queried or the mode could not be determined.
+	 * {@code finalizedFeatures} are the finalized features (name → max level; empty on ZooKeeper), null if not
+	 * queried or if the query failed. {@code zkMigration} is the controller broker's {@value #MIGRATION_ENABLE}
+	 * value in ZooKeeper mode; null on KRaft, if not queried or if the config could not be read.
 	 */
 	public record Info(String clusterId, List<Node> brokers, Integer controllerId, String mode, QuorumInfo quorum,
 			String quorumError, Map<String, Short> finalizedFeatures, Boolean zkMigration) {
 
-		/** Geçiş bilgisi olmadan (geriye uyumluluk). */
+		/** Without migration info (backward compatibility). */
 		public Info(String clusterId, List<Node> brokers, Integer controllerId, String mode, QuorumInfo quorum,
 				String quorumError, Map<String, Short> finalizedFeatures) {
 			this(clusterId, brokers, controllerId, mode, quorum, quorumError, finalizedFeatures, null);
 		}
 
-		/** Feature bilgisi olmadan (geriye uyumluluk). */
+		/** Without feature info (backward compatibility). */
 		public Info(String clusterId, List<Node> brokers, Integer controllerId, String mode, QuorumInfo quorum,
 				String quorumError) {
 			this(clusterId, brokers, controllerId, mode, quorum, quorumError, null, null);
 		}
 
 		/**
-		 * ZooKeeper→KRaft geçişi açık mı? true ise describeCluster controller'ı güvenilmez (KRaft controller'ı
-		 * devraldıysa ZooKeeper broker'ları rastgele broker döndürür) ve {@link #controllerId()} null'dır.
+		 * Is a ZooKeeper→KRaft migration on? If true, the describeCluster controller is unreliable (once KRaft has
+		 * taken over the controller, ZooKeeper brokers return a random broker) and {@link #controllerId()} is null.
 		 */
 		public boolean migration() {
 			return Boolean.TRUE.equals(zkMigration);
 		}
 
-		/** Broker id'leri (sıralı). */
+		/** Broker ids (sorted). */
 		public List<Integer> brokerIds() {
 			return brokers.stream().map(Node::id).toList();
 		}
 
-		/** Varsayılan broker: controller broker ise o, değilse en küçük id. */
+		/** Default broker: the controller if it is a broker, otherwise the lowest id. */
 		public int defaultBrokerId() {
 			if (brokers.isEmpty()) {
-				throw new ToolException("Cluster'da erişilebilir broker yok");
+				throw new ToolException("No reachable broker in the cluster");
 			}
 			if (controllerIsBroker()) {
 				return controllerId;
@@ -173,25 +173,25 @@ public final class ClusterMeta {
 			return brokers.get(0).id();
 		}
 
-		/** Broker'ı id ile bulur; yoksa Türkçe hata. */
+		/** Finds a broker by id; throws a readable error if it is missing. */
 		public Node broker(int id) {
 			return brokers.stream()
 				.filter(n -> n.id() == id)
 				.findFirst()
-				.orElseThrow(() -> new ToolException("Broker bulunamadı: " + id + " (mevcut: " + brokerIds() + ")"));
+				.orElseThrow(() -> new ToolException("Broker not found: " + id + " (available: " + brokerIds() + ")"));
 		}
 
-		/** Mod; {@link #mode()} null ise {@link Mode#UNKNOWN}. */
+		/** Mode; {@link Mode#UNKNOWN} if {@link #mode()} is null. */
 		public Mode clusterMode() {
 			return Mode.of(mode);
 		}
 
-		/** Aktif controller aynı zamanda erişilebilir bir broker mı (ZooKeeper ya da KRaft combined mod)? */
+		/** Is the active controller also a reachable broker (ZooKeeper or KRaft combined mode)? */
 		public boolean controllerIsBroker() {
 			return controllerId != null && brokerIds().contains(controllerId);
 		}
 
-		/** Finalize edilmiş metadata.version seviyesi (sadece KRaft) ya da null. */
+		/** Finalized metadata.version level (KRaft only) or null. */
 		public Short metadataVersionLevel() {
 			return finalizedFeatures == null ? null : finalizedFeatures.get(METADATA_VERSION_FEATURE);
 		}
@@ -199,16 +199,16 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * describeCluster (+ withQuorum ise describeMetadataQuorum ve describeFeatures) çağrılarını paralel gönderir.
-	 * Quorum ve feature'lar en fazla birkaç saniye beklenir; yanıt gelmezse {@link Info#quorumError()} dolar ve
-	 * araç devam eder. withQuorum false ise sadece describeCluster (mod ve controller null).
+	 * Sends describeCluster (+ describeMetadataQuorum and describeFeatures if withQuorum) in parallel.
+	 * Quorum and features are awaited for at most a few seconds; without a response {@link Info#quorumError()}
+	 * is set and the tool carries on. If withQuorum is false, only describeCluster (mode and controller null).
 	 */
 	public static Info describe(ToolCall call, boolean withQuorum) {
 		Admin admin = call.admin();
 		DescribeClusterResult dc = admin.describeCluster();
 		KafkaFuture<QuorumInfo> qf = withQuorum ? admin.describeMetadataQuorum().quorumInfo() : null;
 		KafkaFuture<FeatureMetadata> ff = withQuorum ? admin.describeFeatures().featureMetadata() : null;
-		// iki istek birlikte gönderildi: beklemeler gönderimden itibaren sayılır (toplam en fazla ~4 sn)
+		// both requests were sent together: waits count from sending (at most ~4 s in total)
 		long quorumEnd = System.currentTimeMillis() + QUORUM_WAIT_MS;
 		long featuresEnd = System.currentTimeMillis() + FEATURES_WAIT_MS;
 		String clusterId = call.await(dc.clusterId());
@@ -231,7 +231,7 @@ public final class ClusterMeta {
 		Map<String, Short> features = finalized(call, ff, untilMillis(featuresEnd));
 		Mode mode = resolveMode(quorum != null, quorumUnsupported, features);
 		if (mode == Mode.ZOOKEEPER) {
-			// ZooKeeper'da DescribeQuorum zaten yok: hata değil
+			// ZooKeeper has no DescribeQuorum anyway: not an error
 			quorumError = null;
 		}
 		Integer controllerId = null;
@@ -240,7 +240,7 @@ public final class ClusterMeta {
 			controllerId = quorum.leaderId() >= 0 ? quorum.leaderId() : null;
 		}
 		else if (mode == Mode.ZOOKEEPER && controller != null && !controller.isEmpty()) {
-			// geçişte KRaft controller'ı devraldıysa bu rastgele bir broker'dır: bayrak açıksa raporlanmaz
+			// in a migration KRaft may own the controller and this is a random broker: skip it if the flag is on
 			migration = zkMigration(call, admin, controller.id(), MIGRATION_WAIT_MS);
 			controllerId = Boolean.TRUE.equals(migration) ? null : controller.id();
 		}
@@ -249,8 +249,8 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * Broker config'inde ZooKeeper→KRaft geçişi açık mı ({@value #MIGRATION_ENABLE}=true)? Geçişte hem ZooKeeper
-	 * hem KRaft'a taşınmış broker'larda açıktır (geçiş sonlandırılınca kaldırılır).
+	 * Is a ZooKeeper→KRaft migration on in the broker config ({@value #MIGRATION_ENABLE}=true)? During a migration
+	 * it is on for both ZooKeeper brokers and brokers already moved to KRaft (removed once the migration is finalized).
 	 */
 	public static boolean migrationEnabled(Config brokerConfig) {
 		ConfigEntry e = brokerConfig == null ? null : brokerConfig.get(MIGRATION_ENABLE);
@@ -258,8 +258,8 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * Broker'ın {@value #MIGRATION_ENABLE} değeri (tek describeConfigs, en fazla {@code maxMillis}); config
-	 * okunamazsa (yetki yok, zaman aşımı) null. Hata fırlatmaz.
+	 * The broker's {@value #MIGRATION_ENABLE} value (a single describeConfigs, at most {@code maxMillis}); null if
+	 * the config cannot be read (not authorized, timeout). Never throws.
 	 */
 	public static Boolean zkMigration(ToolCall call, Admin admin, int brokerId, long maxMillis) {
 		try {
@@ -276,10 +276,11 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * Seçilen cluster'ın modu; araçlar (report/diagnose/acl...) moda göre davranmak için çağırır. Önce
-	 * describeFeatures (yetki istemez, broker cache'ten yanıtlar), başarısızsa describeMetadataQuorum denenir.
-	 * Her istek en fazla birkaç saniye beklenir; ikisi de yanıtsızsa {@link Mode#UNKNOWN}. Hata fırlatmaz.
-	 * ZooKeeper→KRaft geçişinde (bazı broker'lar KRaft) sonuç yanıtlayan broker'ın modudur.
+	 * Mode of the selected cluster; tools (report/diagnose/acl...) call this to adapt to the mode. Tries
+	 * describeFeatures first (needs no authorization, the broker answers from its cache), then
+	 * describeMetadataQuorum if that fails. Each request is awaited for at most a few seconds; if neither
+	 * answers, {@link Mode#UNKNOWN}. Never throws. During a ZooKeeper→KRaft migration (some brokers on KRaft)
+	 * the result is the mode of the answering broker.
 	 */
 	public static Mode mode(ToolCall call) {
 		Admin admin;
@@ -294,7 +295,7 @@ public final class ClusterMeta {
 		if (features != null) {
 			return modeOf(features);
 		}
-		// feature sorgusu hata verdiyse kalan sürede quorum denenir (zaman aşımıysa beklemeden UNKNOWN)
+		// feature query failed: try the quorum in the remaining time (after a timeout: UNKNOWN without waiting)
 		try {
 			Futures.awaitAtMost(call, admin.describeMetadataQuorum().quorumInfo(), untilMillis(end));
 			return Mode.KRAFT;
@@ -305,8 +306,8 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * Finalize edilmiş feature'lardan mod: metadata.version varsa KRaft, yoksa ZooKeeper; null ise
-	 * {@link Mode#UNKNOWN}. Değer tipi önemsizdir (FinalizedVersionRange ya da seviye).
+	 * Mode from the finalized features: KRaft if metadata.version is present, otherwise ZooKeeper;
+	 * {@link Mode#UNKNOWN} if null. The value type does not matter (FinalizedVersionRange or level).
 	 */
 	public static Mode modeOf(Map<String, ?> finalizedFeatures) {
 		if (finalizedFeatures == null) {
@@ -315,12 +316,12 @@ public final class ClusterMeta {
 		return finalizedFeatures.containsKey(METADATA_VERSION_FEATURE) ? Mode.KRAFT : Mode.ZOOKEEPER;
 	}
 
-	/** describeFeatures sonucundan mod (bkz. {@link #modeOf(Map)}). */
+	/** Mode from a describeFeatures result (see {@link #modeOf(Map)}). */
 	public static Mode modeOf(FeatureMetadata features) {
 		return modeOf(features == null ? null : features.finalizedFeatures());
 	}
 
-	/** Finalize edilmiş feature'lar: ad → en yüksek seviye (ada göre sıralı). */
+	/** Finalized features: name → max level (sorted by name). */
 	public static Map<String, Short> levels(FeatureMetadata features) {
 		Map<String, Short> out = new TreeMap<>();
 		if (features != null) {
@@ -332,9 +333,9 @@ public final class ClusterMeta {
 	}
 
 	/**
-	 * Quorum ve feature sorgularının sonucundan mod. Quorum yanıtı KRaft demektir; yoksa feature'lar belirler
-	 * (metadata.version → KRaft; eski KRaft broker'ları DescribeQuorum'u desteklemese de metadata.version'ı
-	 * finalize eder). İkisi de yoksa "desteklenmiyor" hatası ZooKeeper demektir.
+	 * Mode from the results of the quorum and feature queries. A quorum response means KRaft; otherwise the
+	 * features decide (metadata.version → KRaft; older KRaft brokers finalize metadata.version even if they do
+	 * not support DescribeQuorum). If neither is available, a "not supported" error means ZooKeeper.
 	 */
 	static Mode resolveMode(boolean quorumOk, boolean quorumUnsupported, Map<String, ?> finalizedFeatures) {
 		if (quorumOk) {
@@ -346,7 +347,7 @@ public final class ClusterMeta {
 		return quorumUnsupported ? Mode.ZOOKEEPER : Mode.UNKNOWN;
 	}
 
-	/** Gönderilmiş describeFeatures'ı en fazla {@code maxMillis} bekler; hata/zaman aşımında null. */
+	/** Waits at most {@code maxMillis} for a pending describeFeatures; null on error/timeout. */
 	private static Map<String, Short> finalized(ToolCall call, KafkaFuture<FeatureMetadata> pending, long maxMillis) {
 		try {
 			return levels(Futures.awaitAtMost(call, pending, maxMillis));
@@ -356,12 +357,12 @@ public final class ClusterMeta {
 		}
 	}
 
-	/** Verilen ana kadar kalan süre (en az 1 ms). */
+	/** Time left until the given instant (at least 1 ms). */
 	private static long untilMillis(long endEpochMillis) {
 		return Math.max(1, endEpochMillis - System.currentTimeMillis());
 	}
 
-	/** Broker'ın kompakt gösterimi: id, host, port, rack. */
+	/** Compact broker representation: id, host, port, rack. */
 	public static Map<String, Object> node(Node n) {
 		return Results.map("id", n.id(), "host", n.host(), "port", n.port(), "rack", n.hasRack() ? n.rack() : null);
 	}

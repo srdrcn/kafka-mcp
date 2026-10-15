@@ -9,15 +9,15 @@ import io.github.srdrcn.kafkamcp.kafka.Configs;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Config değerlerini okuma: sayı/bool ayrıştırma ve kaynağın sınıflandırılması ({@code topic}: topic
- * override'ı, {@code broker}: broker config'i, {@code default}: Kafka varsayılanı).
+ * Reading config values: number/boolean parsing and classifying the source ({@code topic}: topic override,
+ * {@code broker}: broker config, {@code default}: Kafka default).
  */
 public final class ConfigValues {
 
 	private ConfigValues() {
 	}
 
-	/** Sayısal değer; yoksa ya da sayı değilse null. */
+	/** Numeric value; null if missing or not a number. */
 	public static Long longValue(Config c, String key) {
 		ConfigEntry e = c == null ? null : c.get(key);
 		if (e == null || e.value() == null || e.isSensitive()) {
@@ -31,7 +31,7 @@ public final class ConfigValues {
 		}
 	}
 
-	/** Ondalık değer (ör. min.cleanable.dirty.ratio); yoksa null. */
+	/** Decimal value (e.g. min.cleanable.dirty.ratio); null if missing. */
 	public static Double doubleValue(Config c, String key) {
 		ConfigEntry e = c == null ? null : c.get(key);
 		if (e == null || e.value() == null || e.isSensitive()) {
@@ -45,30 +45,30 @@ public final class ConfigValues {
 		}
 	}
 
-	/** Değer "true" mu? */
+	/** Is the value "true"? */
 	public static boolean isTrue(Config c, String key) {
 		ConfigEntry e = c == null ? null : c.get(key);
 		return e != null && "true".equalsIgnoreCase(String.valueOf(e.value()).trim());
 	}
 
-	/** Metin değeri (hassas ise maske); yoksa null. */
+	/** Text value (masked if sensitive); null if missing. */
 	public static String text(Config c, String key) {
 		return c == null ? null : Configs.value(c.get(key));
 	}
 
-	/** cleanup.policy compact içeriyor mu? */
+	/** Does cleanup.policy contain compact? */
 	public static boolean compacted(Config c) {
 		String p = text(c, "cleanup.policy");
 		return p != null && p.contains("compact");
 	}
 
-	/** cleanup.policy delete içeriyor mu (yoksa varsayılan delete)? */
+	/** Does cleanup.policy contain delete (delete by default if missing)? */
 	public static boolean deletes(Config c) {
 		String p = text(c, "cleanup.policy");
 		return p == null || p.contains("delete");
 	}
 
-	/** Kaynak sınıfı: topic (override), broker (broker config'i), default (Kafka varsayılanı) ya da unknown. */
+	/** Source class: topic (override), broker (broker config), default (Kafka default) or unknown. */
 	public static String source(ConfigEntry e) {
 		if (e == null || e.source() == null) {
 			return null;
@@ -82,7 +82,7 @@ public final class ConfigValues {
 		};
 	}
 
-	/** Bulgu öğesi: {topic, config, value, source}. */
+	/** Finding item: {topic, config, value, source}. */
 	public static Map<String, Object> item(String topic, Config c, String key) {
 		ConfigEntry e = c == null ? null : c.get(key);
 		return Results.map("topic", topic, "config", key, "value", Configs.value(e), "source", source(e));

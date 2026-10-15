@@ -41,11 +41,11 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 import io.github.srdrcn.kafkamcp.toolsets.schemaregistry.SchemaRegistryApi;
 
-/** Cluster özeti ve topic sıralamaları (boyut, partition, consumer, yazma hızı). */
+/** Cluster summary and topic rankings (size, partitions, consumers, write rate). */
 @Component
 public class ClusterReportTools {
 
-	/** Özetteki lag sayımı için en fazla incelenen grup. */
+	/** Maximum number of groups examined for the lag counts in the summary. */
 	static final int SUMMARY_LAG_GROUPS = 500;
 
 	static final List<String> TOP_BY = List.of("size", "partitions", "consumers", "write_rate");
@@ -62,11 +62,11 @@ public class ClusterReportTools {
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("report_cluster_summary",
-						"Cluster özeti: mod/sürüm, broker, topic/partition, boyut, URP/offline, grup durumları ve lag, en büyük topic'ler, connector/subject sayısı")
+						"Cluster summary: mode/version, brokers, topics/partitions, size, URP/offline, group states and lag, largest topics, connectors/subjects")
 					.handler(this::clusterSummary),
 				ToolSpec.read("report_top_topics",
-						"Topic sıralaması: boyut, partition sayısı, consumer group sayısı ya da yazma hızına göre ilk N")
-					.required("by", P.enumOf("Sıralama ölçütü", TOP_BY))
+						"Top N topics by size, partition count, consumer group count or write rate")
+					.required("by", P.enumOf("Ranking metric", TOP_BY))
 					.listParams(20)
 					.param("intervalSeconds", ReportParams.intervalSeconds())
 					.handler(this::topTopics));
@@ -100,7 +100,7 @@ public class ClusterReportTools {
 		Topics.Reassignments reassignments = Topics.reassignments(call, pendingReassignments);
 		if (reassignments.error() != null) {
 			coverage.error("listPartitionReassignments", reassignments.error());
-			coverage.note("Reassignment listesi alınamadı: URP sayısı taşınmakta olan (eklenen) replikaları da içerebilir");
+			coverage.note("Could not list reassignments: the URP count may include replicas being added by a reassignment");
 		}
 
 		Map<String, Object> out = new LinkedHashMap<>();
@@ -135,7 +135,7 @@ public class ClusterReportTools {
 				}
 			}
 		}
-		// sürüm (KRaft: metadata.version; ZooKeeper: inter.broker.protocol.version)
+		// version (KRaft: metadata.version; ZooKeeper: inter.broker.protocol.version)
 		if (metadataVersion != null) {
 			int level = metadataVersion.maxVersionLevel();
 			String name = KafkaVersions.metadataVersion(level);
@@ -171,8 +171,8 @@ public class ClusterReportTools {
 				scan.configs().isEmpty() && !scan.topics().isEmpty() ? null : minIsr.aboveRfTopics(),
 				"reassigningPartitions", reassignments.byPartition().isEmpty() ? null : reassignments.byPartition().size()));
 		if (minIsr.aboveRfTopics() > 0) {
-			coverage.note("minIsrAboveRfTopics: min.insync.replicas > RF (ayrıntı: report_replication_audit); "
-					+ "underMinIsrPartitions etkin min ISR'a göre: min(min.insync.replicas, replika sayısı)");
+			coverage.note("minIsrAboveRfTopics: min.insync.replicas > RF (details: report_replication_audit); "
+					+ "underMinIsrPartitions uses the effective min ISR: min(min.insync.replicas, replica count)");
 		}
 		int empty = 0;
 		for (String t : scan.topics().keySet()) {
@@ -204,7 +204,7 @@ public class ClusterReportTools {
 				"allReplicas", Format.bytes(total), "complete", scan.sizesComplete() ? null : false);
 	}
 
-	/** Grup sayıları duruma göre ve lag'i olan grup sayısı (örneklenmiş olabilir). */
+	/** Group counts by state and the number of groups with lag (may be sampled). */
 	private static Map<String, Object> groups(FleetScan scan) {
 		GroupScan g = scan.groups();
 		if (g == null) {
@@ -241,7 +241,7 @@ public class ClusterReportTools {
 		return Results.map("total", g.listed().size(), "byState", byState, "withLag", withLag, "lagExamined",
 				g.committed().size(), "lagSampled", g.skipped() > 0 ? true : null, "lagSkipped",
 				g.skipped() > 0 ? g.skipped() : null, "lagUnknown", lagUnknown > 0 ? lagUnknown : null, "note",
-				"withLag: incelenen grupların commit'li offset'i ile latest arasındaki fark > 0");
+				"withLag: examined groups whose committed offsets are behind latest (difference > 0)");
 	}
 
 	private static List<Map<String, Object>> largest(FleetScan scan, int n) {
@@ -282,7 +282,7 @@ public class ClusterReportTools {
 	Object topTopics(ToolCall call) {
 		String by = call.str("by");
 		if (!TOP_BY.contains(by)) {
-			throw new ToolException("Geçersiz by: " + by + " (geçerli: " + String.join(", ", TOP_BY) + ")");
+			throw new ToolException("Invalid by: " + by + " (valid: " + String.join(", ", TOP_BY) + ")");
 		}
 		int limit = call.limit(20);
 		if ("write_rate".equals(by)) {
@@ -320,11 +320,11 @@ public class ClusterReportTools {
 		}
 		Map<String, Object> out = Results.map("by", by);
 		if ("size".equals(by) && !scan.sizesComplete()) {
-			scan.coverage().note("Boyut sıralaması eksik log dizini verisiyle yapıldı");
+			scan.coverage().note("Size ranking is based on incomplete log dir data");
 		}
 		if ("consumers".equals(by)) {
 			scan.coverage()
-				.note("consumers: topic'te commit'li offset'i olan grup sayısı; commit etmeyen okuyucular görünmez");
+				.note("consumers: number of groups with committed offsets on the topic; readers that do not commit are not visible");
 		}
 		scan.coverage().addTo(out);
 		out.putAll(ReportParams.page("topics", rows, limit));
@@ -333,7 +333,7 @@ public class ClusterReportTools {
 		return out;
 	}
 
-	/** Metriğe göre azalan, eşitlikte ada göre sıralı topic adları. */
+	/** Topic names sorted by metric (descending), ties broken by name. */
 	private static List<String> rank(Map<String, Long> metric) {
 		List<String> names = new ArrayList<>(metric.keySet());
 		names.sort(Comparator.comparing((String t) -> metric.get(t) == null ? -1L : metric.get(t))
@@ -344,7 +344,7 @@ public class ClusterReportTools {
 
 	private Object writeRate(ToolCall call, int limit) {
 		int intervalMs = call.integer("intervalSeconds", 5, 1, 10) * 1000;
-		// boyutlar (bağlam) örneklerle paralel tamamlanır; örneklemeden önce beklenmez
+		// sizes (context) complete in parallel with the samples; they are not awaited before sampling
 		FleetScan scan = FleetScan.of(call).deferSizes().run();
 		Coverage coverage = scan.coverage();
 		List<TopicPartition> online = Topics.onlinePartitions(scan.topics().values());
@@ -353,7 +353,7 @@ public class ClusterReportTools {
 		long available = call.remainingMillis() - 2_500;
 		long sleepMs = Math.min(intervalMs, available);
 		if (sleepMs < 500) {
-			throw new ToolException("İki örnek için yeterli süre kalmadı; daha dar filtre deneyin");
+			throw new ToolException("Not enough time left for two samples; try a narrower filter");
 		}
 		call.sleep(sleepMs);
 		Map<TopicPartition, Long> second = latest(call, online, 1_000);
@@ -399,7 +399,7 @@ public class ClusterReportTools {
 		return out;
 	}
 
-	/** Tüm partition'ların latest offset'i (tek listOffsets); deadline'dan reserve pay bırakır. */
+	/** Latest offsets of all partitions (one listOffsets); keeps reserve ms before the deadline. */
 	static Map<TopicPartition, Long> latest(ToolCall call, List<TopicPartition> tps, long reserve) {
 		Map<TopicPartition, Long> out = new HashMap<>();
 		if (tps.isEmpty()) {

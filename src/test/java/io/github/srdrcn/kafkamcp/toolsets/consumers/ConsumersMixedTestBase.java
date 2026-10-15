@@ -36,12 +36,12 @@ import io.github.srdrcn.kafkamcp.support.TestConfigs;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * consumers karışık ortam testleri için cluster'a göre ({@link #ZK} ya da {@link #KRAFT}) hazırlık: topic,
- * veri, gerçek consumer group'lar (classic ya da KIP-848 consumer protokolü), commit ve doğrulama okumaları.
+ * Per-cluster ({@link #ZK} or {@link #KRAFT}) setup for the consumers mixed-environment tests: topics, data,
+ * real consumer groups (classic or KIP-848 consumer protocol), commits and verification reads.
  */
 abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 
-	/** ZooKeeper modlu cluster (Kafka 3.9, AclAuthorizer). */
+	/** ZooKeeper-mode cluster (Kafka 3.9, AclAuthorizer). */
 	static final String ZK = ZK_CLUSTER;
 
 	/** KRaft cluster (Kafka 4.1, StandardAuthorizer). */
@@ -49,14 +49,14 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 
 	static final String CLASSIC = "classic";
 
-	/** KIP-848 consumer rebalance protokolü (sadece KRaft). */
+	/** KIP-848 consumer rebalance protocol (KRaft only). */
 	static final String CONSUMER = "consumer";
 
 	private static final Map<String, KafkaProducer<byte[], byte[]>> PRODUCERS = new HashMap<>();
 
 	private final List<KafkaConsumer<byte[], byte[]>> consumers = new ArrayList<>();
 
-	/** Aracın argümanları; cluster açıkça verilir. */
+	/** Tool arguments; the cluster is given explicitly. */
 	static Map<String, Object> on(String cluster, Object... keyValues) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("cluster", cluster);
@@ -77,8 +77,8 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 
 	static synchronized KafkaProducer<byte[], byte[]> producer(String cluster) {
 		return PRODUCERS.computeIfAbsent(cluster, c -> {
-			// Yeni topic'te ilk batch NOT_LEADER alınca idempotent producer'ın OUT_OF_ORDER_SEQUENCE
-			// döngüsüne girmemesi için idempotence kapalı, tek in-flight istek.
+			// Idempotence off and a single in-flight request, so that the idempotent producer does not loop on
+			// OUT_OF_ORDER_SEQUENCE when the first batch on a new topic gets NOT_LEADER.
 			Map<String, Object> overrides = Map.of(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, false,
 					ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 1, ProducerConfig.ACKS_CONFIG, "all");
 			return ZK.equals(c) ? ZkKafkaTestCluster.producer(overrides) : KafkaTestCluster.producer(overrides);
@@ -98,7 +98,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 				c.close(Duration.ofSeconds(10));
 			}
 			catch (RuntimeException ignored) {
-				// test bitti
+				// test is over
 			}
 		}
 		consumers.clear();
@@ -120,10 +120,10 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 			catch (Exception e) {
 				return false;
 			}
-		}, "topic hazır olmadı: " + cluster + "/" + topic);
+		}, "topic not ready: " + cluster + "/" + topic);
 	}
 
-	/** Partition'a count mesaj yazar (timestamp: baseTs + i*1000, baseTs < 0 ise broker zamanı). */
+	/** Writes count messages to the partition (timestamp: baseTs + i*1000, broker time if baseTs < 0). */
 	static void produce(String cluster, String topic, int partition, int count, long baseTs) throws Exception {
 		KafkaProducer<byte[], byte[]> p = producer(cluster);
 		List<Future<RecordMetadata>> sent = new ArrayList<>();
@@ -142,8 +142,8 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * count consumer'ı aynı gruba katar (protocol: classic ya da consumer); hepsi atama alıp grup Stable olana
-	 * kadar sırayla poll eder (test sonunda kapanır). clientId'ler clientIdPrefix-0, -1, ...
+	 * Joins count consumers to the same group (protocol: classic or consumer); polls them in turn until all have an
+	 * assignment and the group is Stable (closed at the end of the test). clientIds are clientIdPrefix-0, -1, ...
 	 */
 	List<KafkaConsumer<byte[], byte[]>> joinAll(String cluster, String protocol, String group, String clientIdPrefix,
 			int count, List<String> topics) {
@@ -157,7 +157,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		while (members.stream().anyMatch(c -> c.assignment().isEmpty())
 				|| state(cluster, group) != GroupState.STABLE) {
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("Consumer'lar gruba katılamadı: " + cluster + "/" + group);
+				throw new IllegalStateException("Consumers could not join the group: " + cluster + "/" + group);
 			}
 			members.forEach(c -> c.poll(Duration.ofMillis(100)));
 		}
@@ -168,7 +168,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		return joinAll(cluster, protocol, group, clientId, 1, List.of(topic)).get(0);
 	}
 
-	/** Gruba katılacak (henüz subscribe olmamış) consumer; test sonunda kapanır. */
+	/** Consumer that will join the group (not subscribed yet); closed at the end of the test. */
 	KafkaConsumer<byte[], byte[]> newGroupConsumer(String cluster, String protocol, String group, String clientId) {
 		Map<String, Object> p = clientProperties(cluster);
 		p.put(ConsumerConfig.GROUP_ID_CONFIG, group);
@@ -183,7 +183,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		return c;
 	}
 
-	/** Consumer'ı kapatır (gruptan ayrılır) ve listeden çıkarır. */
+	/** Closes the consumer (it leaves the group) and removes it from the list. */
 	void leave(KafkaConsumer<byte[], byte[]> c) {
 		c.close(Duration.ofSeconds(30));
 		consumers.remove(c);
@@ -195,12 +195,12 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		c.commitSync(m, Duration.ofSeconds(60));
 	}
 
-	/** Gerçek consumer ile katılıp commit eder ve kapanır: grup Empty kalır (classic ya da consumer tipi). */
+	/** Joins with a real consumer, commits and closes it: the group stays Empty (classic or consumer type). */
 	void emptyGroup(String cluster, String protocol, String group, String topic, Map<Integer, Long> offsets) {
 		KafkaConsumer<byte[], byte[]> c = join(cluster, protocol, group, group + "-client", topic);
 		commit(c, topic, offsets);
 		leave(c);
-		waitUntil(() -> state(cluster, group) == GroupState.EMPTY, "grup Empty olmadı: " + cluster + "/" + group);
+		waitUntil(() -> state(cluster, group) == GroupState.EMPTY, "group did not become Empty: " + cluster + "/" + group);
 	}
 
 	static ConsumerGroupDescription describe(String cluster, String group) throws Exception {
@@ -219,7 +219,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** partition → committed offset (cluster'ın admin'iyle). */
+	/** partition → committed offset (via the cluster's admin). */
 	static Map<Integer, Long> committed(String cluster, String group, String topic) throws Exception {
 		Map<TopicPartition, OffsetAndMetadata> m = admin(cluster).listConsumerGroupOffsets(group)
 			.partitionsToOffsetAndMetadata()
@@ -233,7 +233,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		return out;
 	}
 
-	/** Admin ile offset commit'i (üyesi olmayan "simple" gruplar için). */
+	/** Offset commit via admin (for "simple" groups without members). */
 	static void alter(String cluster, String group, String topic, Map<Integer, Long> offsets) throws Exception {
 		Map<TopicPartition, OffsetAndMetadata> m = new HashMap<>();
 		offsets.forEach((p, o) -> m.put(new TopicPartition(topic, p), new OffsetAndMetadata(o)));
@@ -241,9 +241,9 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * Taze cluster'da __consumer_offsets ilk group isteğiyle oluşturulur; o sırada koordinatör bulunamaz ve
-	 * aracın admin'i (retries=3) hemen vazgeçer. Test admin'i (sınırsız retry) ile koordinatörün hazır olması
-	 * beklenir.
+	 * On a fresh cluster __consumer_offsets is created by the first group request; until then the coordinator
+	 * cannot be found and the tool's admin (retries=3) gives up at once. Waits with the test admin (unlimited
+	 * retries) until the coordinator is ready.
 	 */
 	static void awaitGroupCoordinator(String cluster) throws Exception {
 		admin(cluster).listConsumerGroupOffsets(unique("warmup"))
@@ -276,7 +276,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** Arka planda iş çalıştırır (ör. araç çağrısı sürerken üretim); close() ile durur. */
+	/** Runs a task in the background (e.g. producing while a tool call runs); stops on close(). */
 	static final class Background implements AutoCloseable {
 
 		private final Thread thread;
@@ -308,7 +308,7 @@ abstract class ConsumersMixedTestBase extends MixedClusterIntegrationTest {
 			running = false;
 			thread.join(30_000);
 			if (failure != null) {
-				throw new AssertionError("Arka plan işi hata verdi", failure);
+				throw new AssertionError("Background task failed", failure);
 			}
 		}
 

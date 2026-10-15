@@ -24,7 +24,7 @@ import io.github.srdrcn.kafkamcp.support.ConnectIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** connect araç testleri için ortak yardımcılar: topic/connector hazırlığı, REST doğrulaması, sınırlı bekleme. */
+/** Shared helpers for the connect tool tests: topic/connector setup, REST checks, bounded waiting. */
 abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 
 	static final Duration WAIT = Duration.ofSeconds(90);
@@ -47,13 +47,13 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 				rest.delete(TestConfigs.CLUSTER, ConnectApi.path(name));
 			}
 			catch (RuntimeException ignored) {
-				// test zaten silmiş olabilir
+				// the test may have deleted it already
 			}
 		}
 		created.clear();
 	}
 
-	/** Test sonunda silinecek connector adı olarak kaydeder. */
+	/** Registers the name as a connector to delete at the end of the test. */
 	protected String track(String name) {
 		created.add(name);
 		return name;
@@ -72,7 +72,7 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 		}
 	}
 
-	/** Verilen topic'i okuyup connect container'ında /tmp altına yazan FileStreamSink config'i. */
+	/** FileStreamSink config that reads the given topic and writes it to a file in the connect container. */
 	protected static Map<String, Object> sinkConfig(String topic, String file) {
 		Map<String, Object> c = new LinkedHashMap<>();
 		c.put("connector.class", FILE_SINK);
@@ -84,7 +84,7 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 		return c;
 	}
 
-	/** Container'daki /etc/passwd'yi topic'e yazan FileStreamSource config'i (offset'i hemen oluşur). */
+	/** FileStreamSource config that writes the container's /etc/passwd to the topic (its offset appears right away). */
 	protected static Map<String, Object> sourceConfig(String topic) {
 		Map<String, Object> c = new LinkedHashMap<>();
 		c.put("connector.class", FILE_SOURCE);
@@ -94,13 +94,13 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 		return c;
 	}
 
-	/** connectors_create_or_update aracıyla oluşturur ve temizlik için kaydeder. */
+	/** Creates the connector with the connectors_create_or_update tool and registers it for cleanup. */
 	protected JsonNode create(String name, Map<String, Object> config) {
 		track(name);
 		return ok("connectors_create_or_update", args("name", name, "config", config));
 	}
 
-	/** REST ile connector durumu ({@code GET /connectors/{name}/status}). */
+	/** Connector status via REST ({@code GET /connectors/{name}/status}). */
 	protected JsonNode restStatus(String name) {
 		return rest.get(TestConfigs.CLUSTER, ConnectApi.path(name) + "/status");
 	}
@@ -118,9 +118,9 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 		return Optional.empty();
 	}
 
-	/** Connector ve görev 0 verilen durumda olana kadar bekler. */
+	/** Waits until task 0 of the connector is in the given state. */
 	protected JsonNode awaitTaskState(String name, String taskState) {
-		return await(name + " görev 0 " + taskState, () -> restStatus(name),
+		return await(name + " task 0 " + taskState, () -> restStatus(name),
 				s -> task(s, 0).map(t -> taskState.equals(t.path("state").asText())).orElse(false));
 	}
 
@@ -128,7 +128,7 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 		return await(name + " " + connectorState, () -> restStatus(name), s -> connectorState.equals(state(s)));
 	}
 
-	/** Koşul sağlanana kadar (en fazla {@link #WAIT}) yoklar; hatalar/AssertionError'lar yeniden denenir. */
+	/** Polls until the condition holds (at most {@link #WAIT}); errors/AssertionErrors are retried. */
 	protected static <T> T await(String what, Supplier<T> supplier, Predicate<T> done) {
 		long end = System.nanoTime() + WAIT.toNanos();
 		T last = null;
@@ -149,10 +149,10 @@ abstract class ConnectToolTestBase extends ConnectIntegrationTest {
 			}
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
-				throw new AssertionError("kesildi", e);
+				throw new AssertionError("interrupted", e);
 			}
 		}
-		throw new AssertionError("Beklenen durum oluşmadı: " + what + " (son: " + last + ")", lastError);
+		throw new AssertionError("Expected state not reached: " + what + " (last: " + last + ")", lastError);
 	}
 
 	protected static List<String> texts(JsonNode array) {

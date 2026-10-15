@@ -11,12 +11,13 @@ import org.apache.kafka.common.errors.DelegationTokenDisabledException;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.junit.jupiter.api.Test;
 
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * BrokerSecurity'nin mod çıkarımı ve moda özgü anahtarları (Kafka gerekmez): tek düğümlü testlerin
- * gösteremediği KRaft 3.x (zookeeper.* varsayılanlarıyla), ZooKeeper 2.x (process.roles yok), ZK→KRaft
- * geçişi ve yerleşik olmayan authorizer durumları.
+ * BrokerSecurity mode detection and mode-specific keys (no Kafka needed): cases the single-node tests cannot
+ * show, i.e. KRaft 3.x (with zookeeper.* defaults), ZooKeeper 2.x (no process.roles), ZK→KRaft migration and
+ * non-built-in authorizers.
  */
 class BrokerSecurityModeTest {
 
@@ -53,7 +54,7 @@ class BrokerSecurityModeTest {
 		BrokerSecurity b = new BrokerSecurity(3, l);
 		assertThat(b.mode()).isEqualTo("KRaft");
 		Map<String, Object> r = b.render();
-		// SASL_SSL controller/broker listener'larında mekanizma anlamlı: gösterilir
+		// On SASL_SSL controller/broker listeners the mechanism is meaningful: it is shown
 		assertThat(r).containsEntry("process.roles", "broker")
 			.containsEntry("controller.listener.names", "CONTROLLER")
 			.containsEntry("controllerListenerSecurityProtocol", "SASL_SSL")
@@ -66,8 +67,8 @@ class BrokerSecurityModeTest {
 	}
 
 	/**
-	 * Controller/broker listener'ı SASL değilse broker sasl.mechanism.*.protocol'ü varsayılanla (GSSAPI)
-	 * döndürür: mekanizma gösterilmez, listener'ın protokolü gösterilir (Strimzi gibi mTLS controller da).
+	 * If the controller/broker listener is not SASL the broker returns sasl.mechanism.*.protocol with the default
+	 * (GSSAPI): the mechanism is not shown, the listener protocol is (also for an mTLS controller as in Strimzi).
 	 */
 	@Test
 	void kraftNonSaslListenersHideDefaultMechanisms() {
@@ -93,7 +94,7 @@ class BrokerSecurityModeTest {
 			.doesNotContainKey("sasl.mechanism.controller.protocol");
 	}
 
-	/** inter.broker.listener.name yoksa security.inter.broker.protocol; listener adı protokol adı olabilir. */
+	/** Without inter.broker.listener.name, security.inter.broker.protocol; a listener name may be a protocol name. */
 	@Test
 	void interBrokerProtocolWithoutListenerName() {
 		List<ConfigEntry> l = common("kafka.security.authorizer.AclAuthorizer");
@@ -109,7 +110,7 @@ class BrokerSecurityModeTest {
 			.doesNotContainKey("controllerListenerSecurityProtocol");
 	}
 
-	/** KIP-679: 2.8 öncesi ZooKeeper broker'larında idempotent producer CLUSTER IDEMPOTENT_WRITE ister. */
+	/** KIP-679: on ZooKeeper brokers older than 2.8 the idempotent producer needs CLUSTER IDEMPOTENT_WRITE. */
 	@Test
 	void idempotentWriteRequirementByModeAndIbp() {
 		assertThat(zkWithIbp("2.7-IV2").idempotentWriteRequired()).isTrue();
@@ -121,7 +122,7 @@ class BrokerSecurityModeTest {
 		List<ConfigEntry> kraft = common("org.apache.kafka.metadata.authorizer.StandardAuthorizer");
 		kraft.add(entry("process.roles", "broker"));
 		assertThat(new BrokerSecurity(1, kraft).idempotentWriteRequired()).isFalse();
-		assertThat(BrokerSecurity.unavailable("yetki yok").idempotentWriteRequired()).isNull();
+		assertThat(BrokerSecurity.unavailable("not authorized").idempotentWriteRequired()).isNull();
 	}
 
 	private static BrokerSecurity zkWithIbp(String ibp) {
@@ -133,19 +134,19 @@ class BrokerSecurityModeTest {
 		return new BrokerSecurity(1, l);
 	}
 
-	/** allow.everyone.if.no.acl.found gizliyse parametre kullanılır; o da yoksa false varsayılır (assumed). */
+	/** If allow.everyone.if.no.acl.found is hidden the parameter is used; without it false is assumed. */
 	@Test
 	void allowEveryoneFromParameterWhenHidden() {
 		BrokerSecurity hidden = new BrokerSecurity(1, common("kafka.security.authorizer.AclAuthorizer"));
 		BrokerSecurity.AllowEveryone assumed = hidden.allowEveryone(null);
 		assertThat(assumed.value()).isFalse();
 		assertThat(assumed.assumed()).isTrue();
-		assertThat(assumed.note()).contains("false kabul edildi").contains("allowEveryoneIfNoAclFound");
+		assertThat(assumed.note()).contains("assumed the Kafka default false").contains("allowEveryoneIfNoAclFound");
 		assertThat(hidden.allowEveryone()).isEqualTo(assumed);
 		BrokerSecurity.AllowEveryone provided = hidden.allowEveryone(true);
 		assertThat(provided.value()).isTrue();
 		assertThat(provided.assumed()).isFalse();
-		assertThat(provided.note()).contains("parametresindeki değer (true)");
+		assertThat(provided.note()).contains("allowEveryoneIfNoAclFound parameter (true)");
 
 		List<ConfigEntry> l = new ArrayList<>();
 		l.add(entry("allow.everyone.if.no.acl.found", "false"));
@@ -153,7 +154,7 @@ class BrokerSecurityModeTest {
 		BrokerSecurity.AllowEveryone fromBroker = visible.allowEveryone(true);
 		assertThat(fromBroker.value()).isFalse();
 		assertThat(fromBroker.assumed()).isFalse();
-		assertThat(fromBroker.note()).contains("yok sayıldı");
+		assertThat(fromBroker.note()).contains("parameter ignored");
 		assertThat(visible.allowEveryone(false).note()).isNull();
 	}
 
@@ -199,9 +200,9 @@ class BrokerSecurityModeTest {
 				common("io.confluent.kafka.security.authorizer.ConfluentServerAuthorizer"));
 		assertThat(custom.mode()).isNull();
 		assertThat(custom.modeKeys()).isEmpty();
-		assertThat(custom.customAuthorizerNote()).contains("ConfluentServerAuthorizer").contains("yerleşik değil");
+		assertThat(custom.customAuthorizerNote()).contains("ConfluentServerAuthorizer").contains("is not built in");
 
-		BrokerSecurity unavailable = BrokerSecurity.unavailable("Cluster yetkisi yok (ACL)");
+		BrokerSecurity unavailable = BrokerSecurity.unavailable("Not authorized for the cluster (ACL)");
 		assertThat(unavailable.mode()).isNull();
 		assertThat(unavailable.authorizer()).isNull();
 		assertThat(unavailable.customAuthorizerNote()).isNull();
@@ -210,17 +211,19 @@ class BrokerSecurityModeTest {
 
 	@Test
 	void unsupportedVersionNotes() {
-		ToolException wrapped = new ToolException("Broker bu işlemi desteklemiyor (sürüm)",
+		ToolException wrapped = new ToolException(KafkaErrors.UNSUPPORTED,
 				new UnsupportedVersionException("The node does not support DESCRIBE_USER_SCRAM_CREDENTIALS"));
-		assertThat(Acls.unsupportedNote(wrapped, "X 2.7+ gerektirir"))
-			.isEqualTo("Broker bu işlemi desteklemiyor (sürüm): X 2.7+ gerektirir");
-		assertThat(Acls.unsupportedNote(new ToolException("başka hata"), "X")).isNull();
-		assertThat(SecurityTools.tokenNote(wrapped)).contains("desteklemiyor (sürüm)").contains("KRaft'ta 3.6+");
-		// SCRAM: KRaft'ta KIP-900 (3.5) gerekir, 2.7 değil
-		assertThat(Acls.unsupportedNote(wrapped, SecurityTools.SCRAM_REQUIREMENT)).contains("ZooKeeper'da Kafka 2.7+")
-			.contains("KRaft'ta 3.5+");
-		// 3.0 öncesi ZooKeeper broker'ları delegation.token.secret.key'i tanımaz
-		assertThat(SecurityTools.tokenNote(new ToolException("Delegation token kapalı",
+		assertThat(Acls.unsupportedNote(wrapped, "X requires 2.7+"))
+			.isEqualTo(KafkaErrors.UNSUPPORTED + ": X requires 2.7+")
+			.isEqualTo("Broker does not support this operation (version): X requires 2.7+");
+		assertThat(Acls.unsupportedNote(new ToolException("other error"), "X")).isNull();
+		assertThat(SecurityTools.tokenNote(wrapped)).contains("does not support the delegation token API (version)")
+			.contains("3.6+ on KRaft");
+		// SCRAM: KRaft needs KIP-900 (3.5), not 2.7
+		assertThat(Acls.unsupportedNote(wrapped, SecurityTools.SCRAM_REQUIREMENT)).contains("Kafka 2.7+ on ZooKeeper")
+			.contains("3.5+ on KRaft");
+		// ZooKeeper brokers older than 3.0 do not know delegation.token.secret.key
+		assertThat(SecurityTools.tokenNote(new ToolException("Delegation tokens disabled",
 				new DelegationTokenDisabledException("Delegation Token feature is not enabled"))))
 			.contains("delegation.token.secret.key")
 			.contains("delegation.token.master.key");

@@ -11,13 +11,13 @@ import org.springframework.core.type.filter.AssignableTypeFilter;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
 /**
- * Classpath'teki toolset adları ({@code toolsets/<ad>} paket adından). Testlerde "tüm toolset'ler açık"
- * config'i üretmek için kullanılır; toolset'in {@code name()} değerinin paket adıyla aynı olduğu
- * {@code ToolSchemaSnapshotTest}'te doğrulanır.
+ * Toolset names on the classpath (from the {@code toolsets/<name>} package name). Used by tests to build an
+ * "all toolsets enabled" config; {@code ToolSchemaSnapshotTest} checks that a toolset's {@code name()} matches
+ * its package name.
  */
 public final class TestToolsets {
 
-	/** Listeleme sırası (README'deki sıra). Burada olmayanlar sona alfabetik eklenir. */
+	/** Listing order (the order in the README). Toolsets not listed here are appended alphabetically. */
 	public static final List<String> ORDER = List.of("core", "messages", "consumers", "acl", "connect",
 			"schemaregistry", "report", "diagnose");
 

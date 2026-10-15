@@ -53,17 +53,17 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.ConsumerGroups;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.Settled;
 import io.github.srdrcn.kafkamcp.toolsets.diagnose.Checks.Check;
 
-/** diagnose_topic: tek çağrıda topic sağlık teşhisi. */
+/** diagnose_topic: single-call topic health diagnosis. */
 @Component
 public class DiagnoseTopicTools {
 
-	/** Bu lag'in üstü (büyümüyor/takılı değilse de) bilgi bulgusu. */
+	/** Lag above this is an info finding (even if it is not growing or stuck). */
 	static final long HIGH_LAG = 10_000;
 
-	/** Lag büyüyor uyarısı için en az lag. */
+	/** Minimum lag for the growing-lag warning. */
 	static final long GROWING_LAG_MIN = 100;
 
-	/** Son yazma bundan eskiyse topic boşta sayılır. */
+	/** The topic counts as idle if the last write is older than this. */
 	static final long IDLE_SECONDS = 7L * 24 * 3600;
 
 	static final long SKEW_MIN_BYTES = 64L * 1024 * 1024;
@@ -74,7 +74,7 @@ public class DiagnoseTopicTools {
 
 	private static final long LIST_GROUPS_MAX_MS = 3_000;
 
-	/** İkinci örnekten sonra kayıt yaşı okuması ve grup describe'ı için bırakılan süre. */
+	/** Time left after the second sample for reading record ages and describing groups. */
 	private static final long WINDOW_RESERVE_MS = 4_000;
 
 	private static final long DESCRIBE_GROUPS_RESERVE_MS = 1_500;
@@ -83,10 +83,10 @@ public class DiagnoseTopicTools {
 
 	private static final long LAST_RECORD_BUDGET_MS = 2_000;
 
-	/** facts.config.nonDefault'ta gösterilen en fazla ayar (fazlası sayılır). */
+	/** Maximum number of settings shown in facts.config.nonDefault (the rest are counted). */
 	static final int MAX_NON_DEFAULT = 15;
 
-	/** facts.access listelerinde gösterilen en fazla principal (fazlası sayılır). */
+	/** Maximum number of principals shown in the facts.access lists (the rest are counted). */
 	static final int MAX_PRINCIPALS = 20;
 
 	private final ConnectApi connect;
@@ -98,8 +98,8 @@ public class DiagnoseTopicTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("diagnose_topic",
-					"Topic sağlık teşhisi: partition/ISR, config, boyut/dağılım, yazma, consumer lag/takılma, transaction, connector, ACL")
-			.required("topic", P.string("Topic adı"))
+					"Diagnose topic health: partitions/ISR, config, size/skew, writes, consumer lag/stuck, transactions, connectors, ACLs")
+			.required("topic", P.string("Topic name"))
 			.param("intervalSeconds", DiagnoseParams.interval(DiagnoseParams.TOPIC_INTERVAL_SECONDS))
 			.handler(this::diagnose));
 	}
@@ -129,22 +129,22 @@ public class DiagnoseTopicTools {
 		String mode;
 		try (Checks checks = new Checks(call, dx)) {
 			Check<ClusterMeta.Info> meta = checks.start("cluster metadata", () -> ClusterMeta.describe(call, true));
-			Check<FeatureMetadata> features = checks.start("feature'lar",
+			Check<FeatureMetadata> features = checks.start("features",
 					() -> Futures.awaitAtMost(call, call.admin().describeFeatures().featureMetadata(), 4_000));
 			Check<Config> config = checks.start("topic config", () -> Configs.describeOne(call, Configs.topic(topic)));
-			Check<Topics.Reassignments> reassign = checks.start("reassignment'lar",
+			Check<Topics.Reassignments> reassign = checks.start("reassignments",
 					() -> Topics.reassignments(call, Topics.submitReassignments(call)));
-			Check<Sizes> sizes = checks.start("boyut (log dir)", () -> {
+			Check<Sizes> sizes = checks.start("size (log dirs)", () -> {
 				Futures.Each<Integer, Map<String, LogDirDescription>> dirs = LogDirs.describe(call,
 						LogDirs.brokersHosting(List.of(d)));
 				return new Sizes(LogDirs.partitionSizes(dirs.values(), Map.of(topic, d)), dirs.errors());
 			});
-			Check<OffsetsInfo> offsets = checks.start("offset'ler ve son yazma", () -> offsetsInfo(call, online));
-			Check<GroupScan> groups = checks.start("consumer group'lar ve yazma hızı",
+			Check<OffsetsInfo> offsets = checks.start("offsets and last write", () -> offsetsInfo(call, online));
+			Check<GroupScan> groups = checks.start("consumer groups and write rate",
 					() -> groupScan(call, online, intervalMs));
 			Check<ProducerScan> producers = checks.start("producer/transaction", () -> producers(call, online, topic));
 			Check<ConnectorRefs.Result> connectors = call.clusterConfig().hasConnect()
-					? checks.start("connector'lar", () -> ConnectorRefs.find(connect, call, topic, CONNECTOR_CHECK_MS))
+					? checks.start("connectors", () -> ConnectorRefs.find(connect, call, topic, CONNECTOR_CHECK_MS))
 					: null;
 			Check<AclView> access = checks.start("ACL",
 					() -> AclView.load(call, List.of(new AclView.Resource(ResourceType.TOPIC, topic)), null));
@@ -176,7 +176,7 @@ public class DiagnoseTopicTools {
 		return dx.result(head, facts);
 	}
 
-	// ---- alt kontroller (sanal thread'lerde) ----
+	// ---- sub-checks (on virtual threads) ----
 
 	private static OffsetsInfo offsetsInfo(ToolCall call, List<TopicPartition> online) {
 		ListOffsetsResult maxTs = Offsets.submit(call, online, OffsetSpec.maxTimestamp());
@@ -283,7 +283,7 @@ public class DiagnoseTopicTools {
 				each.errors().size(), threshold);
 	}
 
-	// ---- değerlendirme (ana thread) ----
+	// ---- evaluation (main thread) ----
 
 	private static void partitionHealth(Diagnosis dx, Map<String, Object> facts, TopicDescription d,
 			Topics.Reassignments reassignments, Integer minIsr, ClusterMeta.Info info, String mode,
@@ -293,40 +293,40 @@ public class DiagnoseTopicTools {
 		boolean kraft = ClusterMeta.KRAFT.equals(mode);
 		if (!h.offline().isEmpty()) {
 			String elrNote = kraft && !h.offlineWithLastKnownElr().isEmpty()
-					? " KRaft: lastKnownElr'si dolu partition'lar (" + partitionNumbers(h.offlineWithLastKnownElr())
-							+ ") o replikalar dönünce veri kaybı olmadan lider seçebilir."
+					? " KRaft: partitions with a non-empty lastKnownElr (" + partitionNumbers(h.offlineWithLastKnownElr())
+							+ ") can elect a leader without data loss once those replicas return."
 					: "";
 			dx.critical("OFFLINE_PARTITIONS",
-					h.offline().size() + " partition'ın lideri yok (offline): bu partition'lara okuma/yazma yapılamaz",
+					h.offline().size() + " partition(s) have no leader (offline): they cannot be read or written",
 					evidence("partitions", partitionNumbers(h.offline()), "omitted", omitted(h.offline()),
 							"missingBrokers", h.missingBrokers().isEmpty() ? null : List.copyOf(h.missingBrokers())),
-					"Replikaları barındıran broker'ları ayağa kaldırın (brokers_list, diagnose_cluster). Kalıcı kayıpta "
-							+ "unclean.leader.election.enable son çaredir (veri kaybı)." + elrNote);
+					"Bring up the brokers hosting the replicas (brokers_list, diagnose_cluster). On permanent loss "
+							+ "unclean.leader.election.enable is the last resort (data loss)." + elrNote);
 		}
 		if (!h.underMinIsr().isEmpty()) {
 			dx.critical("UNDER_MIN_ISR",
-					h.underMinIsr().size() + " partition'da ISR min.insync.replicas (" + minIsr
-							+ ") altında: acks=all producer'lar NotEnoughReplicas hatası alır",
+					h.underMinIsr().size() + " partition(s) have ISR below min.insync.replicas (" + minIsr
+							+ "): acks=all producers get NotEnoughReplicas errors",
 					evidence("partitions", partitionNumbers(h.underMinIsr()), "omitted", omitted(h.underMinIsr()),
 							"minInsyncReplicas", minIsr),
-					"Geride kalan replikaların broker'larını kontrol edin (brokers_list, brokers_logdirs); min.insync.replicas'ı "
-							+ "düşürmek (topics_config_update) geçici çözümdür ve dayanıklılığı azaltır");
+					"Check the brokers of the lagging replicas (brokers_list, brokers_logdirs); lowering min.insync.replicas "
+							+ "(topics_config_update) is a temporary fix and reduces durability");
 		}
 		List<TopicPartition> urpOnly = h.underReplicated().stream().filter(tp -> !h.underMinIsr().contains(tp)).toList();
 		if (!urpOnly.isEmpty()) {
 			dx.warning("UNDER_REPLICATED",
-					urpOnly.size() + " partition'da ISR replika sayısından az (under-replicated)",
+					urpOnly.size() + " partition(s) have fewer ISR members than replicas (under-replicated)",
 					evidence("partitions", partitionNumbers(urpOnly), "omitted", omitted(urpOnly), "missingBrokers",
 							h.missingBrokers().isEmpty() ? null : List.copyOf(h.missingBrokers())),
-					"Replika broker'larının sağlığını, disk ve ağ durumunu kontrol edin; reassignment sürüyorsa "
-							+ "partition_reassignments_list ile izleyin");
+					"Check the health, disks and network of the replica brokers; if a reassignment is in progress, "
+							+ "monitor it with partition_reassignments_list");
 		}
 		if (!h.nonPreferredLeader().isEmpty()) {
 			dx.warning("LEADER_NOT_PREFERRED",
-					h.nonPreferredLeader().size() + " partition'ın lideri tercih edilen (ilk) replika değil: yük dengesizliği",
+					h.nonPreferredLeader().size() + " partition(s) are not led by their preferred (first) replica: load imbalance",
 					evidence("partitions", partitionNumbers(h.nonPreferredLeader()), "omitted",
 							omitted(h.nonPreferredLeader())),
-					"brokers_elect_preferred_leaders ile tercih edilen liderlere dönün (auto.leader.rebalance.enable kapalı olabilir)");
+					"Move back to the preferred leaders with brokers_elect_preferred_leaders (auto.leader.rebalance.enable may be off)");
 		}
 		Boolean elrEnabled = null;
 		if (fm != null) {
@@ -335,10 +335,10 @@ public class DiagnoseTopicTools {
 		}
 		if (kraft && !h.withElr().isEmpty()) {
 			dx.info("ELR_ACTIVE",
-					h.withElr().size() + " partition'da ISR daralmış; ELR'deki (eligible leader replicas) replikalar veri "
-							+ "kaybı olmadan lider olabilir",
+					h.withElr().size() + " partition(s) have a shrunk ISR; replicas in the ELR (eligible leader replicas) can "
+							+ "become leader without data loss",
 					evidence("partitions", partitionNumbers(h.withElr()), "omitted", omitted(h.withElr())),
-					"ISR dışına düşen replikaların broker'larını kontrol edin");
+					"Check the brokers of the replicas that dropped out of the ISR");
 		}
 		Map<String, Object> health = Results.map("partitions", h.partitions(), "offline", h.offline().size(),
 				"underReplicated", h.underReplicated().size(), "underMinIsr", h.underMinIsr().size(),
@@ -350,7 +350,7 @@ public class DiagnoseTopicTools {
 			}
 		}
 		else if (ClusterMeta.ZOOKEEPER.equals(mode)) {
-			health.put("elr", "ZooKeeper modunda ELR yok");
+			health.put("elr", "No ELR in ZooKeeper mode");
 		}
 		if (reassignments != null && !reassignments.byPartition().isEmpty()) {
 			long reassigning = reassignments.byPartition().keySet().stream()
@@ -391,49 +391,49 @@ public class DiagnoseTopicTools {
 		int brokers = info == null ? -1 : info.brokers().size();
 		if (minIsr != null && minIsr > rf) {
 			dx.critical("MIN_ISR_EXCEEDS_RF",
-					"min.insync.replicas (" + minIsr + ") replication factor'dan (" + rf
-							+ ") büyük: acks=all ile hiçbir yazma kabul edilmez (NotEnoughReplicas)",
+					"min.insync.replicas (" + minIsr + ") is greater than the replication factor (" + rf
+							+ "): no acks=all write is accepted (NotEnoughReplicas)",
 					evidence("minInsyncReplicas", minIsr, "replicationFactor", rf, "source",
 							Configs.source(cfg.get("min.insync.replicas"))),
-					"topics_config_update ile min.insync.replicas=" + Math.max(1, rf - 1)
-							+ " yapın ya da replication factor'ı artırın (partition_reassignments_alter)");
+					"Set min.insync.replicas=" + Math.max(1, rf - 1)
+							+ " with topics_config_update or increase the replication factor (partition_reassignments_alter)");
 		}
 		else if (minIsr != null && rf > 1 && minIsr == rf) {
 			dx.warning("MIN_ISR_EQUALS_RF",
-					"min.insync.replicas replication factor'a eşit (" + rf
-							+ "): tek replika/broker kaybında acks=all yazmalar durur",
+					"min.insync.replicas equals the replication factor (" + rf
+							+ "): acks=all writes stop when a single replica/broker is lost",
 					evidence("minInsyncReplicas", minIsr, "replicationFactor", rf),
-					"min.insync.replicas = RF-1 (" + (rf - 1) + ") önerilir (topics_config_update)");
+					"min.insync.replicas = RF-1 (" + (rf - 1) + ") is recommended (topics_config_update)");
 		}
 		if (rf == 1 && !d.isInternal()) {
 			if (brokers > 1) {
 				dx.warning("NO_REDUNDANCY",
-						"replication factor 1: broker kaybında bu topic'in verisi erişilemez ya da kaybolur",
+						"replication factor 1: this topic's data becomes unavailable or is lost when a broker is lost",
 						evidence("replicationFactor", rf, "brokers", brokers),
-						"Üretim topic'leri için RF=3 ve min.insync.replicas=2 önerilir (partition_reassignments_alter)");
+						"RF=3 and min.insync.replicas=2 are recommended for production topics (partition_reassignments_alter)");
 			}
 			else {
-				dx.info("NO_REDUNDANCY", "replication factor 1 (cluster'da tek broker var): yedeklilik yok",
+				dx.info("NO_REDUNDANCY", "replication factor 1 (the cluster has a single broker): no redundancy",
 						evidence("replicationFactor", rf, "brokers", brokers), null);
 			}
 		}
 		if ("true".equalsIgnoreCase(unclean)) {
 			dx.warning("UNCLEAN_LEADER_ELECTION",
-					"unclean.leader.election.enable=true: ISR dışı replika lider olabilir, commit edilmiş veri kaybolabilir",
+					"unclean.leader.election.enable=true: an out-of-sync replica can become leader and committed data can be lost",
 					evidence("source", Configs.source(cfg.get("unclean.leader.election.enable"))),
-					"Veri kaybı kabul edilemiyorsa topics_config_update ile unclean.leader.election.enable=false yapın");
+					"If data loss is unacceptable, set unclean.leader.election.enable=false with topics_config_update");
 		}
 		boolean delete = cleanup != null && cleanup.toLowerCase(Locale.ROOT).contains("delete");
 		if (delete && retentionMs != null && retentionMs < 0 && retentionBytes != null && retentionBytes < 0) {
 			dx.info("RETENTION_UNLIMITED",
-					"cleanup.policy=" + cleanup + " ama retention.ms ve retention.bytes sınırsız (-1): disk sınırsız büyür",
+					"cleanup.policy=" + cleanup + " but retention.ms and retention.bytes are unlimited (-1): disk usage grows without bound",
 					evidence("retention.ms", retentionMs, "retention.bytes", retentionBytes),
-					"Bilinçli değilse topics_config_update ile retention.ms ya da retention.bytes verin");
+					"If this is not intended, set retention.ms or retention.bytes with topics_config_update");
 		}
 		if (delete && retentionMs != null && retentionMs > 0 && retentionMs < SHORT_RETENTION_MS) {
 			dx.info("RETENTION_SHORT",
-					"retention.ms kısa (" + retentionMs / 1000 + " sn): geride kalan consumer'lar okumadan veri silinebilir",
-					evidence("retention.ms", retentionMs), "Consumer lag'i ile birlikte değerlendirin");
+					"retention.ms is short (" + retentionMs / 1000 + " s): data may be deleted before lagging consumers read it",
+					evidence("retention.ms", retentionMs), "Evaluate together with the consumer lag");
 		}
 	}
 
@@ -466,11 +466,11 @@ public class DiagnoseTopicTools {
 				size.put("maxToAvgRatio", Format.round(ratio, 2));
 				if (ratio >= 2 && max >= SKEW_MIN_BYTES) {
 					dx.warning("PARTITION_SKEW",
-							"Partition boyutları dengesiz: en büyük partition (" + largest.partition() + ", "
-									+ Format.bytes(max) + ") ortalamanın " + Format.round(ratio, 1) + " katı",
+							"Partition sizes are skewed: the largest partition (" + largest.partition() + ", "
+									+ Format.bytes(max) + ") is " + Format.round(ratio, 1) + "x the average",
 							evidence("basis", "bytes", "largestPartition", largest.partition(), "maxBytes", max,
 									"avgBytes", Math.round(avg)),
-							"Anahtar dağılımını (hot key) ve özel partitioner'ı kontrol edin; gerekirse anahtar tasarımını değiştirin");
+							"Check the key distribution (hot keys) and any custom partitioner; change the key design if needed");
 				}
 			}
 		}
@@ -488,11 +488,11 @@ public class DiagnoseTopicTools {
 			double avg = (double) totalCount / oi.ranges().size();
 			if (avg > 0 && maxCount / avg >= 2 && maxCount >= SKEW_MIN_MESSAGES) {
 				dx.warning("PARTITION_SKEW",
-						"Partition mesaj sayıları dengesiz: partition " + largest.partition() + " ortalamanın "
-								+ Format.round(maxCount / avg, 1) + " katı mesaj içeriyor",
+						"Partition message counts are skewed: partition " + largest.partition() + " holds "
+								+ Format.round(maxCount / avg, 1) + "x the average number of messages",
 						evidence("basis", "messages", "largestPartition", largest.partition(), "maxMessages", maxCount,
 								"avgMessages", Math.round(avg)),
-						"Anahtar dağılımını (hot key) ve özel partitioner'ı kontrol edin");
+						"Check the key distribution (hot keys) and any custom partitioner");
 			}
 		}
 		if (!size.isEmpty()) {
@@ -516,12 +516,12 @@ public class DiagnoseTopicTools {
 				noOffsets > 0 ? noOffsets : null, "lastWriteTime", Format.iso(lastWrite), "lastWriteAgeSeconds",
 				Format.ageSeconds(lastWrite)));
 		if (messages == 0 && noOffsets == 0) {
-			dx.info("TOPIC_EMPTY", "Topic'te mesaj yok (boş ya da tümü retention ile silinmiş)", null, null);
+			dx.info("TOPIC_EMPTY", "Topic has no messages (empty, or everything was deleted by retention)", null, null);
 		}
 		else if (lastWrite >= 0 && Format.ageSeconds(lastWrite) > IDLE_SECONDS) {
-			dx.info("TOPIC_IDLE", "Topic'e " + Format.ageSeconds(lastWrite) / 86_400 + " gündür yazılmıyor",
+			dx.info("TOPIC_IDLE", "Topic has not been written to for " + Format.ageSeconds(lastWrite) / 86_400 + " days",
 					evidence("lastWriteTime", Format.iso(lastWrite)),
-					"Kullanılmıyorsa sahibine danışıp silmeyi değerlendirin; producer'lar başka topic'e mi geçti?");
+					"If unused, consider deleting it after checking with its owner; did the producers move to another topic?");
 		}
 	}
 
@@ -615,69 +615,71 @@ public class DiagnoseTopicTools {
 			Map<String, Object> ev = evidence("groups", first(stuckActive, MAX_EVIDENCE), "omitted", omitted(stuckActive));
 			ev.putAll(window);
 			dx.critical("CONSUMER_STUCK",
-					stuckActive.size() + " aktif consumer group bu topic'te ilerlemiyor: commit sabit, yeni mesaj geliyor ve "
-							+ "bekleyen en eski kayıt " + StuckCheck.STUCK_SECONDS / 60 + "+ dk önce yazılmış",
-					ev, "Bu grupların consumer loglarını inceleyin (poison pill, uzun işleme, max.poll.interval.ms, commit "
-							+ "hatası); detay için diagnose_consumer_group");
+					stuckActive.size() + " active consumer group(s) are not progressing on this topic: the commit is unchanged, new "
+							+ "messages arrive and the oldest pending record was written " + StuckCheck.STUCK_SECONDS / 60
+							+ "+ min ago",
+					ev, "Inspect the consumer logs of these groups (poison pill, long processing, max.poll.interval.ms, commit "
+							+ "errors); use diagnose_consumer_group for details");
 		}
 		if (!stuckIdle.isEmpty()) {
 			Map<String, Object> ev = evidence("groups", first(stuckIdle, MAX_EVIDENCE), "omitted", omitted(stuckIdle));
 			ev.putAll(window);
 			dx.warning("CONSUMER_STUCK",
-					stuckIdle.size() + " consumer group üyesiz ve geride kalıyor: commit ilerlemiyor, yeni mesaj geliyor",
-					ev, "Consumer uygulamasını başlatın; grup artık kullanılmıyorsa consumer_groups_delete ya da (grup EMPTY "
-							+ "iken) consumer_groups_offsets_reset");
+					stuckIdle.size() + " consumer group(s) have no members and are falling behind: the commit does not advance, new messages arrive",
+					ev, "Start the consumer application; if the group is no longer used, consumer_groups_delete or (while the group "
+							+ "is EMPTY) consumer_groups_offsets_reset");
 		}
 		if (!suspect.isEmpty()) {
 			Map<String, Object> ev = evidence("groups", first(suspect, MAX_EVIDENCE), "omitted", omitted(suspect));
 			ev.putAll(window);
 			dx.warning("CONSUMER_STUCK_SUSPECT",
-					suspect.size() + " aktif consumer group'un commit'i pencerede ilerlemedi ve bekleyen en eski kayıt "
-							+ "periyodik commit payından (" + StuckCheck.COMMIT_ALLOWANCE_SECONDS + " sn) eski",
-					ev, "Birkaç dakika sonra diagnose_consumer_group ile tekrar bakın; ilerlemiyorsa consumer loglarını "
-							+ "inceleyin");
+					suspect.size() + " active consumer group(s) did not advance their commit in the window and the oldest pending "
+							+ "record is older than the periodic commit allowance (" + StuckCheck.COMMIT_ALLOWANCE_SECONDS
+							+ " s)",
+					ev, "Check again with diagnose_consumer_group in a few minutes; if it does not progress, inspect the consumer "
+							+ "logs");
 		}
 		if (!periodic.isEmpty()) {
 			Map<String, Object> ev = evidence("groups", first(periodic, MAX_EVIDENCE), "omitted", omitted(periodic));
 			ev.putAll(window);
 			dx.info("COMMIT_NOT_ADVANCED",
-					periodic.size() + " grubun commit'i pencerede ilerlemedi ama bekleyen kayıtlar yeni: periyodik commit "
-							+ "(auto commit 5 sn, Streams 30 sn, Connect 60 sn) olası, takılma kanıtı yok",
+					periodic.size() + " group(s) did not advance their commit in the window but the pending records are recent: "
+							+ "periodic commit (auto commit 5 s, Streams 30 s, Connect 60 s) likely, no evidence of being stuck",
 					ev, null);
 		}
 		if (!growing.isEmpty()) {
 			dx.warning("CONSUMER_LAG_GROWING",
-					growing.size() + " consumer group'un lag'i büyüyor: tüketim hızı üretimin altında",
+					growing.size() + " consumer group(s) have a growing lag: consumption is slower than production",
 					evidence("groups", first(growing, MAX_EVIDENCE), "omitted", omitted(growing)),
-					"Consumer sayısını partition sayısına (" + d.partitions().size()
-							+ ") kadar artırın ya da işleme hızını iyileştirin; diagnose_consumer_group ile inceleyin");
+					"Increase the consumers up to the partition count (" + d.partitions().size()
+							+ ") or speed up processing; inspect with diagnose_consumer_group");
 		}
 		if (!high.isEmpty()) {
-			dx.info("CONSUMER_LAG_HIGH", high.size() + " consumer group'un lag'i " + HIGH_LAG + "+ (büyümüyor)",
+			dx.info("CONSUMER_LAG_HIGH", high.size() + " consumer group(s) have a lag of " + HIGH_LAG + "+ (not growing)",
 					evidence("groups", first(high, MAX_EVIDENCE), "omitted", omitted(high)),
-					"consumer_groups_lag_trend ile eğilimi izleyin");
+					"Monitor the trend with consumer_groups_lag_trend");
 		}
 		if (!beforeStart.isEmpty()) {
 			dx.warning("COMMITTED_BEFORE_LOG_START",
 					beforeStart.size()
-							+ " group'un commit'i log başlangıcından eski: okunmadan silinen mesajlar var (veri kaybı)",
+							+ " group(s) have a commit older than the log start: messages were deleted before being read (data loss)",
 					evidence("groups", first(beforeStart, MAX_EVIDENCE), "omitted", omitted(beforeStart)),
-					"Grup çalıştığında auto.offset.reset devreye girer; retention.ms'i artırmayı ya da tüketimi "
-							+ "hızlandırmayı değerlendirin");
+					"auto.offset.reset applies when the group runs; consider increasing retention.ms or speeding up "
+							+ "consumption");
 		}
 		if (!w.groupErrors().isEmpty()) {
 			List<String> failed = List.copyOf(w.groupErrors().keySet());
 			dx.warning("GROUP_OFFSETS_UNAVAILABLE",
-					failed.size() + " grubun commit'li offset'leri alınamadı: bu topic'i tüketen gruplar eksik olabilir",
+					"Could not read the committed offsets of " + failed.size() + " group(s): groups consuming this topic may be missing",
 					evidence("groups", first(failed, MAX_EVIDENCE), "omitted", omitted(failed), "firstError",
 							w.groupErrors().values().iterator().next()),
-					"Coordinator'ların (__consumer_offsets) sağlığını ve GROUP DESCRIBE yetkisini kontrol edin; "
-							+ "aracı tekrar çalıştırın");
+					"Check the health of the coordinators (__consumer_offsets) and the GROUP DESCRIBE permission; "
+							+ "run the tool again");
 		}
 		long messages = oi == null ? -1 : oi.ranges().values().stream().mapToLong(Offsets.Range::count).sum();
 		if (rows.isEmpty() && messages != 0 && gs.listErrors().isEmpty() && w.groupErrors().isEmpty()) {
 			dx.info("NO_CONSUMER_GROUPS",
-					"Bu topic'te commit eden consumer group yok (assign() ile okuyan ya da commit etmeyen istemciler görünmez)",
+					"No consumer group commits on this topic (clients reading with assign() or not committing are not visible)",
 					evidence("groupsScanned", gs.listed()), null);
 		}
 		if (!gs.listErrors().isEmpty() || !w.groupErrors().isEmpty()) {
@@ -710,17 +712,17 @@ public class DiagnoseTopicTools {
 				p.hanging().size(), "failedPartitions", p.failedPartitions() > 0 ? p.failedPartitions() : null));
 		if (!p.hanging().isEmpty()) {
 			dx.critical("HANGING_TRANSACTION",
-					p.hanging().size() + " partition'da askıda (hanging) transaction şüphesi: LSO ilerlemez, "
-							+ "read_committed consumer'lar takılır",
+					p.hanging().size() + " partition(s) have a suspected hanging transaction: the LSO does not advance, "
+							+ "read_committed consumers get stuck",
 					evidence("partitions", first(p.hanging(), MAX_EVIDENCE), "omitted", omitted(p.hanging()), "thresholdMs",
 							p.hangingThresholdMs()),
-					"topics_transactions ile doğrulayın; kafka-transactions.sh find-hanging / abort ile kapatın");
+					"Verify with topics_transactions; close it with kafka-transactions.sh find-hanging / abort");
 		}
 		if (!p.longRunning().isEmpty()) {
 			dx.warning("LONG_RUNNING_TRANSACTION",
-					p.longRunning().size() + " açık transaction kendi timeout'undan uzun süredir açık",
+					p.longRunning().size() + " open transaction(s) have been open longer than their own timeout",
 					evidence("transactions", first(p.longRunning(), MAX_EVIDENCE), "omitted", omitted(p.longRunning())),
-					"Producer uygulamasını kontrol edin (commit/abort çağrılmıyor olabilir); topics_transactions");
+					"Check the producer application (commit/abort may not be called); topics_transactions");
 		}
 	}
 
@@ -739,10 +741,10 @@ public class DiagnoseTopicTools {
 			}
 		}
 		if (!failed.isEmpty()) {
-			dx.warning("CONNECTOR_FAILED", failed.size() + " connector bu topic'i kullanıyor ve hata durumunda",
+			dx.warning("CONNECTOR_FAILED", failed.size() + " connector(s) using this topic are in a failed state",
 					evidence("connectors", first(failed, MAX_EVIDENCE), "omitted", omitted(failed)),
-					"connectors_restart (includeTasks=true, onlyFailed=true) ile yeniden başlatın; tekrar düşerse "
-							+ "diagnose_connector ile config/yetki sorununa bakın");
+					"Restart with connectors_restart (includeTasks=true, onlyFailed=true); if it fails again, "
+							+ "look for config/authorization problems with diagnose_connector");
 		}
 	}
 
@@ -752,8 +754,8 @@ public class DiagnoseTopicTools {
 		}
 		if (!v.authorizerEnabled()) {
 			facts.put("access", Results.map("authorizer", false));
-			dx.info("NO_AUTHORIZER", "Cluster'da authorizer yok: kimliği doğrulanan her istemci bu topic'i okuyup yazabilir",
-					null, "Erişim kısıtlanmalıysa broker'da authorizer.class.name tanımlayın");
+			dx.info("NO_AUTHORIZER", "No authorizer on the cluster: every authenticated client can read and write this topic",
+					null, "If access must be restricted, set authorizer.class.name on the brokers");
 			return;
 		}
 		List<String> readers = v.allowedPrincipals(AclOperation.READ, ResourceType.TOPIC, topic);
@@ -768,19 +770,19 @@ public class DiagnoseTopicTools {
 				omitted(deniedRead, MAX_PRINCIPALS), "deniedWrite",
 				deniedWrite.isEmpty() ? null : first(deniedWrite, MAX_PRINCIPALS), "deniedWriteOmitted",
 				omitted(deniedWrite, MAX_PRINCIPALS), "superUsers",
-				v.superUsers().known() ? List.copyOf(v.superUsers().users()) : "bilinmiyor (broker gizliyor)",
+				v.superUsers().known() ? List.copyOf(v.superUsers().users()) : "unknown (hidden by the broker)",
 				"allowEveryoneIfNoAclFound", v.allowEveryone().value(), "note",
-				"Süper kullanıcılar ACL'den bağımsız erişir; readers/writers ACL'i olan principal'lardır"));
+				"Super users have access regardless of ACLs; readers/writers are the principals with ACLs"));
 		if (acls == 0) {
 			dx.info("NO_TOPIC_ACLS",
-					v.allowEveryone().value() ? "Topic'e ACL yok ve allow.everyone.if.no.acl.found=true: herkes erişebilir"
-							: "Topic'e ACL yok: sadece süper kullanıcılar erişebilir",
-					null, "Uygulama principal'ları için acls_create (preset producer/consumer) kullanın");
+					v.allowEveryone().value() ? "Topic has no ACLs and allow.everyone.if.no.acl.found=true: everyone has access"
+							: "Topic has no ACLs: only super users have access",
+					null, "Use acls_create (preset producer/consumer) for the application principals");
 		}
 		if (readers.contains("User:*") || writers.contains("User:*")) {
-			dx.info("PUBLIC_TOPIC_ACCESS", "User:* (herkes) bu topic'e erişebiliyor",
+			dx.info("PUBLIC_TOPIC_ACCESS", "User:* (everyone) has access to this topic",
 					evidence("read", readers.contains("User:*"), "write", writers.contains("User:*")),
-					"Bilinçli değilse User:* binding'ini acls_delete ile kaldırın");
+					"If this is not intended, remove the User:* binding with acls_delete");
 		}
 	}
 

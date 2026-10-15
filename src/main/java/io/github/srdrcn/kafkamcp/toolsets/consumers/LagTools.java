@@ -28,7 +28,7 @@ import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.GroupLagInfo;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.OffsetLookup;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.PartitionLag;
 
-/** Lag araçları: lag, with_lag, lag_trend, stuck. */
+/** Lag tools: lag, with_lag, lag_trend, stuck. */
 @Component
 public class LagTools {
 
@@ -38,36 +38,36 @@ public class LagTools {
 
 	static final int MAX_STUCK_ROWS_PER_GROUP = 20;
 
-	private static final String STUCK_NOTE = "Periyodik commit eden (ör. auto commit 5 sn) gruplar kısa aralıkta "
-			+ "yanlış pozitif olabilir; members=0 ise tüketici yok";
+	private static final String STUCK_NOTE = "Groups that commit periodically (e.g. auto commit every 5 s) can be "
+			+ "false positives with a short interval; members=0 means there is no consumer";
 
 	public List<ToolSpec> tools() {
-		Map<String, Object> threshold = P.integer("En az toplam lag (varsayılan " + DEFAULT_THRESHOLD + ")");
+		Map<String, Object> threshold = P.integer("Minimum total lag (default " + DEFAULT_THRESHOLD + ")");
 		threshold.put("minimum", 0);
 		threshold.put("default", DEFAULT_THRESHOLD);
 		return List.of(
 				ToolSpec
 					.read("consumer_groups_lag",
-							"Grubun lag'i: topic toplamları ve partition bazında committed, end, lag, sahip clientId/host (lag'e göre azalan)")
+							"Group lag: per-topic totals and per-partition committed, end, lag, owner clientId/host (by lag, descending)")
 					.required("group", Params.group())
-					.param("topic", P.string("Sadece bu topic (tam ad)"))
+					.param("topic", P.string("Only this topic (exact name)"))
 					.handler(this::lag),
 				ToolSpec
 					.read("consumer_groups_with_lag",
-							"Toplam lag'i eşiğin üstündeki gruplar (azalan): state ve en yüksek lag'li 5 topic ile")
+							"Groups whose total lag is above the threshold (descending), with state and the 5 topics with the most lag")
 					.param("threshold", threshold)
 					.listParams()
-					.param("topic", P.string("Sadece bu regex'e uyan topic'ler sayılır"))
+					.param("topic", P.string("Only topics matching this regex are counted"))
 					.handler(this::withLag),
 				ToolSpec
 					.read("consumer_groups_lag_trend",
-							"Lag eğilimi: iki örnekle topic bazında lag, tüketim/üretim hızı (mesaj/sn), trend ve yetişme süresi tahmini")
+							"Lag trend from two samples: per-topic lag, consume/produce rate (msg/s), trend and estimated catch-up time")
 					.required("group", Params.group())
 					.param("intervalSeconds", Params.intervalSeconds())
 					.handler(this::lagTrend),
 				ToolSpec
 					.read("consumer_groups_stuck",
-							"Takılı gruplar: iki örnek arasında commit'i ilerlemeyen, end offset'i artan ve lag'i olan partition'lar")
+							"Stuck groups: partitions with lag whose commit did not advance between two samples while the end offset grew")
 					.listParams()
 					.param("intervalSeconds", Params.intervalSeconds())
 					.handler(this::stuck));
@@ -77,13 +77,13 @@ public class LagTools {
 		return lag(call, GroupTools.MAX_PARTITION_ROWS);
 	}
 
-	/** maxRows: gösterilen en fazla partition satırı; bütçe bitince kalan topic'ler sadece sayılır. */
+	/** maxRows: maximum partition rows shown; once the budget is used up, the remaining topics are only counted. */
 	Object lag(ToolCall call, int maxRows) {
 		String group = call.str("group");
 		String topic = call.str("topic", null);
 		GroupDetail g = GroupDetail.load(call, group, topic == null ? null : topic::equals);
 		if (topic != null && g.lag().partitions().isEmpty()) {
-			throw new ToolException("'" + group + "' grubunun '" + topic + "' topic'inde commit'i ya da ataması yok");
+			throw new ToolException("Group '" + group + "' has no commits or assignments on topic '" + topic + "'");
 		}
 		Map<String, List<PartitionLag>> byTopic = new LinkedHashMap<>();
 		Map<String, Long> lagByTopic = g.lag().lagByTopic();
@@ -135,7 +135,7 @@ public class LagTools {
 				withoutEnd > 0 ? Boolean.TRUE : null, "topics", topics, "partitionRowsOmitted",
 				omitted > 0 ? omitted : null, "topicsOmitted", topicsOmitted > 0 ? topicsOmitted : null,
 				"omittedTopicsLag", topicsOmitted > 0 ? omittedTopicsLag : null, "note",
-				topics.isEmpty() ? "Grubun commit edilmiş offset'i ya da partition ataması yok"
+				topics.isEmpty() ? "The group has no committed offsets or partition assignments"
 						: reassigning > 0 ? ConsumerGroups.REASSIGNING_NOTE : null);
 	}
 
@@ -211,7 +211,7 @@ public class LagTools {
 					|| described.ok() && ConsumerGroups.deadOrUnknown(described.value())) {
 				throw ConsumerGroups.notFoundError(group);
 			}
-			throw new ToolException("'" + group + "' grubunun commit edilmiş offset'i yok; lag eğilimi hesaplanamaz");
+			throw new ToolException("Group '" + group + "' has no committed offsets; cannot compute the lag trend");
 		}
 		Set<TopicPartition> tps = new LinkedHashSet<>(c0.offsets().keySet());
 		OffsetLookup e0 = GroupLag.endOffsets(call, tps, Params.FIRST_END_RESERVE_MS);
@@ -223,10 +223,10 @@ public class LagTools {
 		long t1 = System.nanoTime();
 		Committed c1 = GroupLag.committed(call, List.of(group), null, Params.SECOND_COMMITTED_RESERVE_MS).get(group);
 		if (c1.error() != null) {
-			throw c1.notFound() ? new ToolException("Grup ölçüm sırasında silindi: " + group)
+			throw c1.notFound() ? new ToolException("Group was deleted during the measurement: " + group)
 					: new ToolException(c1.error());
 		}
-		// İlk örnekte end offset'i alınamayanlar zaten atlanır; ikinci örnekte tekrar sorulmaz.
+		// Partitions whose end offset could not be fetched in the first sample are skipped; they are not asked again.
 		OffsetLookup e1 = GroupLag.endOffsets(call, e0.offsets().keySet(), Params.SECOND_END_RESERVE_MS);
 		long t1End = System.nanoTime();
 		double elapsed = Params.seconds((t1 + t1End) / 2 - (t0 + t0End) / 2);
@@ -277,10 +277,10 @@ public class LagTools {
 				endErrors.isEmpty() ? null : GroupTools.first(endErrors, ScanIssues.MAX_ERROR_SAMPLES), "partial",
 				withoutEnd > 0 ? Boolean.TRUE : null, "partitionsWithoutCommit",
 				c0.withoutOffset().isEmpty() ? null : c0.withoutOffset().size(), "note",
-				"consumeRate: commit edilen offset artışı/sn, produceRate: end offset artışı/sn");
+				"consumeRate: committed offset increase/s, produceRate: end offset increase/s");
 	}
 
-	/** s: [lagT0, lagT1, committedDelta, endDelta, partitions] → lag, hızlar, trend, tahmini yetişme süresi. */
+	/** s: [lagT0, lagT1, committedDelta, endDelta, partitions] → lag, rates, trend, estimated catch-up time. */
 	private static Map<String, Object> trend(long[] s, double elapsed) {
 		String trend = s[1] > s[0] ? "growing" : s[1] < s[0] ? "shrinking" : "stable";
 		Long eta = null;
@@ -329,7 +329,8 @@ public class LagTools {
 		}
 		long t1 = System.nanoTime();
 		Map<String, Committed> c1 = GroupLag.committed(call, withOffsets, null, Params.SECOND_COMMITTED_RESERVE_MS);
-		// İlk örnekte end offset'i alınamayanlar kontrol edilemez (unchecked); ikinci örnekte tekrar sorulmaz.
+		// Partitions whose end offset could not be fetched in the first sample cannot be checked (unchecked); they are
+		// not asked again in the second sample.
 		OffsetLookup e1 = GroupLag.endOffsets(call, e0.offsets().keySet(), Params.SECOND_END_RESERVE_MS);
 		issues.endErrors(e1);
 		long t1End = System.nanoTime();
@@ -366,7 +367,7 @@ public class LagTools {
 					continue;
 				}
 				if (b == null) {
-					// commit örnekler arasında silinmiş (offsets_delete / reset): takılı sayılmaz
+					// commit deleted between the samples (offsets_delete / reset): not counted as stuck
 					continue;
 				}
 				if (b > a) {
@@ -415,14 +416,16 @@ public class LagTools {
 				"intervalSeconds", interval, "elapsedSeconds", elapsed, "shortened",
 				slept < interval * 1000L ? Boolean.TRUE : null);
 		out.putAll(issues.toMap(list));
-		out.put("note", STUCK_NOTE + "; uncheckedPartitions: end offset'i alınamadığı için kontrol edilemeyen");
+		out.put("note",
+				STUCK_NOTE + "; uncheckedPartitions: partitions that could not be checked because their end offset "
+						+ "could not be fetched");
 		out.putAll(Results.page("groups", groups, call.limit()));
 		return out;
 	}
 
 	/**
-	 * İkinci örneğe süre kalmadığında: takılı grup tespiti yapılamaz; ilk örnekte lag'i olan gruplar
-	 * (azalan, en fazla limit kadar) {@code "partial": true} ile döner.
+	 * When no time is left for the second sample: stuck groups cannot be detected; the groups with lag in the first
+	 * sample (descending, at most limit) are returned with {@code "partial": true}.
 	 */
 	private static Map<String, Object> firstSampleOnly(ToolCall call, GroupList list,
 			Map<String, GroupSummary> summaries, Map<String, Committed> c0, List<String> withOffsets,
@@ -449,8 +452,8 @@ public class LagTools {
 				"intervalSeconds", interval, "secondSample", false);
 		out.putAll(issues.toMap(list));
 		out.put("partial", true);
-		out.put("note", "İkinci örnek için süre kalmadı (ilk örnek uzun sürdü); takılı grup tespiti yapılamadı. "
-				+ "laggingAtFirstSample: ilk örnekte lag'i olan gruplar");
+		out.put("note", "No time left for the second sample (the first sample took too long); stuck groups "
+				+ "could not be detected. laggingAtFirstSample: groups with lag in the first sample");
 		out.put("laggingAtFirstSample", rows);
 		if (lagging.size() > rows.size()) {
 			out.put("laggingOmitted", lagging.size() - rows.size());

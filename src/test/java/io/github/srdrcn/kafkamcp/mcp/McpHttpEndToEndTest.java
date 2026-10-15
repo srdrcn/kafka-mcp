@@ -19,7 +19,7 @@ import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 
-/** Resmi MCP Java istemcisiyle Streamable HTTP üzerinden uçtan uca: initialize, tools/list, tools/call. */
+/** End to end over Streamable HTTP with the official MCP Java client: initialize, tools/list, tools/call. */
 @SpringBootTest(classes = { KafkaMcpApplication.class, McpHttpEndToEndTest.Config.class },
 		webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = "kafka-mcp.transport=http")
 class McpHttpEndToEndTest {

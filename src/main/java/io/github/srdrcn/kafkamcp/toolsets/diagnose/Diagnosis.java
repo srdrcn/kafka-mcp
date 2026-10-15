@@ -9,9 +9,9 @@ import java.util.Map;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Teşhis sonucunu toplayan (thread-safe) yardımcı: bulgular, kısmi sonuç bayrağı ve standart çıktı
- * {@code {status, summary, findings, facts, partial}}. status: bulgulardaki en yüksek önem (critical,
- * warning) ya da ok; bulgular önem sırasına göre (aynı önemde koda göre) sıralanır.
+ * Thread-safe collector of a diagnosis result: findings, the partial-result flag and the standard output
+ * {@code {status, summary, findings, facts, partial}}. status: the highest severity among the findings (critical,
+ * warning) or ok; findings are sorted by severity (and by code within the same severity).
  */
 public final class Diagnosis {
 
@@ -45,7 +45,7 @@ public final class Diagnosis {
 		return add(new Finding(Severity.INFO, code, message, evidence, recommendation));
 	}
 
-	/** Bir kontrol eksik kaldı (hata/zaman aşımı/örnekleme): çıktıda {@code "partial": true}. */
+	/** A check was incomplete (error/timeout/sampling): {@code "partial": true} in the output. */
 	public synchronized void markPartial() {
 		partial = true;
 	}
@@ -54,19 +54,19 @@ public final class Diagnosis {
 		return partial;
 	}
 
-	/** Önem sırasına göre sıralı kopya. */
+	/** Copy sorted by severity. */
 	public synchronized List<Finding> findings() {
 		List<Finding> out = new ArrayList<>(findings);
 		out.sort(ORDER);
 		return out;
 	}
 
-	/** Bu kodla bir bulgu var mı? */
+	/** Is there a finding with this code? */
 	public synchronized boolean has(String code) {
 		return findings.stream().anyMatch(f -> f.code().equals(code));
 	}
 
-	/** ok | warning | critical (en yüksek önem; info bulguları durumu etkilemez). */
+	/** ok | warning | critical (highest severity; info findings do not affect the status). */
 	public synchronized String status() {
 		if (findings.stream().anyMatch(f -> f.severity() == Severity.CRITICAL)) {
 			return CRITICAL;
@@ -77,25 +77,25 @@ public final class Diagnosis {
 		return OK;
 	}
 
-	/** Kısa Türkçe özet: "1 kritik, 2 uyarı, 1 bilgi bulgusu" ya da "Sorun bulunmadı". */
+	/** Short summary: "Findings: 1 critical, 2 warnings, 1 info" or "No issues found". */
 	public synchronized String summary() {
 		long c = count(Severity.CRITICAL);
 		long w = count(Severity.WARNING);
 		long i = count(Severity.INFO);
 		if (c == 0 && w == 0) {
-			return i == 0 ? "Sorun bulunmadı" : "Sorun bulunmadı (" + i + " bilgi notu)";
+			return i == 0 ? "No issues found" : "No issues found (" + i + (i == 1 ? " info note)" : " info notes)");
 		}
 		List<String> parts = new ArrayList<>();
 		if (c > 0) {
-			parts.add(c + " kritik");
+			parts.add(c + " critical");
 		}
 		if (w > 0) {
-			parts.add(w + " uyarı");
+			parts.add(w + (w == 1 ? " warning" : " warnings"));
 		}
 		if (i > 0) {
-			parts.add(i + " bilgi");
+			parts.add(i + " info");
 		}
-		return String.join(", ", parts) + " bulgusu";
+		return "Findings: " + String.join(", ", parts);
 	}
 
 	private long count(Severity s) {
@@ -103,8 +103,8 @@ public final class Diagnosis {
 	}
 
 	/**
-	 * Standart çıktı: head alanları (ör. topic, cluster), status, summary, findings, facts ve gerekirse partial.
-	 * extra (null olabilir) facts'ten önce eklenir.
+	 * Standard output: head fields (e.g. topic, cluster), status, summary, findings, facts and partial if needed.
+	 * extra (may be null) is added before facts.
 	 */
 	public Map<String, Object> result(Map<String, Object> head, Map<String, Object> extra, Map<String, Object> facts) {
 		Map<String, Object> out = new LinkedHashMap<>();
@@ -124,12 +124,12 @@ public final class Diagnosis {
 		return out;
 	}
 
-	/** {@link #result(Map, Map, Map)}; ek alan olmadan. */
+	/** {@link #result(Map, Map, Map)} without extra fields. */
 	public Map<String, Object> result(Map<String, Object> head, Map<String, Object> facts) {
 		return result(head, null, facts);
 	}
 
-	/** Küçük kanıt nesnesi kısayolu ({@link Results#map}; null değerler atlanır). */
+	/** Shortcut for a small evidence object ({@link Results#map}; null values are omitted). */
 	public static Map<String, Object> evidence(Object... keyValues) {
 		return Results.map(keyValues);
 	}

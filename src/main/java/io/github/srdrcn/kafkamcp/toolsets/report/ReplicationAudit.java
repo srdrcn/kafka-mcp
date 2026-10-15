@@ -19,24 +19,27 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.toolsets.report.Findings.Severity;
 
 /**
- * Replikasyon denetimi kuralları (saf hesap, test edilebilir): offline/URP/min ISR altı partition'lar, RF=1,
- * min.insync.replicas ≥ RF, unclean.leader.election.enable=true, broker default.replication.factor altı RF ve
- * rack'ler varken tek rack'e yığılmış replikalar.
+ * Replication audit rules (pure computation, testable): offline/URP/under-min-ISR partitions, RF=1,
+ * min.insync.replicas ≥ RF, unclean.leader.election.enable=true, RF below the broker default.replication.factor
+ * and, when racks are set, replicas piled onto a single rack.
  */
 public final class ReplicationAudit {
 
-	/** Öğe başına gösterilen en fazla partition numarası. */
+	/** Maximum number of partition ids shown per item. */
 	static final int MAX_PARTITIONS_SHOWN = 10;
 
 	private ReplicationAudit() {
 	}
 
-	/** Denetim girdisi: topic'ler, config'leri (eksik olabilir), broker varsayılan RF'i ve broker → rack. */
+	/** Audit input: topics, their configs (may be incomplete), the broker default RF and broker → rack. */
 	public record Input(Map<String, TopicDescription> topics, Map<String, Config> configs,
 			Integer defaultReplicationFactor, Map<Integer, String> racks, Topics.Reassignments reassignments) {
 	}
 
-	/** Kuralları uygular; config'i okunamayan topic sayısını döner (config kuralları onlarda atlanır). */
+	/**
+	 * Applies the rules; returns the number of topics whose config could not be read (config rules are skipped for
+	 * them).
+	 */
 	public static int evaluate(Input in, Findings f) {
 		Set<String> distinctRacks = new HashSet<>(in.racks().values());
 		boolean rackAware = distinctRacks.size() >= 2;
@@ -65,25 +68,25 @@ public final class ReplicationAudit {
 				}
 			}
 			if (!offline.isEmpty()) {
-				f.add("offline_partitions", Severity.CRITICAL, "Lideri olmayan partition'lar: okuma/yazma yapılamaz",
+				f.add("offline_partitions", Severity.CRITICAL, "Partitions without a leader: no reads or writes possible",
 						partitions(t, offline));
 			}
 			if (!urp.isEmpty()) {
-				f.add("under_replicated", Severity.HIGH, "ISR, replika sayısından az (URP)", partitions(t, urp));
+				f.add("under_replicated", Severity.HIGH, "ISR smaller than the replica count (URP)", partitions(t, urp));
 			}
 			if (rf == 1) {
 				f.add("replication_factor_1", Severity.HIGH,
-						"RF=1: broker/disk kaybında veri kaybı ve kesinti", Results.map("topic", t, "partitions",
+						"RF=1: losing a broker/disk means data loss and downtime", Results.map("topic", t, "partitions",
 								d.partitions().size(), "internal", d.isInternal() ? true : null));
 			}
 			if (!singleRack.isEmpty()) {
 				Map<String, Object> item = partitions(t, singleRack);
 				item.put("rack", rack);
 				f.add("single_rack_replicas", Severity.MEDIUM,
-						"Tüm replikaları tek rack'te olan partition'lar (rack kaybında erişilemez)", item);
+						"Partitions with all replicas in one rack (unavailable if the rack is lost)", item);
 			}
 			if (in.defaultReplicationFactor() != null && rf > 0 && rf < in.defaultReplicationFactor()) {
-				f.add("rf_below_default", Severity.LOW, "RF, broker default.replication.factor değerinin altında",
+				f.add("rf_below_default", Severity.LOW, "RF below the broker default.replication.factor",
 						Results.map("topic", t, "replicationFactor", rf, "defaultReplicationFactor",
 								in.defaultReplicationFactor()));
 			}
@@ -97,12 +100,12 @@ public final class ReplicationAudit {
 				ConfigEntry e = c.get("min.insync.replicas");
 				if (minIsr > rf) {
 					f.add("min_isr_above_rf", Severity.CRITICAL,
-							"min.insync.replicas > RF: eski broker'larda acks=all yazmalar hep reddedilir; yeni sürümler min ISR'ı RF'e indirir (beklenen dayanıklılık yok)",
+							"min.insync.replicas > RF: older brokers always reject acks=all writes; newer versions cap min ISR at RF, so the intended durability is not provided",
 							minIsrItem(t, rf, minIsr, e));
 				}
 				else if (minIsr == rf && rf > 1) {
 					f.add("min_isr_equals_rf", Severity.MEDIUM,
-							"min.insync.replicas = RF: tek replika düşünce acks=all producer'lar durur",
+							"min.insync.replicas = RF: acks=all producers stop when a single replica goes down",
 							minIsrItem(t, rf, minIsr, e));
 				}
 				List<Integer> underMin = new ArrayList<>();
@@ -115,12 +118,12 @@ public final class ReplicationAudit {
 					Map<String, Object> item = partitions(t, underMin);
 					item.put("minInsyncReplicas", minIsr);
 					f.add("under_min_isr", Severity.CRITICAL,
-							"ISR, min.insync.replicas altında: acks=all yazmalar şu an reddediliyor", item);
+							"ISR below min.insync.replicas: acks=all writes are being rejected now", item);
 				}
 			}
 			if (ConfigValues.isTrue(c, "unclean.leader.election.enable")) {
 				f.add("unclean_leader_election", Severity.MEDIUM,
-						"unclean.leader.election.enable=true: lider değişiminde veri kaybı olabilir",
+						"unclean.leader.election.enable=true: leader changes may lose data",
 						ConfigValues.item(t, c, "unclean.leader.election.enable"));
 			}
 		}
@@ -128,21 +131,22 @@ public final class ReplicationAudit {
 	}
 
 	/**
-	 * Partition etkin min ISR'ın altında mı: ISR &lt; min(min.insync.replicas, replika sayısı). Broker'lar (3.9 ve
-	 * 4.1'de doğrulandı) acks=all yazmalarda min ISR'ı replika sayısıyla sınırlar; offline partition'lar hariç.
+	 * Is the partition below the effective min ISR: ISR &lt; min(min.insync.replicas, replica count). Brokers
+	 * (verified on 3.9 and 4.1) cap min ISR at the replica count for acks=all writes; offline partitions are excluded.
 	 */
 	public static boolean underMinIsr(TopicPartitionInfo p, long minIsr) {
 		return !Topics.offline(p) && p.isr().size() < Math.min(minIsr, p.replicas().size());
 	}
 
 	/**
-	 * Cluster özeti için min ISR sayıları: etkin min ISR altındaki partition'lar, min.insync.replicas &gt; RF olan
-	 * topic'ler ve config'i okunamadığı için ISR açığı değerlendirilemeyen topic'ler.
+	 * Min ISR counts for the cluster summary: partitions below the effective min ISR, topics with
+	 * min.insync.replicas &gt; RF, and topics whose ISR shortfall cannot be evaluated because their config could not
+	 * be read.
 	 */
 	public record MinIsrCounts(int underMinIsrPartitions, int aboveRfTopics, int unknownTopics) {
 	}
 
-	/** {@link MinIsrCounts}'u {@link #evaluate} ile aynı kurallarla hesaplar (config'i olmayan topic'ler atlanır). */
+	/** Computes {@link MinIsrCounts} with the same rules as {@link #evaluate} (topics without a config are skipped). */
 	public static MinIsrCounts minIsrCounts(Collection<TopicDescription> topics, Map<String, Config> configs,
 			Topics.Reassignments reassignments) {
 		int under = 0;
@@ -166,7 +170,7 @@ public final class ReplicationAudit {
 		return new MinIsrCounts(under, above, unknown);
 	}
 
-	/** Replikaların hepsi aynı (bilinen) rack'teyse o rack, değilse null. */
+	/** The rack if all replicas are in the same (known) rack, otherwise null. */
 	static String sameRack(List<Node> replicas, Map<Integer, String> racks) {
 		String first = null;
 		for (Node n : replicas) {
@@ -189,7 +193,7 @@ public final class ReplicationAudit {
 				ConfigValues.source(e));
 	}
 
-	/** {topic, count, partitions (en fazla 10)}. */
+	/** {topic, count, partitions (at most 10)}. */
 	static Map<String, Object> partitions(String topic, List<Integer> ids) {
 		return Results.map("topic", topic, "count", ids.size(), "partitions",
 				ids.subList(0, Math.min(MAX_PARTITIONS_SHOWN, ids.size())), "partitionsOmitted",

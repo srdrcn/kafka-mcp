@@ -25,8 +25,8 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Consumer group ve lag yardımcıları. Çok grup için tek listConsumerGroupOffsets / describeConsumerGroups
- * gönderilir; grup bazındaki hatalar aracı düşürmez.
+ * Consumer group and lag helpers. A single listConsumerGroupOffsets / describeConsumerGroups is sent for many
+ * groups; per-group errors do not fail the tool.
  */
 public final class ConsumerGroups {
 
@@ -34,12 +34,12 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Bir grubun bir topic'teki özeti: durum, üye sayısı, toplam lag, commit'li partition sayısı ve grup tipi
-	 * ({@link #type}: "Classic" ya da KRaft 4.x'te KIP-848 "Consumer"; bilinmiyorsa null).
+	 * Summary of a group on a topic: state, member count, total lag, number of committed partitions and group
+	 * type ({@link #type}: "Classic" or KIP-848 "Consumer" on KRaft 4.x; null if unknown).
 	 */
 	public record TopicLag(String groupId, String state, Integer members, long lag, int partitions, String type) {
 
-		/** Tip bilgisi olmadan (geriye uyumluluk). */
+		/** Without type info (backward compatibility). */
 		public TopicLag(String groupId, String state, Integer members, long lag, int partitions) {
 			this(groupId, state, members, lag, partitions, null);
 		}
@@ -47,27 +47,27 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * {@link #forTopic} sonucu: gruplar (lag'e göre azalan), taranan grup sayısı, hatalar (grup id ya da
-	 * listGroups#n anahtarıyla) ve latest offset'i alınamadığı için lag'e katılamayan partition sayısı.
+	 * {@link #forTopic} result: groups (by lag, descending), number of groups scanned, errors (keyed by group id
+	 * or listGroups#n) and the number of partitions left out of the lag because their latest offset was not available.
 	 */
 	public record TopicConsumers(List<TopicLag> groups, int groupsScanned, Map<String, String> errors,
 			int lagUnknownPartitions) {
 	}
 
 	/**
-	 * {@link #forTopic}'te commit'li offset beklemesine ayrılan kalan süre payı; yüklenen/erişilemeyen bir group
-	 * coordinator'ı tüm süreyi tüketip diğer grupların sonucunu düşürmesin.
+	 * Share of the remaining time that {@link #forTopic} spends waiting for committed offsets, so a loading or
+	 * unreachable group coordinator cannot use up all the time and drop the results of the other groups.
 	 */
 	static final double COMMITTED_WAIT_SHARE = 0.6;
 
-	/** Grup listesi ve yanıt vermeyen broker'ların hata mesajları. */
+	/** Group list and the error messages of brokers that did not respond. */
 	public record GroupList(Map<String, GroupListing> groups, List<String> errors) {
 	}
 
 	/**
-	 * Consumer group'lar (classic + consumer protokolü; share/streams hariç), id'ye göre sıralı. Bazı
-	 * broker'lar hata verirse diğerlerinden gelenler döner, hatalar ayrıca raporlanır; hiçbiri yanıt
-	 * vermezse hata fırlatılır.
+	 * Consumer groups (classic + consumer protocol; share/streams excluded), sorted by id. If some brokers fail,
+	 * the groups from the others are returned and the errors are reported separately; if none responds, an
+	 * error is thrown.
 	 */
 	public static GroupList list(ToolCall call) {
 		ListGroupsResult r = call.admin().listGroups();
@@ -91,15 +91,18 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Grupların commit'li offset'leri (tek listConsumerGroupOffsets). {@code tps} boşsa grubun tüm
-	 * partition'ları; commit'i olmayan partition'lar sonuçta yoktur.
+	 * Committed offsets of the groups (a single listConsumerGroupOffsets). If {@code tps} is empty, all
+	 * partitions of the group; partitions without a commit are absent from the result.
 	 */
 	public static Futures.Each<String, Map<TopicPartition, Long>> committed(ToolCall call, Collection<String> groupIds,
 			Collection<TopicPartition> tps) {
 		return committed(call, groupIds, tps, Long.MAX_VALUE);
 	}
 
-	/** {@link #committed(ToolCall, Collection, Collection)}; en fazla {@code maxMillis} bekler, yanıt vermeyen gruplar hatada. */
+	/**
+	 * {@link #committed(ToolCall, Collection, Collection)}; waits at most {@code maxMillis}, groups that do not
+	 * respond end up in the errors.
+	 */
 	public static Futures.Each<String, Map<TopicPartition, Long>> committed(ToolCall call, Collection<String> groupIds,
 			Collection<TopicPartition> tps, long maxMillis) {
 		Map<String, ListConsumerGroupOffsetsSpec> specs = new LinkedHashMap<>();
@@ -135,8 +138,8 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Grup tipi: "Classic" (ZooKeeper cluster'larında hep) ya da "Consumer" (KRaft 4.x, KIP-848); bilinmiyorsa
-	 * null. Önce açıklama, yoksa listGroups kaydı kullanılır (eski broker'lar listede tip döndürmez).
+	 * Group type: "Classic" (always on ZooKeeper clusters) or "Consumer" (KRaft 4.x, KIP-848); null if unknown.
+	 * The description is used first, otherwise the listGroups entry (older brokers return no type in the list).
 	 */
 	public static String type(ConsumerGroupDescription description, GroupListing listing) {
 		GroupType t = description != null ? description.type() : null;
@@ -146,7 +149,7 @@ public final class ConsumerGroups {
 		return t == null || t == GroupType.UNKNOWN ? null : t.toString();
 	}
 
-	/** describeConsumerGroups (tek çağrı); grup bazında hatalar ayrı. */
+	/** describeConsumerGroups (a single call); per-group errors are kept separately. */
 	public static Futures.Each<String, ConsumerGroupDescription> describe(ToolCall call, Collection<String> groupIds) {
 		if (groupIds.isEmpty()) {
 			return new Futures.Each<>(new LinkedHashMap<>(), new LinkedHashMap<>());
@@ -154,12 +157,12 @@ public final class ConsumerGroups {
 		return Futures.awaitEach(call, call.admin().describeConsumerGroups(groupIds).describedGroups());
 	}
 
-	/** lag = latest - committed (en az 0). */
+	/** lag = latest - committed (at least 0). */
 	public static long lag(long committed, long latest) {
 		return Math.max(0, latest - committed);
 	}
 
-	/** Partition bazında lag; latest offset'i bilinmeyen partition'lar atlanır. */
+	/** Lag per partition; partitions with an unknown latest offset are skipped. */
 	public static Map<TopicPartition, Long> lagByPartition(Map<TopicPartition, Long> committed,
 			Map<TopicPartition, Long> latest) {
 		Map<TopicPartition, Long> out = new LinkedHashMap<>();
@@ -173,10 +176,11 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Topic'te commit'li offset'i olan consumer group'lar ve bu topic'teki toplam lag'leri. Tek listGroups,
-	 * tek listConsumerGroupOffsets (sadece bu topic'in partition'ları), tek listOffsets ve eşleşen gruplar için
-	 * tek describeConsumerGroups. latest offset'ler commit'li offset'lerle paralel istenir; commit beklemesi
-	 * kalan sürenin bir payıyla sınırlıdır, yanıt vermeyen gruplar hatalarda döner (kısmi sonuç).
+	 * Consumer groups with committed offsets on the topic and their total lag on this topic. A single listGroups,
+	 * a single listConsumerGroupOffsets (only this topic's partitions), a single listOffsets and a single
+	 * describeConsumerGroups for the matching groups. Latest offsets are requested in parallel with the committed
+	 * offsets; the commit wait is limited to a share of the remaining time and groups that do not respond are
+	 * returned in the errors (partial result).
 	 */
 	public static TopicConsumers forTopic(ToolCall call, TopicDescription topic) {
 		List<TopicPartition> tps = Topics.partitions(topic);

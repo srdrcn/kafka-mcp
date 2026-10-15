@@ -22,24 +22,24 @@ import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Topic listeleme/açıklama yardımcıları (tek listTopics, tek describeTopics). */
+/** Topic listing/description helpers (a single listTopics, a single describeTopics). */
 public final class Topics {
 
 	/**
-	 * Silinmesi reddedilen sistem topic'leri: Connect iç topic'leri (*connect-configs/-offsets/-status,
-	 * Strimzi'nin *connect-cluster-* adları, Debezium örneklerindeki *connect_* adları), Schema Registry,
+	 * System topics whose deletion is refused: Connect internal topics (*connect-configs/-offsets/-status,
+	 * Strimzi's *connect-cluster-* names, the *connect_* names from the Debezium examples), Schema Registry,
 	 * MirrorMaker 2.
 	 */
 	private static final Pattern SYSTEM_TOPIC = Pattern.compile(
 			"^(_schemas|_confluent.*|.*connect(-cluster)?[-_](configs|offsets|status|statuses)|.*\\.internal)$");
 
-	/** listPartitionReassignments için en fazla bekleme; controller yanıt vermese de araç devam eder. */
+	/** Maximum wait for listPartitionReassignments; the tool carries on even if the controller does not respond. */
 	static final long REASSIGNMENTS_WAIT_MS = 3_000;
 
 	private Topics() {
 	}
 
-	/** Topic adı → internal bayrağı (ada göre sıralı); includeInternal false ise internal'lar hariç. */
+	/** Topic name → internal flag (sorted by name); internal topics are excluded if includeInternal is false. */
 	public static Map<String, Boolean> list(ToolCall call, boolean includeInternal) {
 		Collection<TopicListing> listings = call
 			.await(call.admin().listTopics(new ListTopicsOptions().listInternal(includeInternal)).listings());
@@ -50,7 +50,7 @@ public final class Topics {
 		return out;
 	}
 
-	/** Tek describeTopics çağrısı; arada silinmiş/erişilemeyen topic'ler hatalarda döner. */
+	/** A single describeTopics call; topics deleted in the meantime or unreachable are returned in the errors. */
 	public static Futures.Each<String, TopicDescription> describe(ToolCall call, Collection<String> names) {
 		if (names.isEmpty()) {
 			return new Futures.Each<>(new LinkedHashMap<>(), new LinkedHashMap<>());
@@ -58,12 +58,12 @@ public final class Topics {
 		return Futures.awaitEach(call, call.admin().describeTopics(names).topicNameValues());
 	}
 
-	/** listTopics + tek describeTopics: tüm topic'lerin açıklaması (ada göre sıralı). */
+	/** listTopics + a single describeTopics: descriptions of all topics (sorted by name). */
 	public static Map<String, TopicDescription> describeAll(ToolCall call, boolean includeInternal) {
 		return new TreeMap<>(describe(call, list(call, includeInternal).keySet()).requireAny().values());
 	}
 
-	/** Tek topic; yoksa "Topic bulunamadı" hatası. */
+	/** Single topic; "Topic not found" error if it does not exist. */
 	public static TopicDescription describeOne(ToolCall call, String topic) {
 		try {
 			return call.await(call.admin().describeTopics(List.of(topic)).allTopicNames()).get(topic);
@@ -73,15 +73,15 @@ public final class Topics {
 		}
 	}
 
-	/** UnknownTopicOrPartition hatasını "Topic bulunamadı: x" mesajına çevirir; diğerlerini olduğu gibi döner. */
+	/** Turns an UnknownTopicOrPartition error into a "Topic not found: x" message; returns any other error as is. */
 	public static ToolException notFound(ToolException e, String topic) {
 		if (KafkaErrors.unwrap(e.getCause()) instanceof UnknownTopicOrPartitionException) {
-			return new ToolException("Topic bulunamadı: " + topic + " (topics_list ile bakın)", e.getCause());
+			return new ToolException("Topic not found: " + topic + " (see topics_list)", e.getCause());
 		}
 		return e;
 	}
 
-	/** Topic'in tüm partition'ları. */
+	/** All partitions of the topic. */
 	public static List<TopicPartition> partitions(TopicDescription d) {
 		List<TopicPartition> out = new ArrayList<>(d.partitions().size());
 		for (TopicPartitionInfo p : d.partitions()) {
@@ -90,7 +90,7 @@ public final class Topics {
 		return out;
 	}
 
-	/** Lideri olan (offline olmayan) partition'lar; offset/producer sorguları için. */
+	/** Partitions that have a leader (not offline); for offset/producer queries. */
 	public static List<TopicPartition> onlinePartitions(Collection<TopicDescription> topics) {
 		List<TopicPartition> out = new ArrayList<>();
 		for (TopicDescription d : topics) {
@@ -103,20 +103,21 @@ public final class Topics {
 		return out;
 	}
 
-	/** Partition'ın lideri yok mu? */
+	/** Does the partition have no leader? */
 	public static boolean offline(TopicPartitionInfo p) {
 		return p.leader() == null || p.leader().isEmpty() || p.leader().id() < 0;
 	}
 
 	/**
-	 * URP mu? Kafka'nın UnderReplicatedPartitions metriği gibi: lideri olan ve ISR'ı, reassignment'ta eklenmekte
-	 * olan replikalar hariç replika sayısından az olan partition. Offline partition'lar ayrıca sayılır.
+	 * Is it a URP? Like Kafka's UnderReplicatedPartitions metric: a partition with a leader whose ISR is smaller
+	 * than its replica count, excluding replicas being added by a reassignment. Offline partitions are counted
+	 * separately.
 	 */
 	public static boolean underReplicated(TopicPartitionInfo p, Collection<Integer> adding) {
 		return !offline(p) && p.isr().size() < replicaCount(p, adding);
 	}
 
-	/** Reassignment'ta eklenmekte olan replikalar hariç replika sayısı. */
+	/** Replica count excluding replicas being added by a reassignment. */
 	public static int replicaCount(TopicPartitionInfo p, Collection<Integer> adding) {
 		if (adding.isEmpty()) {
 			return p.replicas().size();
@@ -124,23 +125,23 @@ public final class Topics {
 		return (int) p.replicas().stream().filter(n -> !adding.contains(n.id())).count();
 	}
 
-	/** Lider id'si ya da null. */
+	/** Leader id or null. */
 	public static Integer leader(TopicPartitionInfo p) {
 		return offline(p) ? null : p.leader().id();
 	}
 
-	/** Tercih edilen lider (ilk replika) id'si ya da null. */
+	/** Preferred leader (first replica) id or null. */
 	public static Integer preferredLeader(TopicPartitionInfo p) {
 		return p.replicas().isEmpty() ? null : p.replicas().get(0).id();
 	}
 
-	/** Lider tercih edilen replika değil mi (offline hariç)? */
+	/** Is the leader not the preferred replica (offline excluded)? */
 	public static boolean nonPreferredLeader(TopicPartitionInfo p) {
 		Integer leader = leader(p);
 		return leader != null && !leader.equals(preferredLeader(p));
 	}
 
-	/** Replication factor: partition'lardaki en büyük replika sayısı (reassignment'ta eklenenler hariç). */
+	/** Replication factor: the largest replica count of the partitions (excluding replicas a reassignment is adding). */
 	public static int replicationFactor(TopicDescription d, Reassignments reassignments) {
 		return d.partitions()
 			.stream()
@@ -150,15 +151,15 @@ public final class Topics {
 	}
 
 	/**
-	 * Devam eden partition reassignment'ları. {@code error} doluysa (ör. Cluster:Describe yetkisi yok) liste
-	 * boştur; URP/RF hesapları eklenen replikaları ayıklayamaz.
+	 * Ongoing partition reassignments. If {@code error} is set (e.g. no Cluster:Describe permission) the list is
+	 * empty; URP/RF calculations then cannot exclude the replicas being added.
 	 */
 	public record Reassignments(Map<TopicPartition, PartitionReassignment> byPartition, String error) {
 
-		/** Reassignment bilgisi olmadan hesap için boş değer. */
+		/** Empty value for calculations without reassignment info. */
 		public static final Reassignments NONE = new Reassignments(Map.of(), null);
 
-		/** Partition'a eklenmekte olan replika id'leri (yoksa boş). */
+		/** Ids of the replicas being added to the partition (empty if none). */
 		public List<Integer> adding(TopicPartition tp) {
 			PartitionReassignment r = byPartition.get(tp);
 			return r == null ? List.of() : r.addingReplicas();
@@ -166,12 +167,12 @@ public final class Topics {
 
 	}
 
-	/** listPartitionReassignments isteğini gönderir (beklemez); sonucu {@link #reassignments} ile alın. */
+	/** Sends the listPartitionReassignments request (does not wait); get the result with {@link #reassignments}. */
 	public static KafkaFuture<Map<TopicPartition, PartitionReassignment>> submitReassignments(ToolCall call) {
 		return call.admin().listPartitionReassignments().reassignments();
 	}
 
-	/** Gönderilmiş listPartitionReassignments'ı en fazla birkaç sn bekler; hata/zaman aşımında boş + hata mesajı. */
+	/** Waits at most a few seconds for a pending listPartitionReassignments; empty + error message on error/timeout. */
 	public static Reassignments reassignments(ToolCall call,
 			KafkaFuture<Map<TopicPartition, PartitionReassignment>> pending) {
 		try {
@@ -183,30 +184,30 @@ public final class Topics {
 	}
 
 	/**
-	 * Eligible leader replicas (KIP-966) id'leri; sadece KRaft'ta (ELR açıkken) dolu olabilir. ZooKeeper
-	 * broker'ları bu alanı döndürmez (client null verir): null döner, NPE yok.
+	 * Eligible leader replicas (KIP-966) ids; can only be non-empty on KRaft (with ELR enabled). ZooKeeper
+	 * brokers do not return this field (the client gives null): returns null, no NPE.
 	 */
 	public static List<Integer> elr(TopicPartitionInfo p) {
 		return p.elr() == null ? null : ids(p.elr());
 	}
 
-	/** Son bilinen ELR id'leri (KRaft); ZooKeeper'da null. */
+	/** Last known ELR ids (KRaft); null on ZooKeeper. */
 	public static List<Integer> lastKnownElr(TopicPartitionInfo p) {
 		return p.lastKnownElr() == null ? null : ids(p.lastKnownElr());
 	}
 
-	/** Topic id'si; bilinmiyorsa (eski broker'lar sıfır UUID döndürür) null. */
+	/** Topic id; null if unknown (older brokers return the zero UUID). */
 	public static String topicId(TopicDescription d) {
 		Uuid id = d.topicId();
 		return id == null || Uuid.ZERO_UUID.equals(id) ? null : id.toString();
 	}
 
-	/** Node listesini id listesine çevirir. */
+	/** Converts a node list to a list of ids. */
 	public static List<Integer> ids(List<Node> nodes) {
 		return nodes.stream().map(Node::id).toList();
 	}
 
-	/** Partition → lider id (offline olanlar hariç). */
+	/** Partition → leader id (offline ones excluded). */
 	public static Map<TopicPartition, Integer> leaders(Collection<TopicDescription> topics) {
 		Map<TopicPartition, Integer> out = new LinkedHashMap<>();
 		for (TopicDescription d : topics) {
@@ -220,13 +221,13 @@ public final class Topics {
 		return out;
 	}
 
-	/** Silinmemesi/değiştirilmemesi gereken iç/sistem topic'i ise nedeni, değilse null. */
+	/** The reason if this is an internal/system topic that must not be deleted/changed, otherwise null. */
 	public static String protectedReason(String name, boolean internal) {
 		if (internal || name.startsWith("__")) {
-			return "Kafka iç topic'i";
+			return "Kafka internal topic";
 		}
 		if (SYSTEM_TOPIC.matcher(name).matches()) {
-			return "sistem topic'i (Connect/Schema Registry/MirrorMaker)";
+			return "system topic (Connect/Schema Registry/MirrorMaker)";
 		}
 		return null;
 	}

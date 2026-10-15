@@ -24,13 +24,13 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 
 /**
- * consumers okuma araçları ZooKeeper modlu cluster'da (Kafka 3.9, classic group coordinator, AclAuthorizer):
- * list, get, find_by_member, empty, acls, lag, with_lag, lag_trend, stuck. Gerçek (classic protokollü)
- * consumer group'lar, admin ile commit edilmiş "simple" group'lar ve gerçek veriyle.
+ * consumers read tools on a ZooKeeper-mode cluster (Kafka 3.9, classic group coordinator, AclAuthorizer): list,
+ * get, find_by_member, empty, acls, lag, with_lag, lag_trend, stuck. With real (classic protocol) consumer
+ * groups, "simple" groups committed via admin, and real data.
  */
 class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 
-	/** Partition'ı sahibi olan üye üzerinden commit eder (classic protokolde generation doğrulanır). */
+	/** Commits through the member that owns the partition (the classic protocol validates the generation). */
 	private static void commitByOwner(List<KafkaConsumer<byte[], byte[]>> members, String topic,
 			Map<Integer, Long> offsets) {
 		for (KafkaConsumer<byte[], byte[]> c : members) {
@@ -47,8 +47,8 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 	}
 
 	/**
-	 * ZooKeeper cluster'ında: 2 partition'lı topic (p0: 10, p1: 6 mesaj); active (2 üye, Stable, commit {0:4,
-	 * 1:1}), empty (Empty, commit {0:2, 1:6}) ve simple (admin commit'i {0:10}) grupları.
+	 * On the ZooKeeper cluster: a topic with 2 partitions (p0: 10, p1: 6 messages); groups active (2 members,
+	 * Stable, commit {0:4, 1:1}), empty (Empty, commit {0:2, 1:6}) and simple (admin commit {0:10}).
 	 */
 	private record Fixture(String prefix, String topic, String active, String empty, String simple,
 			List<KafkaConsumer<byte[], byte[]>> members) {
@@ -82,7 +82,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		JsonNode active = list.at("/groups/0");
 		assertThat(active.get("groupId").asText()).isEqualTo(f.active());
 		assertThat(active.get("state").asText()).isEqualTo("Stable");
-		// ZooKeeper cluster'larında consumer group'lar hep classic protokollüdür.
+		// On ZooKeeper clusters consumer groups always use the classic protocol.
 		assertThat(active.get("type").asText()).isEqualTo("classic");
 		assertThat(active.get("protocol").asText()).isEqualTo("consumer");
 		assertThat(active.has("simple")).isFalse();
@@ -99,7 +99,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		JsonNode stable = ok("consumer_groups_list", on(ZK, "filter", Pattern.quote(f.prefix()), "state", "stable"));
 		assertThat(stable.get("total").asInt()).isEqualTo(1);
 		assertThat(stable.at("/groups/0/groupId").asText()).isEqualTo(f.active());
-		// KIP-848 durumları ZooKeeper'da hiç görülmez; filtre hatasız boş döner.
+		// KIP-848 states never occur on ZooKeeper; the filter returns an empty result without an error.
 		JsonNode reconciling = ok("consumer_groups_list",
 				on(ZK, "filter", Pattern.quote(f.prefix()), "state", "Reconciling"));
 		assertThat(reconciling.get("total").asInt()).isZero();
@@ -110,7 +110,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		assertThat(get.get("partitionAssignor").asText()).isEqualTo("range");
 		assertThat(get.at("/coordinator/id").asInt()).isEqualTo(1);
 		assertThat(get.at("/coordinator/host").asText()).isEqualTo("localhost");
-		// classic protokolde KIP-848 epoch alanları yoktur.
+		// the classic protocol has no KIP-848 epoch fields.
 		assertThat(get.has("groupEpoch")).isFalse();
 		assertThat(get.has("targetAssignmentEpoch")).isFalse();
 		assertThat(get.get("memberCount").asInt()).isEqualTo(2);
@@ -193,7 +193,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		JsonNode topic = lag.at("/topics/0");
 		assertThat(topic.get("topic").asText()).isEqualTo(f.topic());
 		assertThat(topic.get("lag").asLong()).isEqualTo(11);
-		// partition'lar lag'e göre azalan: p0 (6), p1 (5)
+		// partitions by lag, descending: p0 (6), p1 (5)
 		JsonNode p0 = topic.at("/partitions/0");
 		assertThat(p0.get("partition").asInt()).isZero();
 		assertThat(p0.get("committed").asLong()).isEqualTo(4);
@@ -212,7 +212,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		assertThat(emptyLag.at("/topics/0/partitions/0").has("clientId")).isFalse();
 		assertThat(emptyLag.at("/topics/0/partitions/1/lag").asLong()).isZero();
 		assertThat(error("consumer_groups_lag", on(ZK, "group", f.empty(), "topic", f.topic() + "-other")))
-			.contains("commit'i ya da ataması yok");
+			.contains("has no commits or assignments");
 
 		JsonNode withLag = ok("consumer_groups_with_lag",
 				on(ZK, "filter", Pattern.quote(f.prefix()), "threshold", 5));
@@ -230,10 +230,10 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		assertThat(high.get("total").asInt()).isEqualTo(1);
 		assertThat(high.at("/groups/0/groupId").asText()).isEqualTo(f.active());
 
-		assertThat(error("consumer_groups_lag", on(ZK, "group", unique("zk-missing")))).contains("bulunamadı");
-		assertThat(error("consumer_groups_get", on(ZK, "group", unique("zk-missing")))).contains("bulunamadı");
+		assertThat(error("consumer_groups_lag", on(ZK, "group", unique("zk-missing")))).contains("not found");
+		assertThat(error("consumer_groups_get", on(ZK, "group", unique("zk-missing")))).contains("not found");
 		assertThat(error("consumer_groups_lag_trend", on(ZK, "group", unique("zk-missing"), "intervalSeconds", 1)))
-			.contains("bulunamadı");
+			.contains("not found");
 	}
 
 	@Test
@@ -281,7 +281,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		assertThat(g.at("/partitions/0/lag").asLong()).isGreaterThan(15);
 	}
 
-	/** Literal, prefixed ve wildcard ACL'ler: AclAuthorizer (ZooKeeper) ve StandardAuthorizer (KRaft) aynı sonucu verir. */
+	/** Literal, prefixed and wildcard ACLs: AclAuthorizer (ZooKeeper) and StandardAuthorizer (KRaft) agree. */
 	@Test
 	void aclsMatchLiteralPrefixedAndWildcardOnBothAuthorizers() throws Exception {
 		String prefix = unique("zka");
@@ -302,7 +302,7 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 				JsonNode r = awaitAcls(cluster, group, 3);
 				results.put(cluster, r);
 				JsonNode none = ok("consumer_groups_acls", on(cluster, "group", unique("zka-none")));
-				// wildcard ACL her gruba uyar
+				// the wildcard ACL matches every group
 				assertThat(none.get("count").asInt()).as(cluster).isEqualTo(1);
 				assertThat(none.at("/acls/0/resourceName").asText()).isEqualTo("*");
 			}
@@ -340,16 +340,16 @@ class ConsumersMixedClusterTest extends ConsumersMixedTestBase {
 		assertThat(results.get(KRAFT)).isEqualTo(zk);
 
 		JsonNode afterDelete = awaitAcls(ZK, group, 0);
-		assertThat(afterDelete.get("note").asText()).contains("ACL yok");
+		assertThat(afterDelete.get("note").asText()).contains("No ACLs match");
 	}
 
-	/** ACL değişiklikleri authorizer'a asenkron yansır (ZooKeeper watch'ı, KRaft metadata log'u). */
+	/** ACL changes reach the authorizer asynchronously (ZooKeeper watch, KRaft metadata log). */
 	private JsonNode awaitAcls(String cluster, String group, int expected) {
 		JsonNode[] last = new JsonNode[1];
 		waitUntil(() -> {
 			last[0] = ok("consumer_groups_acls", on(cluster, "group", group));
 			return last[0].get("count").asInt() == expected;
-		}, "ACL'ler yansımadı: " + cluster);
+		}, "ACLs did not propagate: " + cluster);
 		return last[0];
 	}
 

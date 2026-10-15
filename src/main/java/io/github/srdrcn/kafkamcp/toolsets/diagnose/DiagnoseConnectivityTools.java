@@ -52,9 +52,9 @@ import io.github.srdrcn.kafkamcp.toolsets.acl.ClientSecurity;
 import io.github.srdrcn.kafkamcp.toolsets.acl.KerberosCheck;
 
 /**
- * diagnose_connectivity: bu sunucudan cluster'a adım adım bağlantı teşhisi (zamanlamalarla): bootstrap DNS ve
- * TCP, istemci güvenlik ayarları, Kerberos (GSSAPI ise), önbellekteki değil YENİ bir AdminClient ile
- * describeCluster, broker'ların advertised adreslerine TCP, Connect ve Schema Registry REST.
+ * diagnose_connectivity: step-by-step connectivity diagnosis from this server to the cluster (with timings):
+ * bootstrap DNS and TCP, client security settings, Kerberos (for GSSAPI), describeCluster with a NEW AdminClient
+ * (not the cached one), TCP to the brokers' advertised addresses, Connect and Schema Registry REST.
  */
 @Component
 public class DiagnoseConnectivityTools {
@@ -69,7 +69,7 @@ public class DiagnoseConnectivityTools {
 
 	static final long REST_TIMEOUT_MS = 4_000;
 
-	/** describeCluster zaman aşımında bootstrap metadata'sı (advertised adresler) için en fazla bekleme. */
+	/** Maximum wait for the bootstrap metadata (advertised addresses) when describeCluster times out. */
 	static final long BOOTSTRAP_METADATA_MS = 3_000;
 
 	private static final AtomicLong SEQ = new AtomicLong();
@@ -86,7 +86,7 @@ public class DiagnoseConnectivityTools {
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("diagnose_connectivity",
-					"Bağlantı teşhisi (adım adım, süreli): DNS, TCP, güvenlik/Kerberos, yeni client ile Kafka, advertised adresler, Connect/SR")
+					"Diagnose connectivity step by step with timings: DNS, TCP, security/Kerberos, Kafka with a new client, advertised addresses, Connect/SR")
 			.handler(this::diagnose));
 	}
 
@@ -96,7 +96,7 @@ public class DiagnoseConnectivityTools {
 	record KafkaStep(Map<String, Object> step, List<Node> nodes, String clusterId, String mode, Throwable error) {
 	}
 
-	/** REST isteğinin sonucu ve görev içinde ölçülen süresi (diğer adımların süresi karışmaz). */
+	/** Result of the REST request and its duration measured inside the task (other steps' time is not included). */
 	record RestResult(JsonNode value, Throwable error, long durationMs) {
 	}
 
@@ -113,9 +113,9 @@ public class DiagnoseConnectivityTools {
 		try {
 			Net.Parsed parsed = Net.parseServers(cluster.getBootstrapServers());
 			if (!parsed.invalid().isEmpty() || parsed.endpoints().isEmpty()) {
-				dx.critical("INVALID_BOOTSTRAP", "bootstrapServers geçersiz girdi içeriyor",
+				dx.critical("INVALID_BOOTSTRAP", "bootstrapServers contains invalid entries",
 						evidence("invalid", parsed.invalid(), "value", cluster.getBootstrapServers()),
-						"host:port biçiminde virgülle ayrılmış liste verin (ör. kafka-0.kafka:9092,kafka-1.kafka:9092)");
+						"Use a comma-separated host:port list (e.g. kafka-0.kafka:9092,kafka-1.kafka:9092)");
 			}
 			Map<Net.Endpoint, Future<EndpointCheck>> endpoints = new LinkedHashMap<>();
 			for (Net.Endpoint e : new LinkedHashSet<>(parsed.endpoints())) {
@@ -149,11 +149,11 @@ public class DiagnoseConnectivityTools {
 			bootstrapFindings(dx, steps, checks);
 			boolean anyTcp = checks.stream().anyMatch(c -> c.tcp() != null && c.tcp().ok());
 
-			// 3) güvenlik ayarları
+			// 3) security settings
 			steps.add(Results.map("step", "clientSecurity", "status", "ok", "securityProtocol",
 					security.securityProtocol(), "saslMechanism", security.saslMechanism()));
 			if ("PLAINTEXT".equals(security.securityProtocol()) || "SSL".equals(security.securityProtocol())) {
-				dx.info("NO_SASL", "Bu sunucu cluster'a " + security.securityProtocol() + " ile bağlanıyor (SASL yok)",
+				dx.info("NO_SASL", "This server connects to the cluster with " + security.securityProtocol() + " (no SASL)",
 						null, null);
 			}
 
@@ -165,13 +165,13 @@ public class DiagnoseConnectivityTools {
 						"true".equalsIgnoreCase(security.jaasOption("useTicketCache")));
 			}
 
-			// 5) Kafka (yeni AdminClient) + 6) advertised adresler
+			// 5) Kafka (new AdminClient) + 6) advertised addresses
 			KafkaStep kafka;
 			if (!anyTcp) {
-				kafka = skipped("Hiçbir bootstrap adresine TCP bağlantısı kurulamadı; Kafka isteği denenmedi");
+				kafka = skipped("No TCP connection to any bootstrap address; the Kafka request was not attempted");
 			}
 			else if (!kerberosOk) {
-				kafka = skipped("Kerberos login başarısız; client da GSSAPI login olamayacağı için Kafka isteği denenmedi");
+				kafka = skipped("Kerberos login failed; the client cannot log in with GSSAPI either, so the Kafka request was not attempted");
 			}
 			else {
 				kafka = kafkaStep(call, cluster);
@@ -189,8 +189,8 @@ public class DiagnoseConnectivityTools {
 			}
 			else if (kafka.error() != null
 					&& Acls.causedBy(kafka.error(), org.apache.kafka.common.errors.TimeoutException.class)) {
-				// tipik OpenShift hatası: bootstrap erişilebilir, advertised adresler değil → describeCluster zaman aşımı.
-				// Advertised adresleri sadece bootstrap bağlantısıyla alınan metadata'dan okuyup yokla.
+				// typical OpenShift failure: bootstrap is reachable, the advertised addresses are not → describeCluster times out.
+				// Read the advertised addresses from metadata fetched over the bootstrap connection only, and probe them.
 				KafkaStep md = bootstrapMetadata(call, cluster);
 				steps.add(md.step());
 				if (md.nodes() != null && !md.nodes().isEmpty()) {
@@ -198,7 +198,7 @@ public class DiagnoseConnectivityTools {
 				}
 			}
 
-			// 7) Connect ve Schema Registry
+			// 7) Connect and Schema Registry
 			if (connectRoot != null) {
 				rest(call, dx, steps, connectRoot, restStart, "connect", cluster.getConnectUrl(), "CONNECT_UNREACHABLE",
 						"Kafka Connect REST", n -> Results.map("version", n.path("version").asText(null),
@@ -218,7 +218,7 @@ public class DiagnoseConnectivityTools {
 		return dx.result(Results.map("cluster", cluster.getName(), "mode", mode), extra, facts);
 	}
 
-	// ---- adımlar ----
+	// ---- steps ----
 
 	private static void bootstrapFindings(Diagnosis dx, List<Map<String, Object>> steps, List<EndpointCheck> checks) {
 		List<String> dnsFailed = new ArrayList<>();
@@ -244,11 +244,11 @@ public class DiagnoseConnectivityTools {
 		boolean anyTcp = checks.stream().anyMatch(c -> c.tcp() != null && c.tcp().ok());
 		if (!dnsFailed.isEmpty()) {
 			boolean all = dnsFailed.size() == total;
-			String msg = (all ? "Hiçbir bootstrap adresi çözümlenemedi" : dnsFailed.size() + "/" + total
-					+ " bootstrap adresi çözümlenemedi") + ": " + dnsFailed.get(0);
+			String msg = (all ? "No bootstrap address could be resolved" : dnsFailed.size() + "/" + total
+					+ " bootstrap addresses could not be resolved") + ": " + dnsFailed.get(0);
 			Map<String, Object> ev = evidence("errors", DiagnoseParams.first(dnsFailed, DiagnoseParams.MAX_EVIDENCE));
-			String rec = "bootstrapServers'taki adları kontrol edin; pod içinden nslookup/dig ile deneyin. OpenShift'te "
-					+ "Service adı <svc>.<namespace>.svc(.cluster.local) biçiminde olmalı; dış adreslerde DNS/egress";
+			String rec = "Check the names in bootstrapServers; try nslookup/dig from inside the pod. On OpenShift a "
+					+ "Service name must look like <svc>.<namespace>.svc(.cluster.local); for external addresses check DNS/egress";
 			if (all) {
 				dx.critical("DNS_UNRESOLVED", msg, ev, rec);
 			}
@@ -264,11 +264,11 @@ public class DiagnoseConnectivityTools {
 				default -> "CONNECTION_FAILED";
 			};
 			String rec = switch (e.getKey()) {
-				case Net.REFUSED -> "Port numarasını ve broker'ın bu adreste dinlediğini (listeners) kontrol edin; "
-						+ "broker/pod ayakta mı?";
-				case Net.TIMEOUT -> "Firewall, OpenShift NetworkPolicy ya da egress kuralı bu pod'dan broker portuna "
-						+ "erişimi engelliyor olabilir; ağ ekibiyle doğrulayın";
-				default -> "Ağ yolunu (routing/firewall) kontrol edin";
+				case Net.REFUSED -> "Check the port number and that the broker listens on this address (listeners); "
+						+ "is the broker/pod up?";
+				case Net.TIMEOUT -> "A firewall, OpenShift NetworkPolicy or egress rule may block this pod from reaching "
+						+ "the broker port; verify with the network team";
+				default -> "Check the network path (routing/firewall)";
 			};
 			boolean all = !anyTcp;
 			String msg = tcpErrors.stream().filter(t -> e.getValue().stream().anyMatch(t::contains)).findFirst()
@@ -278,7 +278,7 @@ public class DiagnoseConnectivityTools {
 				dx.critical(code, msg, ev, rec);
 			}
 			else {
-				dx.warning(code, msg + " (" + e.getValue().size() + "/" + total + " adres)", ev, rec);
+				dx.warning(code, msg + " (" + e.getValue().size() + "/" + total + " addresses)", ev, rec);
 			}
 		}
 	}
@@ -303,16 +303,18 @@ public class DiagnoseConnectivityTools {
 	}
 
 	/**
-	 * Kerberos bulguları; login başarısız olmadıysa (başarılı ya da denenmedi, ör. bilet önbelleği) true: Kafka adımı
-	 * yine de denenir. ticketCache: sasl.jaas.config useTicketCache=true (kinit sidecar; keytab gerekmez).
+	 * Kerberos findings; true if the login did not fail (succeeded or was not attempted, e.g. ticket cache): the Kafka
+	 * step is attempted anyway. ticketCache: sasl.jaas.config useTicketCache=true (kinit sidecar; no keytab needed).
+	 * Problems are classified by their leading technical token (keytab, principal, krb5.conf, Kerberos login) and the
+	 * structured keytab/principal fields of the check result, not by their wording.
 	 */
 	@SuppressWarnings("unchecked")
 	private static boolean kerberosFindings(Diagnosis dx, List<Map<String, Object>> steps, Map<String, Object> facts,
 			Map<String, Object> k, boolean ticketCache) {
 		if (k == null) {
-			steps.add(Results.map("step", "kerberos", "status", "timeout", "error", "Kerberos kontrolü süre sınırında bitmedi"));
-			dx.critical("KERBEROS_TIMEOUT", KafkaErrors.kerberos("cannot locate kdc") + " (kontrol süre sınırında bitmedi)",
-					null, "krb5.conf'taki kdc adreslerine (port 88) bu pod'dan erişimi kontrol edin; kerberos_self_check");
+			steps.add(Results.map("step", "kerberos", "status", "timeout", "error", "Kerberos check did not finish within the time limit"));
+			dx.critical("KERBEROS_TIMEOUT", KafkaErrors.kerberos("cannot locate kdc") + " (the check did not finish within the time limit)",
+					null, "Check that this pod can reach the kdc addresses in krb5.conf (port 88); kerberos_self_check");
 			return false;
 		}
 		Map<String, Object> login = k.get("login") instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
@@ -327,33 +329,39 @@ public class DiagnoseConnectivityTools {
 		facts.put("kerberos", Results.map("krb5Conf", k.get("krb5Conf"), "keytab", keytab, "principal",
 				k.get("principal"), "serviceName", k.get("serviceName"), "notes", k.get("notes")));
 		List<String> problems = k.get("problems") instanceof List<?> l ? (List<String>) l : List.of();
+		Map<String, Object> principal = k.get("principal") instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
+		boolean keytabUnset = keytab.get("path") == null;
+		Object principalName = principal.get("name");
+		boolean principalUnset = principalName == null || principalName.toString().isBlank();
 		boolean keytabMissing = false;
 		for (String p : problems) {
-			if (ticketCache && (p.startsWith("keytab tanımlı değil") || p.startsWith("principal tanımlı değil"))) {
+			boolean keytabProblem = p.startsWith("keytab");
+			if (ticketCache && (keytabProblem && keytabUnset || p.startsWith("principal") && principalUnset)) {
 				dx.info("KERBEROS_TICKET_CACHE",
-						p + ": sasl.jaas.config useTicketCache=true, bilet önbelleği (kinit) kullanılıyor; login önceden "
-								+ "denenmedi, Kafka adımı sonucuna bakın",
-						null, "Kafka adımı Kerberos hatası verirse bilet önbelleğini (klist, KRB5CCNAME) ve kinit sidecar'ını "
-								+ "kontrol edin");
+						p + ": sasl.jaas.config useTicketCache=true, the ticket cache (kinit) is used; the login was not "
+								+ "tried in advance, see the result of the Kafka step",
+						null, "If the Kafka step reports a Kerberos error, check the ticket cache (klist, KRB5CCNAME) and the "
+								+ "kinit sidecar");
 			}
-			else if (p.startsWith("keytab dosyası yok")) {
+			else if (keytabProblem && !keytabUnset && Boolean.FALSE.equals(keytab.get("exists"))) {
 				keytabMissing = true;
-				dx.critical("KEYTAB_NOT_FOUND", "keytab bulunamadı: " + keytab.get("path"), evidence("problem", p),
-						"kerberos.keytab yolunu ve keytab Secret'ının pod'a mount edildiğini kontrol edin");
+				dx.critical("KEYTAB_NOT_FOUND", "Keytab not found: " + keytab.get("path"), evidence("problem", p),
+						"Check the kerberos.keytab path and that the keytab Secret is mounted into the pod");
 			}
-			else if (p.startsWith("keytab okunamıyor") || p.startsWith("keytab boş")) {
+			else if (keytabProblem && (Boolean.FALSE.equals(keytab.get("readable"))
+					|| keytab.get("sizeBytes") instanceof Number size && size.longValue() == 0)) {
 				keytabMissing = true;
-				dx.critical("KEYTAB_UNREADABLE", p, null, "Dosya izinlerini (pod kullanıcısı) ve Secret içeriğini kontrol edin");
+				dx.critical("KEYTAB_UNREADABLE", p, null, "Check the file permissions (pod user) and the Secret content");
 			}
-			else if (p.startsWith("keytab'da")) {
+			else if (keytabProblem && Boolean.FALSE.equals(keytab.get("principalInKeytab"))) {
 				dx.critical("KEYTAB_PRINCIPAL_MISSING", p, null,
-						"kerberos.principal'ı keytab'daki adla (klist -kt) birebir eşleyin (realm büyük harf)");
+						"Match kerberos.principal exactly to the name in the keytab (klist -kt; upper-case realm)");
 			}
 			else if (p.startsWith("krb5.conf")) {
 				dx.critical("KRB5_CONF_PROBLEM", p, null,
-						"krb5.conf'u ConfigMap olarak mount edin ve kerberos.krb5Conf ile yolunu verin");
+						"Mount krb5.conf as a ConfigMap and set its path with kerberos.krb5Conf");
 			}
-			else if (p.startsWith("Kerberos login başarısız")) {
+			else if (p.startsWith("Kerberos login")) {
 				String err = String.valueOf(login.get("error"));
 				if (keytabMissing && err.toLowerCase().contains("keytab")) {
 					continue;
@@ -361,10 +369,10 @@ public class DiagnoseConnectivityTools {
 				dx.critical("KERBEROS_LOGIN_FAILED", p, evidence("detail", login.get("detail")), loginHint(err));
 			}
 			else if (p.contains("realm")) {
-				dx.warning("KERBEROS_REALM", p, null, "Principal realm'ini krb5.conf default_realm ile eşleyin");
+				dx.warning("KERBEROS_REALM", p, null, "Match the principal realm to the krb5.conf default_realm");
 			}
 			else {
-				dx.critical("KERBEROS_PROBLEM", p, null, "kerberos_self_check ile ayrıntılı kontrol edin");
+				dx.critical("KERBEROS_PROBLEM", p, null, "Run a detailed check with kerberos_self_check");
 			}
 		}
 		return !loginFailed;
@@ -373,15 +381,15 @@ public class DiagnoseConnectivityTools {
 	private static String loginHint(String error) {
 		String e = error == null ? "" : error;
 		if (e.contains("KDC")) {
-			return "krb5.conf'taki kdc adreslerine (TCP/UDP 88) bu pod'dan erişimi, DNS'i ve egress/NetworkPolicy'yi kontrol edin";
+			return "Check that this pod can reach the kdc addresses in krb5.conf (TCP/UDP 88), DNS and egress/NetworkPolicy";
 		}
 		if (e.contains("clock skew")) {
-			return "Pod ve KDC saatlerini eşitleyin (NTP); fark 5 dakikadan az olmalı";
+			return "Synchronize the pod and KDC clocks (NTP); the difference must be under 5 minutes";
 		}
 		if (e.contains("keytab")) {
-			return "Keytab'ı yenileyin (parola/kvno değişmiş olabilir) ve principal adını kontrol edin";
+			return "Regenerate the keytab (the password/kvno may have changed) and check the principal name";
 		}
-		return "kerberos_self_check ile ayrıntılı kontrol edin";
+		return "Run a detailed check with kerberos_self_check";
 	}
 
 	private static KafkaStep skipped(String reason) {
@@ -389,7 +397,7 @@ public class DiagnoseConnectivityTools {
 				null);
 	}
 
-	/** Önbellekteki AdminClient yerine yeni, kısa ömürlü bir AdminClient ile describeCluster (sonra kapatılır). */
+	/** describeCluster with a new, short-lived AdminClient instead of the cached one (closed afterwards). */
 	private static KafkaStep kafkaStep(ToolCall call, ClusterConfig cluster) {
 		long timeout = Math.max(1_000, Math.min(KAFKA_TIMEOUT_MS, call.remainingMillis() - 5_000));
 		Map<String, Object> props = new HashMap<>(call.clients().clientProperties(cluster));
@@ -421,14 +429,14 @@ public class DiagnoseConnectivityTools {
 			List<Node> nodes = (List<Node>) r[1];
 			nodes.sort(java.util.Comparator.comparingInt(Node::id));
 			return new KafkaStep(Results.map("step", "kafka", "status", "ok", "durationMs", elapsed(start), "clusterId",
-					r[0], "brokers", nodes.size(), "mode", r[2], "client", "yeni AdminClient (önbellekteki değil)"), nodes,
+					r[0], "brokers", nodes.size(), "mode", r[2], "client", "new AdminClient (not the cached one)"), nodes,
 					(String) r[0], (String) r[2], null);
 		}
 		catch (TimeoutException e) {
 			task.cancel(true);
 			return new KafkaStep(Results.map("step", "kafka", "status", "timeout", "durationMs", elapsed(start), "error",
-					"describeCluster " + timeout + " ms içinde yanıtlanmadı"), null, null, null,
-					new org.apache.kafka.common.errors.TimeoutException("describeCluster zaman aşımı"));
+					"describeCluster got no response within " + timeout + " ms"), null, null, null,
+					new org.apache.kafka.common.errors.TimeoutException("describeCluster timed out"));
 		}
 		catch (ExecutionException e) {
 			Throwable cause = KafkaErrors.unwrap(e.getCause());
@@ -437,14 +445,14 @@ public class DiagnoseConnectivityTools {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 
 	/**
-	 * describeCluster zaman aşımına uğradığında broker'ların advertised adreslerini SADECE bootstrap bağlantısı
-	 * üzerinden öğrenir: yeni, kısa ömürlü assign-only consumer'ın ilk MetadataRequest'i bootstrap adresine gider;
-	 * dönen partition lider/replika Node'ları advertised host:port'lardır (sonra kapatılır).
+	 * When describeCluster times out, learns the brokers' advertised addresses ONLY over the bootstrap connection: the
+	 * first MetadataRequest of a new, short-lived assign-only consumer goes to the bootstrap address; the partition
+	 * leader/replica Nodes it returns are the advertised host:ports (closed afterwards).
 	 */
 	private static KafkaStep bootstrapMetadata(ToolCall call, ClusterConfig cluster) {
 		long timeout = Math.max(500, Math.min(BOOTSTRAP_METADATA_MS, call.remainingMillis() - 5_000));
@@ -473,13 +481,13 @@ public class DiagnoseConnectivityTools {
 			}
 		});
 		Thread.ofPlatform().daemon().name("diagnose-connectivity-metadata").start(task);
-		String note = "describeCluster zaman aşımı: advertised adresler sadece bootstrap bağlantısıyla alınan metadata'dan";
+		String note = "describeCluster timed out: advertised addresses come only from metadata fetched over the bootstrap connection";
 		try {
 			List<Node> nodes = task.get(Math.max(1, Math.min(call.waitMillis() - 3_000, timeout + 1_500)),
 					TimeUnit.MILLISECONDS);
 			if (nodes.isEmpty()) {
 				return new KafkaStep(Results.map("step", "bootstrapMetadata", "status", "error", "durationMs",
-						elapsed(start), "error", "Metadata'da partition yok; advertised adresler belirlenemedi"), null, null,
+						elapsed(start), "error", "Metadata has no partitions; the advertised addresses could not be determined"), null, null,
 						null, null);
 			}
 			return new KafkaStep(Results.map("step", "bootstrapMetadata", "status", "ok", "durationMs", elapsed(start),
@@ -488,7 +496,7 @@ public class DiagnoseConnectivityTools {
 		catch (TimeoutException e) {
 			task.cancel(true);
 			return new KafkaStep(Results.map("step", "bootstrapMetadata", "status", "timeout", "durationMs",
-					elapsed(start), "error", "bootstrap metadata isteği " + timeout + " ms içinde yanıtlanmadı"), null, null,
+					elapsed(start), "error", "bootstrap metadata request got no response within " + timeout + " ms"), null, null,
 					null, null);
 		}
 		catch (ExecutionException e) {
@@ -499,7 +507,7 @@ public class DiagnoseConnectivityTools {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 
@@ -509,7 +517,7 @@ public class DiagnoseConnectivityTools {
 		}
 	}
 
-	/** KRaft (metadata quorum yanıt verdi) ya da ZooKeeper (API desteklenmiyor); belirlenemezse null. */
+	/** KRaft (the metadata quorum responded) or ZooKeeper (API not supported); null if it cannot be determined. */
 	private static String mode(Admin admin, long timeout) {
 		try {
 			admin.describeMetadataQuorum().quorumInfo().get(Math.min(2_000, timeout), TimeUnit.MILLISECONDS);
@@ -535,30 +543,30 @@ public class DiagnoseConnectivityTools {
 			boolean serviceMissing = chain.toLowerCase().contains("server not found in kerberos database");
 			dx.critical(serviceMissing ? "KERBEROS_SERVICE_PRINCIPAL" : "KERBEROS_ERROR", kerberos,
 					evidence("error", chain),
-					serviceMissing ? "bootstrapServers'ta broker'ların FQDN adlarını kullanın (IP/kısa ad değil) ve "
-							+ "krb5.conf [libdefaults] rdns = false ayarlayın; servis principal'ı kafka/<fqdn>@REALM olmalı"
+					serviceMissing ? "Use the brokers' FQDNs in bootstrapServers (not IPs/short names) and set "
+							+ "rdns = false in krb5.conf [libdefaults]; the service principal must be kafka/<fqdn>@REALM"
 							: loginHint(kerberos));
 		}
 		else if (Acls.causedBy(e, SaslAuthenticationException.class)) {
-			dx.critical("SASL_AUTH_FAILED", "SASL kimlik doğrulaması başarısız", evidence("error", chain),
-					"Kullanıcı/parola (sasl.jaas.config), sasl.mechanism (PLAIN/SCRAM-SHA-512/GSSAPI) ve broker'da "
-							+ "kullanıcının tanımlı olduğunu kontrol edin");
+			dx.critical("SASL_AUTH_FAILED", "SASL authentication failed", evidence("error", chain),
+					"Check the user/password (sasl.jaas.config), sasl.mechanism (PLAIN/SCRAM-SHA-512/GSSAPI) and that "
+							+ "the user exists on the broker");
 		}
 		else if (Acls.causedBy(e, SslAuthenticationException.class)) {
-			dx.critical("SSL_HANDSHAKE_FAILED", "TLS el sıkışması başarısız", evidence("error", chain),
-					"Truststore'da broker CA sertifikası var mı, hostname doğrulaması (ssl.endpoint.identification.algorithm) uyumlu mu?");
+			dx.critical("SSL_HANDSHAKE_FAILED", "TLS handshake failed", evidence("error", chain),
+					"Does the truststore contain the broker CA certificate, and does hostname verification (ssl.endpoint.identification.algorithm) match?");
 		}
 		else if (Acls.causedBy(e, org.apache.kafka.common.errors.TimeoutException.class)) {
 			dx.critical("KAFKA_TIMEOUT",
-					anyTcp ? "TCP bağlantısı açık ama Kafka isteği zamanında yanıtlanmadı"
-							: "Kafka isteği zamanında yanıtlanmadı",
+					anyTcp ? "TCP connection is open but the Kafka request got no response in time"
+							: "Kafka request got no response in time",
 					evidence("error", chain),
-					"security.protocol/sasl.mechanism broker listener'ıyla uyumlu mu (ör. SASL portuna PLAINTEXT, SSL "
-							+ "portuna düz bağlantı)? Broker'ların advertised.listeners adresleri bu pod'dan erişilebilir mi?");
+					"Do security.protocol/sasl.mechanism match the broker listener (e.g. PLAINTEXT to a SASL port, plain "
+							+ "connection to an SSL port)? Are the brokers' advertised.listeners addresses reachable from this pod?");
 		}
 		else {
-			dx.critical("KAFKA_ERROR", "Kafka isteği başarısız: " + chain, null,
-					"Hata mesajına göre ağ/güvenlik ayarlarını kontrol edin");
+			dx.critical("KAFKA_ERROR", "Kafka request failed: " + chain, null,
+					"Check the network/security settings according to the error message");
 		}
 	}
 
@@ -587,7 +595,7 @@ public class DiagnoseConnectivityTools {
 					"reachable", probe != null && probe.ok()));
 			if (probe == null || !probe.ok()) {
 				unreachable.add(Results.map("brokerId", n.id(), "advertised", address, "error",
-						probe == null ? "zaman aşımı" : probe.error()));
+						probe == null ? "timeout" : probe.error()));
 			}
 		}
 		facts.put("brokers", brokers);
@@ -596,11 +604,11 @@ public class DiagnoseConnectivityTools {
 			bootstrap.forEach(b -> bootstrapHosts.add(b.endpoint().host()));
 			dx.critical("ADVERTISED_UNREACHABLE",
 					unreachable.size() + "/" + nodes.size()
-							+ " broker'ın advertised adresine bu pod'dan erişilemiyor: bootstrap çalışsa da istemciler bu "
-							+ "broker'larla konuşamaz",
+							+ " brokers' advertised addresses are unreachable from this pod: even though bootstrap works, clients "
+							+ "cannot talk to these brokers",
 					evidence("brokers", unreachable, "bootstrapHosts", List.copyOf(bootstrapHosts)),
-					"Broker'ın advertised.listeners değeri istemcilerin çözüp erişebildiği bir ad olmalı (OpenShift: "
-							+ "dış erişim için Route/LoadBalancer adresi, iç erişim için Service adı; iç/dış listener'ları ayırın)");
+					"The broker's advertised.listeners must be a name clients can resolve and reach (OpenShift: the "
+							+ "Route/LoadBalancer address for external access, the Service name for internal access; separate internal/external listeners)");
 		}
 	}
 
@@ -610,7 +618,7 @@ public class DiagnoseConnectivityTools {
 
 	}
 
-	/** REST çağrısını görev içinde süre ölçerek çalıştırır (hata da sonuç olarak döner). */
+	/** Runs the REST call and measures its duration inside the task (errors are returned as a result too). */
 	private static Callable<RestResult> timed(Callable<JsonNode> request) {
 		return () -> {
 			long start = System.nanoTime();
@@ -634,9 +642,9 @@ public class DiagnoseConnectivityTools {
 		catch (TimeoutException e) {
 			f.cancel(true);
 			steps.add(Results.map("step", step, "target", url, "status", "timeout", "error",
-					what + " " + REST_TIMEOUT_MS + " ms içinde yanıt vermedi"));
-			dx.warning(code, what + " " + REST_TIMEOUT_MS + " ms içinde yanıt vermedi: " + url, null,
-					"URL'yi, servisin ayakta olduğunu ve bu pod'dan erişimi (NetworkPolicy/egress) kontrol edin");
+					what + " did not respond within " + REST_TIMEOUT_MS + " ms"));
+			dx.warning(code, what + " did not respond within " + REST_TIMEOUT_MS + " ms: " + url, null,
+					"Check the URL, that the service is up and that this pod can reach it (NetworkPolicy/egress)");
 			return;
 		}
 		catch (ExecutionException e) {
@@ -644,7 +652,7 @@ public class DiagnoseConnectivityTools {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		Long duration = r.durationMs() >= 0 ? r.durationMs() : null;
 		if (r.error() == null) {
@@ -658,10 +666,10 @@ public class DiagnoseConnectivityTools {
 		steps.add(Results.map("step", step, "target", url, "status", "error", "durationMs", duration, "error", err));
 		String type = Net.errorType(cause);
 		String detail = Net.ERROR.equals(type) ? err : Net.explain(type, url, REST_TIMEOUT_MS, null);
-		dx.warning(code, what + " erişilemedi: " + detail, evidence("error", err),
+		dx.warning(code, what + " unreachable: " + detail, evidence("error", err),
 				err.contains("401") || err.contains("403")
-						? "Kimlik bilgisi/yetki gerekiyor: URL'de kullanıcı bilgisi ya da proxy ayarlarını kontrol edin"
-						: "URL'yi, servisin ayakta olduğunu ve bu pod'dan erişimi (NetworkPolicy/egress) kontrol edin");
+						? "Credentials/authorization required: check the user info in the URL or the proxy settings"
+						: "Check the URL, that the service is up and that this pod can reach it (NetworkPolicy/egress)");
 	}
 
 	private static <T> T await(ToolCall call, Future<T> f, long maxMs) {
@@ -678,7 +686,7 @@ public class DiagnoseConnectivityTools {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 

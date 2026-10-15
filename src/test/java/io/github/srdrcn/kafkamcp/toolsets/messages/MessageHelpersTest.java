@@ -38,8 +38,8 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 
 /**
- * Ağa çıkmayan yardımcılar: RecordDecoder (şema isteği limit/deadline), ShapeInference, Timestamps, adil pay
- * dağıtımı, offline partition seçimi, sınırlı consumer kapanışı.
+ * Helpers that need no network: RecordDecoder (schema lookup limit/deadline), ShapeInference, Timestamps, fair
+ * share distribution, offline partition selection, bounded consumer close.
  */
 class MessageHelpersTest {
 
@@ -49,9 +49,9 @@ class MessageHelpersTest {
 
 	@Test
 	void decodesStringWithHexFallbackAndTruncation() {
-		RecordDecoder.Decoded d = decoder.decode("merhaba dünya".getBytes(StandardCharsets.UTF_8), MessageFormat.STRING,
+		RecordDecoder.Decoded d = decoder.decode("hello → world €".getBytes(StandardCharsets.UTF_8), MessageFormat.STRING,
 				100);
-		assertThat(d.value()).isEqualTo("merhaba dünya");
+		assertThat(d.value()).isEqualTo("hello → world €");
 		assertThat(d.truncated()).isFalse();
 		assertThat(d.error()).isNull();
 
@@ -79,11 +79,11 @@ class MessageHelpersTest {
 		RecordDecoder.Decoded notJson = decoder.decode("hello world".getBytes(StandardCharsets.UTF_8), MessageFormat.JSON,
 				100);
 		assertThat(notJson.value()).isEqualTo("hello world");
-		assertThat(notJson.error()).startsWith("JSON değil");
+		assertThat(notJson.error()).startsWith("Not JSON");
 
 		RecordDecoder.Decoded trailing = decoder.decode("123 abc".getBytes(StandardCharsets.UTF_8), MessageFormat.JSON,
 				100);
-		assertThat(trailing.error()).startsWith("JSON değil");
+		assertThat(trailing.error()).startsWith("Not JSON");
 
 		RecordDecoder.Decoded blank = decoder.decode(new byte[0], MessageFormat.JSON, 100);
 		assertThat(blank.error()).isNotNull();
@@ -92,7 +92,7 @@ class MessageHelpersTest {
 		assertThat(l.value()).isEqualTo(-42L);
 		RecordDecoder.Decoded shortLong = decoder.decode(new byte[] { 1, 2, 3 }, MessageFormat.LONG, 100);
 		assertThat(shortLong.value()).isEqualTo("010203");
-		assertThat(shortLong.error()).contains("8 bayt");
+		assertThat(shortLong.error()).contains("8 bytes");
 
 		assertThat(decoder.decode(new byte[] { 0x0a, (byte) 0xbc }, MessageFormat.HEX, 100).value()).isEqualTo("0abc");
 		assertThat(decoder.decode(null, MessageFormat.STRING, 100).isNull()).isTrue();
@@ -148,16 +148,16 @@ class MessageHelpersTest {
 		assertThat(Timestamps.parse("t", "2023-11-14")).isEqualTo(1_699_920_000_000L);
 		assertThat(Timestamps.iso(1_700_000_000_000L)).isEqualTo("2023-11-14T22:13:20Z");
 		assertThat(Timestamps.iso(-1)).isNull();
-		assertThatThrownBy(() -> Timestamps.parse("t", "dün")).isInstanceOf(ToolException.class)
+		assertThatThrownBy(() -> Timestamps.parse("t", "yesterday")).isInstanceOf(ToolException.class)
 			.hasMessageContaining("ISO-8601");
-		// negatif değerler listOffsets'te LATEST(-1)/EARLIEST(-2)/MAX_TIMESTAMP(-3)... anlamına gelir
+		// negative values mean LATEST(-1)/EARLIEST(-2)/MAX_TIMESTAMP(-3)... in listOffsets
 		assertThat(Timestamps.parse("t", "0")).isZero();
 		assertThat(Timestamps.parse("t", "1970-01-01T00:00:00Z")).isZero();
 		for (String v : List.of("-1", "-2", "-3", "-5", "-1700000000000", "1969-12-31T23:59:59.999Z", "1969-12-31")) {
 			assertThatThrownBy(() -> Timestamps.parse("ts", v)).as(v)
 				.isInstanceOf(ToolException.class)
 				.hasMessageContaining("ts")
-				.hasMessageContaining("negatif")
+				.hasMessageContaining("negative")
 				.hasMessageContaining("1970");
 		}
 	}
@@ -168,7 +168,7 @@ class MessageHelpersTest {
 				new RecordHeaders(), Optional.empty());
 	}
 
-	/** latest seçimi gibi: sınırlı min-heap en yenileri tutar. */
+	/** Like the latest selection: a bounded min-heap keeps the newest. */
 	private static List<String> newest(List<ConsumerRecord<byte[], byte[]>> records, PartitionOffsets.Bounds b,
 			int max) {
 		List<TopicPartition> tps = List.of(new TopicPartition("t", 0), new TopicPartition("t", 1),
@@ -187,7 +187,7 @@ class MessageHelpersTest {
 
 	@Test
 	void latestOrderIsFairAcrossPartitionsForRecordsWithoutTimestamp() {
-		// p0: 0..9, p1: 0..4, p2: 0..9 — hepsi zaman damgasız (v0): partition sonlarından sırayla
+		// p0: 0..9, p1: 0..4, p2: 0..9 — all without a timestamp (v0): taken in turn from the partition ends
 		Map<TopicPartition, Long> latest = Map.of(new TopicPartition("t", 0), 10L, new TopicPartition("t", 1), 5L,
 				new TopicPartition("t", 2), 10L);
 		PartitionOffsets.Bounds b = new PartitionOffsets.Bounds(Map.of(), latest);
@@ -199,11 +199,11 @@ class MessageHelpersTest {
 		}
 		assertThat(newest(untimed, b, 6)).containsExactly("0@8", "0@9", "1@3", "1@4", "2@8", "2@9");
 		assertThat(MessageReader.untimed(untimed.get(0))).isTrue();
-		// zamanlı kayıtlar: zamana göre (partition id'sinden bağımsız)
+		// timed records: by time (independent of the partition id)
 		List<ConsumerRecord<byte[], byte[]>> timed = new ArrayList<>(List.of(rec(2, 0, 100), rec(0, 0, 300),
 				rec(1, 0, 200), rec(2, 1, 50), rec(0, 1, 400)));
 		assertThat(newest(timed, b, 3)).containsExactly("1@0", "0@0", "0@1");
-		// karışık: zamanlı kayıt zamansızlardan yeni sayılır
+		// mixed: a timed record counts as newer than the untimed ones
 		List<ConsumerRecord<byte[], byte[]>> mixed = new ArrayList<>(untimed);
 		mixed.add(rec(1, 5, 10));
 		assertThat(newest(mixed, b, 4)).containsExactly("0@9", "1@4", "2@9", "1@5");
@@ -239,7 +239,7 @@ class MessageHelpersTest {
 		};
 	}
 
-	/** Confluent wire format: 0x0 + 4 bayt şema id + 1 bayt gövde. */
+	/** Confluent wire format: 0x0 + 4-byte schema id + 1-byte body. */
 	private static byte[] wire(int schemaId) {
 		return ByteBuffer.allocate(6).put((byte) 0).putInt(schemaId).put((byte) 2).array();
 	}
@@ -249,7 +249,7 @@ class MessageHelpersTest {
 		AtomicInteger calls = new AtomicInteger();
 		RecordDecoder d = new RecordDecoder(registry(path -> {
 			calls.incrementAndGet();
-			throw new ToolException("Schema Registry hatası 404 (GET " + path + "): 40403 Schema not found");
+			throw new ToolException("Schema Registry error 404 (GET " + path + "): Schema not found (40403 Schema not found)");
 		}), "x");
 		int ids = RecordDecoder.MAX_SCHEMA_LOOKUPS + 10;
 		RecordDecoder.Decoded last = null;
@@ -260,9 +260,9 @@ class MessageHelpersTest {
 		assertThat(d.skippedSchemaLookups()).isEqualTo(10);
 		assertThat(d.timeLimited()).isFalse();
 		assertThat(last.value()).isEqualTo(RecordDecoder.hex(wire(ids)));
-		assertThat(last.error()).contains("en fazla " + RecordDecoder.MAX_SCHEMA_LOOKUPS);
-		assertThat(d.skipNote()).startsWith("10 şema");
-		// aynı id tekrar sorulmaz (çağrı içi memo)
+		assertThat(last.error()).contains("at most " + RecordDecoder.MAX_SCHEMA_LOOKUPS);
+		assertThat(d.skipNote()).startsWith("10 schema");
+		// the same id is not asked again (per-call memo)
 		d.decode(wire(1), MessageFormat.AVRO, 100);
 		assertThat(calls.get()).isEqualTo(RecordDecoder.MAX_SCHEMA_LOOKUPS);
 	}
@@ -278,30 +278,65 @@ class MessageHelpersTest {
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
-			throw new ToolException("kesildi");
+			throw new ToolException("interrupted");
 		});
 		ToolCall call = call(RecordDecoder.LOOKUP_RESERVE_MS + 2_000);
 		RecordDecoder d = new RecordDecoder(slow, call);
 		RecordDecoder.Decoded first = d.decode(wire(1), MessageFormat.AVRO, 100);
-		// istek deadline'a pay kalırken bırakıldı: okunanlar partial dönebilir
+		// the lookup was abandoned with a margin before the deadline: the records read can be returned as partial
 		assertThat(call.remainingMillis()).isGreaterThan(500);
-		assertThat(first.error()).contains("zaman sınırı");
+		assertThat(first.error()).contains("time limit");
 		assertThat(first.value()).isEqualTo(RecordDecoder.hex(wire(1)));
 		RecordDecoder.Decoded second = d.decode(wire(2), MessageFormat.AVRO, 100);
-		assertThat(second.error()).contains("atlandı");
+		assertThat(second.error()).contains("skipped");
 		assertThat(calls.get()).isEqualTo(1);
 		assertThat(d.timeLimited()).isTrue();
 		assertThat(d.skippedSchemaLookups()).isEqualTo(2);
 
-		// deadline zaten yakınsa istek hiç başlatılmaz
+		// if the deadline is already close, no lookup is started
 		AtomicInteger none = new AtomicInteger();
 		RecordDecoder late = new RecordDecoder(registry(path -> {
 			none.incrementAndGet();
 			return null;
 		}), call(RecordDecoder.LOOKUP_RESERVE_MS - 500));
-		assertThat(late.decode(wire(3), MessageFormat.AVRO, 100).error()).contains("zaman sınırı");
+		assertThat(late.decode(wire(3), MessageFormat.AVRO, 100).error()).contains("time limit");
 		assertThat(none.get()).isZero();
 		assertThat(late.timeLimited()).isTrue();
+	}
+
+	@Test
+	void unreachableSchemaRegistryFailsRemainingSchemaIdsFast() {
+		AtomicInteger calls = new AtomicInteger();
+		SchemaRegistryClient down = registry(path -> {
+			calls.incrementAndGet();
+			throw new SchemaRegistryClient.UnreachableException(
+					"Cannot reach Schema Registry (http://sr:8081): Connection refused", null);
+		});
+		// with and without a ToolCall (the lookup then runs on a separate thread and the cause is rethrown)
+		for (RecordDecoder d : List.of(new RecordDecoder(down, "x"), new RecordDecoder(down, call(10_000)))) {
+			calls.set(0);
+			RecordDecoder.Decoded first = d.decode(wire(1), MessageFormat.AVRO, 100);
+			assertThat(first.error()).contains("schema 1").contains("Cannot reach Schema Registry");
+			assertThat(first.value()).isEqualTo(RecordDecoder.hex(wire(1)));
+			// the registry is down: the next schema id fails without another request
+			RecordDecoder.Decoded second = d.decode(wire(2), MessageFormat.AVRO, 100);
+			assertThat(second.error()).contains("Cannot reach Schema Registry");
+			assertThat(second.schemaId()).isEqualTo(2);
+			assertThat(calls.get()).isEqualTo(1);
+			assertThat(d.skippedSchemaLookups()).isZero();
+			assertThat(d.timeLimited()).isFalse();
+		}
+
+		// an HTTP error whose text mentions "Cannot reach" is not a registry outage: every id is still looked up
+		AtomicInteger httpCalls = new AtomicInteger();
+		RecordDecoder http = new RecordDecoder(registry(path -> {
+			httpCalls.incrementAndGet();
+			throw new SchemaRegistryClient.SchemaRegistryException(502, -1, "Cannot reach upstream",
+					"Schema Registry error 502 (GET " + path + "): Cannot reach upstream", null);
+		}), "x");
+		http.decode(wire(1), MessageFormat.AVRO, 100);
+		http.decode(wire(2), MessageFormat.AVRO, 100);
+		assertThat(httpCalls.get()).isEqualTo(2);
 	}
 
 	@Test
@@ -320,7 +355,7 @@ class MessageHelpersTest {
 		assertThat(PartitionOffsets.select(d, 3).note()).isNull();
 		assertThatThrownBy(() -> PartitionOffsets.select(d, 1)).isInstanceOf(ToolException.class)
 			.hasMessageContaining("Partition 1 offline");
-		assertThatThrownBy(() -> PartitionOffsets.select(d, 9)).hasMessageContaining("Partition 9 yok");
+		assertThatThrownBy(() -> PartitionOffsets.select(d, 9)).hasMessageContaining("Partition 9 does not exist");
 	}
 
 	@Test

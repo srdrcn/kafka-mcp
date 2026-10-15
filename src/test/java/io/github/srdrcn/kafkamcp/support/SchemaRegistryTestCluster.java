@@ -7,8 +7,8 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Paylaşılan Confluent Schema Registry (cp-schema-registry). Kafka'ya Docker ağı içinden PLAINTEXT ile
- * bağlanır ({@code _schemas} topic'i).
+ * Shared Confluent Schema Registry (cp-schema-registry). Connects to Kafka over PLAINTEXT inside the Docker
+ * network ({@code _schemas} topic).
  */
 public final class SchemaRegistryTestCluster {
 

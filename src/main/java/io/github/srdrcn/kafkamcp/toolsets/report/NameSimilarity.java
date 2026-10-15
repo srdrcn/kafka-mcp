@@ -13,15 +13,15 @@ import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
 /**
- * Topic adı benzerliği: normalizasyon (küçük harf, -/_/. birleştirme, ortam token'ları ve sondaki sürüm
- * ekleri atılır) ve sınırlı (banded, erken çıkışlı) Levenshtein mesafesi.
+ * Topic name similarity: normalization (lower case, -/_/. unified, environment tokens and trailing version
+ * suffixes dropped) and a bounded (banded, early-exit) Levenshtein distance.
  */
 public final class NameSimilarity {
 
-	/** Normalizasyonda atılan ortam token'ları. */
+	/** Environment tokens dropped during normalization. */
 	public static final Set<String> ENV_TOKENS = Set.of("dev", "test", "uat", "prod", "stg");
 
-	/** Benzer çift aramasında en fazla toplanan çift sayısı (bellek sınırı). */
+	/** Maximum number of pairs collected by the similar pair search (memory bound). */
 	public static final int MAX_PAIRS = 10_000;
 
 	private static final Pattern SEPARATORS = Pattern.compile("[-_.]+");
@@ -34,8 +34,8 @@ public final class NameSimilarity {
 	}
 
 	/**
-	 * Normalize ad: küçük harf, -/_/. tek ayraç (.), ortam token'ları (dev/test/uat/prod/stg) ve sondaki sürüm
-	 * token'ları (v1, v2...) atılır. Geriye bir şey kalmazsa küçük harfli ad döner.
+	 * Normalized name: lower case, -/_/. become a single separator (.), environment tokens (dev/test/uat/prod/stg)
+	 * and trailing version tokens (v1, v2...) are dropped. If nothing is left, the lower-case name is returned.
 	 */
 	public static String normalize(String name) {
 		String lower = name.toLowerCase(Locale.ROOT);
@@ -51,7 +51,7 @@ public final class NameSimilarity {
 		return kept.isEmpty() ? lower : String.join(".", kept);
 	}
 
-	/** Normalize adı aynı olan (en az iki üyeli) gruplar: normalize ad → adlar (sıralı). */
+	/** Groups (of at least two) that share a normalized name: normalized name → names (sorted). */
 	public static Map<String, List<String>> collisions(Collection<String> names) {
 		Map<String, List<String>> all = new TreeMap<>();
 		for (String n : names) {
@@ -67,7 +67,7 @@ public final class NameSimilarity {
 		return out;
 	}
 
-	/** Levenshtein mesafesi; {@code max}'tan büyükse {@code max + 1} (bant dışı hesaplanmaz, erken çıkar). */
+	/** Levenshtein distance; {@code max + 1} if greater than {@code max} (the band only, with early exit). */
 	public static int boundedDistance(String a, String b, int max) {
 		int n = a.length();
 		int m = b.length();
@@ -105,24 +105,25 @@ public final class NameSimilarity {
 		return Math.min(prev[m], inf);
 	}
 
-	/** Benzer ad çifti. */
+	/** Similar name pair. */
 	public record Pair(String a, String b, int distance) {
 	}
 
 	/**
-	 * Benzer çift taraması sonucu: çiftler (mesafe, sonra ad sırası), sadece rakamları farklı çiftler (ayrı liste,
-	 * en fazla {@link #MAX_PAIRS}; {@code numericVariants} toplam sayı), yapılan karşılaştırma sayısı, süre
-	 * ({@code partial}) ya da çift sınırı ({@code capped}) nedeniyle yarım kaldı mı.
+	 * Result of the similar pair scan: pairs (by distance, then name), pairs that differ only in digits (separate
+	 * list, at most {@link #MAX_PAIRS}; {@code numericVariants} is the total count), the number of comparisons made,
+	 * and whether it stopped early because of time ({@code partial}) or the pair limit ({@code capped}).
 	 */
 	public record Similar(List<Pair> pairs, List<Pair> numericPairs, int numericVariants, long comparisons,
 			boolean partial, boolean capped) {
 	}
 
 	/**
-	 * Uzunluğu en az {@code minLength} olan adlar arasında mesafesi en fazla {@code max} olan çiftler. Adlar
-	 * uzunluğa göre sıralanıp sadece uzunluk farkı ≤ max olanlar karşılaştırılır; normalize adı aynı olanlar
-	 * (zaten çakışma grubunda) atlanır, sadece rakamları farklı olanlar (ör. shard-01/shard-02, x.v1.y/x.v2.y)
-	 * ayrı listede döner. {@code stop} true dönerse (deadline) yarım sonuç döner.
+	 * Pairs with distance at most {@code max} among names at least {@code minLength} long. Names are sorted by
+	 * length and only those whose lengths differ by ≤ max are compared; names with the same normalized name (already
+	 * in a collision group) are skipped, and pairs that differ only in digits (e.g. shard-01/shard-02,
+	 * x.v1.y/x.v2.y) are returned in a separate list. If {@code stop} returns true (deadline), a partial result is
+	 * returned.
 	 */
 	public static Similar similarPairs(Collection<String> names, int max, int minLength, BooleanSupplier stop) {
 		List<String> sorted = names.stream()

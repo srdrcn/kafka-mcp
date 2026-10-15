@@ -1,6 +1,6 @@
-# ConfigMap kafka-mcp-config içindeki kafka-mcp.yaml şablonu. <...> alanlarını doldurun; gerçek değerleri repoya koymayın.
+# Template for kafka-mcp.yaml in the kafka-mcp-config ConfigMap. Fill in the <...> fields; never commit real values.
 port: 8080
-apiKey: <api-key>                # X-Authorization header'ı ile karşılaştırılır; boşsa auth yok
+apiKey: <api-key>                # compared with the X-Authorization header; no auth if empty
 readOnly: true
 disableDestructive: true
 toolsets: [core, messages, consumers, acl, connect, report, diagnose]
@@ -25,5 +25,5 @@ clusters:
     connectUrl: http://kafka-sandbox.example.com:8083
     readOnly: false
     # schemaRegistryUrl: http://...:8081
-    # properties:                   # Kafka client property override'ları
+    # properties:                   # Kafka client property overrides
     #   client.dns.lookup: use_all_dns_ips

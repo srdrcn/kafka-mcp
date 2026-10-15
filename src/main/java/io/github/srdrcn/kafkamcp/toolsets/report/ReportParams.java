@@ -6,7 +6,7 @@ import java.util.Map;
 
 import io.github.srdrcn.kafkamcp.mcp.P;
 
-/** report araçlarının ortak parametre şemaları ve sonuç parçaları. */
+/** Shared parameter schemas and result fragments of the report tools. */
 final class ReportParams {
 
 	static final int DEFAULT_OLDER_THAN_DAYS = 30;
@@ -14,32 +14,33 @@ final class ReportParams {
 	private ReportParams() {
 	}
 
-	/** Varsayılanlı tamsayı parametresi. */
+	/** Integer parameter with a default. */
 	static Map<String, Object> integer(String description, int defaultValue, int min, int max) {
 		Map<String, Object> m = P.integer(description, min, max);
 		m.put("default", defaultValue);
 		return m;
 	}
 
-	/** olderThanDays: varsayılan 30 gün. */
+	/** olderThanDays: default 30 days. */
 	static Map<String, Object> olderThanDays() {
-		return integer("Son yazma kaç günden eskiyse boşta sayılır (varsayılan 30)", DEFAULT_OLDER_THAN_DAYS, 1, 3650);
+		return integer("Days since the last write after which a topic counts as idle (default 30)",
+				DEFAULT_OLDER_THAN_DAYS, 1, 3650);
 	}
 
-	/** intervalSeconds: iki örnek arası (1-10, varsayılan 5). */
+	/** intervalSeconds: time between the two samples (1-10, default 5). */
 	static Map<String, Object> intervalSeconds() {
-		return integer("Yazma hızı için iki örnek arası saniye (varsayılan 5, 1-10)", 5, 1, 10);
+		return integer("Sampling interval in seconds for the write rate (default 5, 1-10)", 5, 1, 10);
 	}
 
-	/** includeInternal parametresi. */
+	/** includeInternal parameter. */
 	static Map<String, Object> includeInternal(boolean defaultValue) {
-		Map<String, Object> m = P.bool("İç (__*) ve sistem topic'lerini (Connect/Schema Registry/MirrorMaker) dahil et (varsayılan "
+		Map<String, Object> m = P.bool("Include internal (__*) and system topics (Connect/Schema Registry/MirrorMaker) (default "
 				+ defaultValue + ")");
 		m.put("default", defaultValue);
 		return m;
 	}
 
-	/** Zaten sıralanmış listeden limit kadarını {total, returned, truncated, key} biçiminde döner. */
+	/** Returns up to limit items of an already sorted list as {total, returned, truncated, key}. */
 	static Map<String, Object> page(String key, List<?> rows, int limit) {
 		int n = Math.min(limit, rows.size());
 		Map<String, Object> m = new LinkedHashMap<>();
@@ -50,7 +51,7 @@ final class ReportParams {
 		return m;
 	}
 
-	/** Liste ilk n öğeyle; kırpıldıysa sayısı ayrıca verilmelidir. */
+	/** The first n items of the list; if truncated, the count must be reported separately. */
 	static <T> List<T> head(List<T> list, int n) {
 		return list.subList(0, Math.min(n, list.size()));
 	}

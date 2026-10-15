@@ -6,9 +6,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Bir raporun kapsamı: ne incelendi ({@code examined}), ne atlandı ({@code skipped}, nedene göre sayı),
- * örnekleme yapıldı mı ({@code sampled}), süre yetmediği için eksik mi ({@code partial}), hatalar ve notlar.
- * Sessiz kırpma olmasın diye her rapor çıktısına {@link #addTo(Map)} ile eklenir.
+ * Coverage of a report: what was examined ({@code examined}), what was skipped ({@code skipped}, counts by
+ * reason), whether it was sampled ({@code sampled}), whether it is incomplete because time ran out
+ * ({@code partial}), errors and notes. Added to every report output with {@link #addTo(Map)} so nothing is
+ * truncated silently.
  */
 public final class Coverage {
 
@@ -24,13 +25,13 @@ public final class Coverage {
 
 	private boolean partial;
 
-	/** İncelenen öğe sayısı (ör. topics, partitions, groups). */
+	/** Number of examined items (e.g. topics, partitions, groups). */
 	public Coverage examined(String what, int count) {
 		examined.put(what, count);
 		return this;
 	}
 
-	/** Atlanan öğe sayısı; 0 ise yazılmaz. Aynı anahtar tekrar verilirse toplanır. */
+	/** Number of skipped items; omitted if 0. Repeated keys are summed. */
 	public Coverage skipped(String why, int count) {
 		if (count > 0) {
 			skipped.merge(why, count, Integer::sum);
@@ -38,7 +39,7 @@ public final class Coverage {
 		return this;
 	}
 
-	/** Bir adımın hatası (kısa mesaj ya da anahtar başına hata sayısı/map'i). */
+	/** Error of a step (a short message, or an error count/map per key). */
 	public Coverage error(String what, Object detail) {
 		if (detail != null) {
 			errors.put(what, detail);
@@ -46,13 +47,13 @@ public final class Coverage {
 		return this;
 	}
 
-	/** Sınır nedeniyle örnekleme yapıldı (tüm öğeler incelenmedi). */
+	/** Sampled because of a limit (not all items were examined). */
 	public Coverage sampled() {
 		sampled = true;
 		return this;
 	}
 
-	/** Süre yetmediği/yanıt gelmediği için sonuç eksik. */
+	/** The result is incomplete because time ran out or no response arrived. */
 	public Coverage partial() {
 		partial = true;
 		return this;
@@ -81,7 +82,7 @@ public final class Coverage {
 		return skipped;
 	}
 
-	/** examined, skipped, sampled, partial, errors, notes alanlarını (boş olanlar hariç) ekler. */
+	/** Adds the examined, skipped, sampled, partial, errors and notes fields (empty ones omitted). */
 	public void addTo(Map<String, Object> out) {
 		out.put("examined", new LinkedHashMap<>(examined));
 		if (!skipped.isEmpty()) {

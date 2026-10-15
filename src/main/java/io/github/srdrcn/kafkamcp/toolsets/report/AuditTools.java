@@ -20,38 +20,42 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Denetim raporları: replikasyon, retention/segment config'leri ve partition aykırılıkları. */
+/** Audit reports: replication, retention/segment configs and partition outliers. */
 @Component
 public class AuditTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("report_replication_audit",
-						"Replikasyon denetimi: RF=1, min.insync.replicas ≥ RF, URP/offline, unclean election, varsayılan altı RF, tek rack")
+						"Replication audit: RF=1, min.insync.replicas ≥ RF, URP/offline, unclean election, RF below default, single rack")
 					.param("includeInternal", ReportParams.includeInternal(true))
 					.listParams(50)
 					.handler(this::replicationAudit),
 				ToolSpec.read("report_retention_audit",
-						"Retention denetimi: sınırsız/çok kısa retention, retention.bytes, compact ayarları, segment aykırılıkları (değer + kaynak)")
+						"Retention audit: infinite/very short retention, retention.bytes, compaction settings, segment outliers (value + source)")
 					.param("includeInternal", ReportParams.includeInternal(false))
 					.param("largeSizeMb", ReportParams.integer(
-							"Sınırsız retention'da bu boyuttan (MB) büyük topic yüksek önemli (varsayılan 10240)", 10_240, 0,
+							"Size in MB above which a topic with infinite retention is high severity (default 10240)", 10_240, 0,
 							100_000_000))
 					.param("shortRetentionMinutes", ReportParams.integer(
-							"Bundan kısa retention/delete.retention/segment.ms aykırı sayılır (dakika, varsayılan 60)", 60, 1,
+							"Minutes below which retention/delete.retention/segment.ms is flagged (default 60)", 60, 1,
 							10_080))
 					.listParams(50)
 					.handler(this::retentionAudit),
 				ToolSpec.read("report_partition_outliers",
-						"Partition aykırılıkları: medyanın çok üstünde partition sayısı, topic içi boyut skew'i, broker lider dengesizliği")
-					.param("partitionFactor", ReportParams.integer("Medyanın kaç katı aykırı (varsayılan 4)", 4, 2, 1000))
-					.param("minPartitions", ReportParams.integer("Aykırı sayılmak için en az partition (varsayılan 50)", 50, 1,
+						"Partition outliers: partition counts far above the median, size skew within topics, leader imbalance across brokers")
+					.param("partitionFactor",
+							ReportParams.integer("Multiple of the median partition count above which a topic is an outlier (default 4)", 4,
+									2, 1000))
+					.param("minPartitions", ReportParams.integer("Minimum partition count for an outlier (default 50)", 50, 1,
 							100_000))
-					.param("skewFactor", ReportParams.integer("Topic ortalamasının kaç katı skew (varsayılan 3)", 3, 2, 1000))
-					.param("minSizeMb", ReportParams.integer("Skew için partition en az bu boyutta olmalı (MB, varsayılan 1)", 1,
+					.param("skewFactor",
+							ReportParams.integer("Multiple of the topic's average partition size above which a partition is skewed (default 3)", 3,
+									2, 1000))
+					.param("minSizeMb", ReportParams.integer("Minimum partition size in MB for skew (default 1)", 1,
 							0, 10_000_000))
 					.param("leaderImbalancePct", ReportParams.integer(
-							"Broker lider sayısı ortalamadan bu yüzdeden fazla saparsa dengesiz (varsayılan 25)", 25, 1, 1000))
+							"Leader count deviation from the average (%) above which a broker is imbalanced (default 25)", 25, 1, 1000))
 					.listParams(20)
 					.handler(this::partitionOutliers));
 	}
@@ -78,17 +82,17 @@ public class AuditTools {
 		Coverage coverage = scan.coverage();
 		coverage.examined("brokers", scan.brokers().size());
 		if (scan.brokerConfig() == null) {
-			coverage.note("Broker config'i okunamadı: varsayılan RF kontrolü atlandı");
+			coverage.note("Could not read the broker config: default RF check skipped");
 		}
 		if (withoutConfig > 0) {
-			coverage.note("Config'i okunamayan " + withoutConfig + " topic'te min ISR/unclean kontrolleri atlandı");
+			coverage.note("Min ISR/unclean checks skipped for " + withoutConfig + " topics whose config could not be read");
 		}
 		if (reassignments.error() != null) {
 			coverage.error("listPartitionReassignments", reassignments.error());
 		}
 		Map<String, Object> out = Results.map("brokers", scan.brokers().size(), "racks",
 				racks.isEmpty() ? null : new java.util.TreeSet<>(racks.values()), "rackCheck",
-				new java.util.HashSet<>(racks.values()).size() >= 2 ? "enabled" : "skipped (rack'li broker < 2)",
+				new java.util.HashSet<>(racks.values()).size() >= 2 ? "enabled" : "skipped (fewer than 2 racks)",
 				"defaultReplicationFactor", defaultRf, "reassigningPartitions",
 				reassignments.byPartition().isEmpty() ? null : reassignments.byPartition().size());
 		out.put("findingsTotal", f.total());
@@ -122,9 +126,9 @@ public class AuditTools {
 		out.put("findingsTotal", f.total());
 		out.put("bySeverity", f.bySeverity());
 		out.put("findings", f.render());
-		scan.coverage().note("source: topic = topic override'ı, broker = broker config'i, default = Kafka varsayılanı");
+		scan.coverage().note("source: topic = topic override, broker = broker config, default = Kafka default");
 		if (withoutConfig > 0) {
-			scan.coverage().note("Config'i okunamayan " + withoutConfig + " topic denetlenemedi");
+			scan.coverage().note("Retention checks skipped for " + withoutConfig + " topics whose config could not be read");
 		}
 		scan.coverage().addTo(out);
 		return out;
@@ -159,7 +163,7 @@ public class AuditTools {
 		Map<String, Object> out = Results.map("thresholds", Results.map("partitionFactor", th.partitionFactor(),
 				"minPartitions", th.minPartitions(), "skewFactor", th.skewFactor(), "minSize",
 				Format.bytes(th.minSizeBytes()), "leaderImbalancePct", th.leaderImbalancePct()), "medianPartitions",
-				median, "medianOver", userCounts.size() + " kullanıcı topic'i (filtreden bağımsız)", "reportedTopics",
+				median, "medianOver", userCounts.size() + " user topics (regardless of filter)", "reportedTopics",
 				reported.size());
 		List<Map<String, Object>> countRows = new ArrayList<>();
 		counts.forEach(c -> countRows.add(Results.map("topic", c.topic(), "partitions", c.partitions(), "timesMedian",
@@ -189,11 +193,11 @@ public class AuditTools {
 					"deviationPct", b.deviationPct(), "nonPreferredLeaders", b.nonPreferredLeaders(), "imbalanced",
 					b.imbalanced() ? true : null));
 		}
-		out.put("leaderBalance", Results.map("scope", "tüm topic'ler (iç topic'ler dahil)", "imbalancedBrokers",
+		out.put("leaderBalance", Results.map("scope", "all topics (including internal topics)", "imbalancedBrokers",
 				imbalanced, "nonPreferredLeaders", nonPreferred, "brokers", ReportParams.head(brokerRows, 500),
 				"brokersOmitted", brokerRows.size() > 500 ? brokerRows.size() - 500 : null));
 		if (!scan.sizesComplete()) {
-			scan.coverage().note("Boyutlar eksik: skew sonuçları eksik olabilir");
+			scan.coverage().note("Sizes are incomplete: skew results may be incomplete");
 		}
 		scan.coverage().addTo(out);
 		return out;

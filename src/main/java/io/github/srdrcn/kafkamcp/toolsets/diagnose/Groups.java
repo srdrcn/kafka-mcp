@@ -17,15 +17,16 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Süre sınırlı consumer group listesi (tek listGroups, istek timeoutMs ile): classic + consumer protokolü
- * (share/streams ve connect gibi protokolü olan diğer gruplar hariç). Yanıt vermeyen broker'lar errors'a düşer.
+ * Time-bounded consumer group listing (a single listGroups with a request timeoutMs): classic + consumer protocol
+ * (excluding share/streams and other groups with a protocol such as connect). Brokers that do not respond end up
+ * in errors.
  */
 public final class Groups {
 
 	private Groups() {
 	}
 
-	/** groupId → listing (sıralı) ve broker hataları. */
+	/** groupId → listing (sorted) and broker errors. */
 	public record Listing(Map<String, GroupListing> groups, List<String> errors) {
 
 		public List<String> ids() {
@@ -34,7 +35,7 @@ public final class Groups {
 
 	}
 
-	/** En fazla maxMillis içinde grup listesi; hiç yanıt yoksa ToolException. */
+	/** Group listing within at most maxMillis; ToolException if there is no response at all. */
 	public static Listing list(ToolCall call, long maxMillis) {
 		long max = Math.max(500, Math.min(maxMillis, call.waitMillis()));
 		ListGroupsResult r = call.admin().listGroups(new ListGroupsOptions().timeoutMs((int) max));

@@ -16,7 +16,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
-/** quotas_update ve quotas_list. */
+/** quotas_update and quotas_list. */
 class QuotaToolsTest extends KafkaIntegrationTest {
 
 	private static Map<String, Double> quotasOfUser(String user) throws Exception {
@@ -82,18 +82,18 @@ class QuotaToolsTest extends KafkaIntegrationTest {
 
 	@Test
 	void validationAndReadOnly() {
-		assertThat(error("quotas_update", args("set", Map.of("producer_byte_rate", 1)))).contains("En az bir entity");
+		assertThat(error("quotas_update", args("set", Map.of("producer_byte_rate", 1)))).contains("At least one entity");
 		assertThat(error("quotas_update", args("user", "u", "ip", "1.2.3.4", "set", Map.of("producer_byte_rate", 1))))
-			.contains("birlikte kullanılamaz");
+			.contains("cannot be combined");
 		assertThat(error("quotas_update", args("user", "u", "set", Map.of("foo_rate", 1))))
-			.contains("Geçersiz kota anahtarı");
+			.contains("Invalid quota key");
 		assertThat(error("quotas_update", args("ip", "1.2.3.4", "set", Map.of("producer_byte_rate", 1))))
 			.contains("connection_creation_rate");
-		assertThat(error("quotas_update", args("user", "u"))).contains("set ya da remove");
-		assertThat(error("quotas_update", args("user", "u", "set", Map.of("producer_byte_rate", "hızlı"))))
-			.contains("sayı olmalı");
+		assertThat(error("quotas_update", args("user", "u"))).contains("set or remove is required");
+		assertThat(error("quotas_update", args("user", "u", "set", Map.of("producer_byte_rate", "fast"))))
+			.contains("must be a number");
 		assertThat(error("quotas_update", args("user", "u", "set", Map.of("producer_byte_rate", 1), "remove",
-				List.of("producer_byte_rate")))).contains("hem set hem remove");
+				List.of("producer_byte_rate")))).contains("both set and remove");
 		assertThat(error("quotas_update", args("cluster", TestConfigs.READ_ONLY_CLUSTER, "user", "u", "set",
 				Map.of("producer_byte_rate", 1)))).contains("readOnly");
 		assertThat(ok("quotas_list", args("cluster", TestConfigs.READ_ONLY_CLUSTER)).has("quotas")).isTrue();

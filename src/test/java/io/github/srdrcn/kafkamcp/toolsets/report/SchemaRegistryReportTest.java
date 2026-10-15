@@ -15,7 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.SchemaRegistryTestCluster;
 
-/** Schema Registry'li cluster: özette subject sayısı. */
+/** Cluster with Schema Registry: subject count in the summary. */
 class SchemaRegistryReportTest extends SchemaRegistryIntegrationTest {
 
 	@Test

@@ -21,8 +21,8 @@ import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Kafka Connect REST client'ı (cluster başına bir {@link RestClient}). Hatalar Türkçe
- * {@link ToolException}'a çevrilir.
+ * Kafka Connect REST client (one {@link RestClient} per cluster). Errors are turned into readable
+ * {@link ToolException}s.
  */
 @Component
 public class ConnectClient {
@@ -40,7 +40,7 @@ public class ConnectClient {
 	public String baseUrl(String cluster) {
 		ClusterConfig c = clients.cluster(cluster);
 		if (!c.hasConnect()) {
-			throw new ToolException("cluster " + cluster + " için connectUrl tanımlı değil");
+			throw new ToolException("No connectUrl configured for cluster " + cluster);
 		}
 		return c.getConnectUrl().replaceAll("/+$", "");
 	}
@@ -66,18 +66,18 @@ public class ConnectClient {
 	}
 
 	/**
-	 * path: {@code /connectors/{name}} gibi, başında "/" ile. Path parçalarını
-	 * {@link #enc(String)} ile kodlayın. Boş gövde → {@code NullNode}.
+	 * path: like {@code /connectors/{name}}, starting with "/". Encode path segments with
+	 * {@link #enc(String)}. Empty body → {@code NullNode}.
 	 */
 	public JsonNode exchange(String cluster, String method, String path, Object body) {
 		return send(cluster, method, path, body).body();
 	}
 
-	/** HTTP durum kodu ve gövde (boş gövde → {@code NullNode}). */
+	/** HTTP status code and body (empty body → {@code NullNode}). */
 	public record Response(int status, JsonNode body) {
 	}
 
-	/** {@link #exchange} gibi, ama HTTP durum kodunu da döner (ör. 201 oluşturuldu / 200 güncellendi). */
+	/** Like {@link #exchange}, but also returns the HTTP status code (e.g. 201 created / 200 updated). */
 	public Response send(String cluster, String method, String path, Object body) {
 		String base = baseUrl(cluster);
 		RestClient client = rest.computeIfAbsent(cluster, c -> build(base));
@@ -94,14 +94,14 @@ public class ConnectClient {
 					text == null || text.isBlank() ? MAPPER.nullNode() : MAPPER.readTree(text));
 		}
 		catch (RestClientResponseException e) {
-			throw new ToolException("Connect REST hatası " + e.getStatusCode().value() + " (" + method + " " + path + "): "
+			throw new ToolException("Connect REST error " + e.getStatusCode().value() + " (" + method + " " + path + "): "
 					+ errorMessage(e.getResponseBodyAsString(), e.getStatusCode()), e);
 		}
 		catch (ResourceAccessException e) {
-			throw new ToolException("Connect'e ulaşılamadı (" + base + "): " + e.getMostSpecificCause().getMessage(), e);
+			throw new ToolException("Cannot reach Connect (" + base + "): " + e.getMostSpecificCause().getMessage(), e);
 		}
 		catch (java.io.IOException e) {
-			throw new ToolException("Connect yanıtı JSON değil (" + method + " " + path + ")", e);
+			throw new ToolException("Connect response is not JSON (" + method + " " + path + ")", e);
 		}
 	}
 
@@ -113,15 +113,15 @@ public class ConnectClient {
 			}
 		}
 		catch (Exception ignored) {
-			// gövde JSON değil
+			// body is not JSON
 		}
 		return body == null || body.isBlank() ? status.toString() : body;
 	}
 
 	/**
-	 * URL path parçası kodlaması (connector adlarında boşluk/özel karakter olabilir). Unreserved dışındaki her
-	 * karakter kodlanır: ';' gibi sub-delim'ler açık kalırsa Connect (Jetty) ';' sonrasını matrix parametresi
-	 * sayıp atar ve araç başka bir connector'a gider.
+	 * URL path segment encoding (connector names may contain spaces/special characters). Every character outside
+	 * the unreserved set is encoded: if sub-delims such as ';' stayed as is, Connect (Jetty) would treat the part
+	 * after ';' as a matrix parameter and drop it, and the tool would hit another connector.
 	 */
 	public static String enc(String segment) {
 		return org.springframework.web.util.UriUtils.encode(segment, java.nio.charset.StandardCharsets.UTF_8);

@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** diagnose_connectivity başarı yolu: KRaft ve ZooKeeper cluster'larında tüm adımlar ok. */
+/** diagnose_connectivity success path: all steps ok on KRaft and ZooKeeper clusters. */
 class DiagnoseConnectivityTest extends DiagnoseTestBase {
 
 	private static List<String> steps(JsonNode r) {
@@ -34,7 +34,7 @@ class DiagnoseConnectivityTest extends DiagnoseTestBase {
 			}
 			assertThat(r.get("mode").asText()).isEqualTo(zk(cluster) ? "ZooKeeper" : "KRaft");
 			JsonNode kafka = r.at("/steps/3");
-			assertThat(kafka.get("client").asText()).contains("yeni AdminClient");
+			assertThat(kafka.get("client").asText()).contains("new AdminClient");
 			String clusterId = admin(cluster).describeCluster().clusterId().get(30, TimeUnit.SECONDS);
 			assertThat(kafka.get("clusterId").asText()).isEqualTo(clusterId);
 			assertThat(r.at("/facts/clusterId").asText()).isEqualTo(clusterId);

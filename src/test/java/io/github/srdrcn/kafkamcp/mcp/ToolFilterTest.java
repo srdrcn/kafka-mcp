@@ -14,7 +14,7 @@ import io.github.srdrcn.kafkamcp.config.ConfigLoader;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 
-/** readOnly (global + cluster override), disableDestructive ve toolset seçimi. */
+/** readOnly (global + cluster override), disableDestructive and toolset selection. */
 class ToolFilterTest {
 
 	private static final List<Toolset> TOOLSETS = List.of(new FakeToolset());
@@ -62,7 +62,7 @@ class ToolFilterTest {
 		assertThat(tools.get("fake_update")).containsExactly("b");
 		assertThat(tools.get("fake_delete")).containsExactly("b");
 		assertThat(tools.get("fake_list")).containsExactly("a", "b");
-		// b'de connectUrl yok, a readOnly: connect yazma aracı hiçbir cluster'da kullanılamaz
+		// b has no connectUrl and a is readOnly: the connect write tool is available on no cluster
 		assertThat(tools).doesNotContainKey("fake_connect_pause");
 
 		KafkaMcpConfig c2 = config("toolsets: [fake]\nreadOnly: false\n");
@@ -82,7 +82,7 @@ class ToolFilterTest {
 		assertThat(ToolFilter.select(config("toolsets: []\n"), TOOLSETS)).isEmpty();
 		assertThatThrownBy(() -> ToolFilter.select(config("toolsets: [fake, nope]\n"), TOOLSETS))
 			.isInstanceOf(ConfigException.class)
-			.hasMessageContaining("Bilinmeyen toolset: [nope]");
+			.hasMessageContaining("Unknown toolset: [nope]");
 	}
 
 	@Test
@@ -100,7 +100,7 @@ class ToolFilterTest {
 		Map<String, Object> cluster = (Map<String, Object>) ((Map<String, Object>) schema.get("properties"))
 			.get("cluster");
 		assertThat(cluster.get("enum")).isEqualTo(List.of("a", "b"));
-		assertThat(t.tool().description()).startsWith("YAZMA:");
+		assertThat(t.tool().description()).startsWith("WRITE:");
 		assertThat(t.tool().annotations().readOnlyHint()).isFalse();
 	}
 
@@ -130,7 +130,7 @@ class ToolFilterTest {
 		long ms = (System.nanoTime() - start) / 1_000_000;
 		assertThat(r.isError()).isTrue();
 		assertThat(((io.modelcontextprotocol.spec.McpSchema.TextContent) r.content().get(0)).text())
-			.contains("zaman aşımı");
+			.contains("timeout");
 		assertThat(ms).isBetween(14_000L, 17_000L);
 		registry.destroy();
 	}

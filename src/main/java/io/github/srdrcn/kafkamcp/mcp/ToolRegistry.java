@@ -31,8 +31,8 @@ import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 
 /**
- * Listelenecek araçları tutar ve çağrıları çalıştırır: cluster doğrulaması, araç başına 15 sn zaman
- * sınırı, hata çevirisi, sonucun JSON metne çevrilmesi ve stdout'a tek satır JSON log.
+ * Holds the listed tools and runs calls: cluster validation, a 15 s time limit per tool, error
+ * translation, rendering the result as JSON text and a single-line JSON log to stdout.
  */
 @Component
 public class ToolRegistry implements DisposableBean {
@@ -61,7 +61,7 @@ public class ToolRegistry implements DisposableBean {
 		for (RegisteredTool t : ToolFilter.select(config, toolsets)) {
 			tools.put(t.spec().name(), t);
 		}
-		log.info("{} araç listelendi (toolsets={}, readOnly={}, disableDestructive={})", tools.size(),
+		log.info("{} tools listed (toolsets={}, readOnly={}, disableDestructive={})", tools.size(),
 				config.getToolsets(), config.isReadOnly(), config.isDisableDestructive());
 	}
 
@@ -87,7 +87,7 @@ public class ToolRegistry implements DisposableBean {
 		try {
 			RegisteredTool tool = tools.get(name);
 			if (tool == null) {
-				throw new ToolException("Bilinmeyen ya da kapalı araç: " + name);
+				throw new ToolException("Unknown or disabled tool: " + name);
 			}
 			checkCluster(tool, cluster);
 			ToolCall call = new ToolCall(name, args, clients, Instant.now().plusMillis(KafkaClients.TIMEOUT_MS));
@@ -101,7 +101,7 @@ public class ToolRegistry implements DisposableBean {
 		catch (RuntimeException e) {
 			outcome = "error";
 			error = KafkaErrors.explain(e);
-			log.warn("Araç beklenmeyen hata verdi: tool={}", name, e);
+			log.warn("Tool failed with an unexpected error: tool={}", name, e);
 		}
 		finally {
 			long ms = (System.nanoTime() - start) / 1_000_000;
@@ -121,18 +121,18 @@ public class ToolRegistry implements DisposableBean {
 			if (tool.spec().clusterOptional()) {
 				return;
 			}
-			throw new ToolException("cluster parametresi zorunlu. Geçerli değerler: " + tool.clusters());
+			throw new ToolException("Missing parameter: cluster. Valid values: " + tool.clusters());
 		}
 		if (tool.clusters().contains(cluster)) {
 			return;
 		}
 		ClusterConfig c = config.cluster(cluster);
 		if (c == null) {
-			throw new ToolException("Bilinmeyen cluster: " + cluster + ". Geçerli değerler: " + tool.clusters());
+			throw new ToolException("Unknown cluster: " + cluster + ". Valid values: " + tool.clusters());
 		}
 		String reason = ToolFilter.reasonUnavailable(config, tool.spec(), c);
-		throw new ToolException(tool.spec().name() + " bu cluster'da kullanılamaz: "
-				+ (reason == null ? "izin yok" : reason) + ". Geçerli değerler: " + tool.clusters());
+		throw new ToolException(tool.spec().name() + " is not available on this cluster: "
+				+ (reason == null ? "not allowed" : reason) + ". Valid values: " + tool.clusters());
 	}
 
 	private Object execute(RegisteredTool tool, ToolCall call) {
@@ -142,20 +142,20 @@ public class ToolRegistry implements DisposableBean {
 		}
 		catch (TimeoutException e) {
 			future.cancel(true);
-			throw new ToolException("Araç " + KafkaClients.TIMEOUT_MS / 1000
-					+ " sn içinde tamamlanamadı (zaman aşımı). Daha dar filtre/limit deneyin.");
+			throw new ToolException("Tool did not finish within " + KafkaClients.TIMEOUT_MS / 1000
+					+ " s (timeout). Try a narrower filter/limit.");
 		}
 		catch (InterruptedException e) {
 			future.cancel(true);
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		catch (ExecutionException e) {
 			Throwable cause = KafkaErrors.unwrap(e.getCause());
 			if (cause instanceof ToolException te) {
 				throw te;
 			}
-			log.debug("Araç hatası: tool={}", tool.spec().name(), cause);
+			log.debug("Tool error: tool={}", tool.spec().name(), cause);
 			throw new ToolException(KafkaErrors.explain(cause), cause);
 		}
 	}
@@ -171,7 +171,7 @@ public class ToolRegistry implements DisposableBean {
 			return RESULT_MAPPER.writeValueAsString(result);
 		}
 		catch (JsonProcessingException e) {
-			throw new ToolException("Sonuç JSON'a çevrilemedi: " + e.getOriginalMessage());
+			throw new ToolException("Could not serialize the result to JSON: " + e.getOriginalMessage());
 		}
 	}
 

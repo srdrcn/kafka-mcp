@@ -23,8 +23,8 @@ import io.modelcontextprotocol.server.transport.HttpServletStatelessServerTransp
 import io.modelcontextprotocol.spec.McpSchema;
 
 /**
- * MCP sunucusu. HTTP modunda {@code /mcp} üzerinde Streamable HTTP (stateless: oturum tutulmaz, pod
- * yeniden başlasa da istemci kaldığı yerden devam eder). stdio modu {@link StdioServer}'dadır.
+ * MCP server. In HTTP mode, Streamable HTTP on {@code /mcp} (stateless: no session is kept, so the client
+ * carries on even if the pod restarts). The stdio mode lives in {@link StdioServer}.
  */
 @Configuration(proxyBeanMethods = false)
 public class McpServerConfiguration {
@@ -34,11 +34,11 @@ public class McpServerConfiguration {
 	public static final String SERVER_NAME = "kafka-mcp";
 
 	static final String INSTRUCTIONS = """
-			Kafka cluster'ları için MCP sunucusu. Her araç `cluster` parametresi alır (geçerli adlar \
-			şemadaki enum'da; clusters_list ile durumlarına bakılabilir). Listeleyen araçlar `filter` \
-			(regex) ve `limit` alır. Mesaj okuyan araçlar `maxRecords` (varsayılan 50, en fazla 500) alır, \
-			consumer group oluşturmaz ve offset commit etmez. Açıklaması "YAZMA:" ile başlayan araçlar \
-			cluster'ı değiştirir. Her araç en fazla 15 sn çalışır.""";
+			MCP server for Kafka clusters. Every tool takes a `cluster` parameter (valid names are in the \
+			schema enum; use clusters_list to see their status). Listing tools take `filter` (regex) and \
+			`limit`. Tools that read messages take `maxRecords` (default 50, max 500), never create a \
+			consumer group and never commit offsets. Tools whose description starts with "WRITE:" change \
+			the cluster. Each tool runs for at most 15 s.""";
 
 	@Bean
 	McpJsonMapper mcpJsonMapper() {

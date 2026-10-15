@@ -1,4 +1,4 @@
-# ConfigMap kafka-mcp-config içindeki krb5.conf şablonu. KDC adreslerini kendi ortamınıza göre doldurun.
+# Template for krb5.conf inside the kafka-mcp-config ConfigMap. Fill in the KDC addresses for your environment.
 [libdefaults]
   default_realm = EXAMPLE.COM
   dns_lookup_realm = false

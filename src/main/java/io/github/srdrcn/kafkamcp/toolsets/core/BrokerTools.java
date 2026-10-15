@@ -35,21 +35,21 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Broker okuma araçları: liste, config, config farkları, log dizinleri, partition dağılımı. */
+/** Broker read tools: list, configs, config drift, log dirs, partition distribution. */
 @Component
 public class BrokerTools {
 
 	/**
-	 * Broker'a özgü olduğu için karşılaştırmaya alınmayan anahtarlar. process.roles KRaft'ta düğüm rolüdür
-	 * (broker / broker,controller); farklı olması drift değildir.
+	 * Keys left out of the comparison because they are broker-specific. process.roles is the node role on KRaft
+	 * (broker / broker,controller); a difference there is not drift.
 	 */
 	static final List<String> PER_BROKER_KEYS = List.of("broker.id", "node.id", "broker.rack", "listeners",
 			"advertised.listeners", "advertised.host.name", "advertised.port", "host.name", "port", "log.dir",
 			"log.dirs", "metadata.log.dir", "process.roles");
 
 	/**
-	 * Sadece bir moda anlam taşıyan anahtarlar (önek ya da tam ad). Aynı cluster'da ZooKeeper ve KRaft
-	 * broker'ları birlikteyse (ZooKeeper→KRaft geçişi) bunların farklı olması beklenir; karşılaştırılmaz.
+	 * Keys that only mean something in one mode (prefix or full name). When ZooKeeper and KRaft brokers share a
+	 * cluster (ZooKeeper→KRaft migration) these are expected to differ and are not compared.
 	 */
 	static final List<String> MODE_SPECIFIC_KEYS = List.of("zookeeper.", "controller.quorum.",
 			"controller.listener.names", "inter.broker.protocol.version", "log.message.format.version",
@@ -57,34 +57,34 @@ public class BrokerTools {
 
 	static final String AUTHORIZER = "authorizer.class.name";
 
-	/** ZooKeeper broker'larının ACL authorizer'ları (AclAuthorizer ve öncülü SimpleAclAuthorizer). */
+	/** ACL authorizers of ZooKeeper brokers (AclAuthorizer and its predecessor SimpleAclAuthorizer). */
 	static final Set<String> ZK_AUTHORIZERS = Set.of("kafka.security.authorizer.AclAuthorizer",
 			"kafka.security.auth.SimpleAclAuthorizer");
 
-	/** KRaft broker'larının ACL authorizer'ı. */
+	/** ACL authorizer of KRaft brokers. */
 	static final String KRAFT_AUTHORIZER = "org.apache.kafka.metadata.authorizer.StandardAuthorizer";
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("brokers_list", "Broker'ları listeler: host, port, rack, controller mı, lider ve replika sayıları")
+				ToolSpec.read("brokers_list", "List brokers: host, port, rack, controller flag, leader and replica counts")
 					.listParams()
 					.handler(this::brokersList),
-				ToolSpec.read("brokers_config_get", "Bir broker'ın config'leri (varsayılan: sadece varsayılandan farklı olanlar)")
-					.param("brokerId", P.integer("Broker id (boşsa controller ya da ilk broker)"))
-					.param("includeDefaults", P.bool("Varsayılan değerleri de getir (varsayılan false)"))
+				ToolSpec.read("brokers_config_get", "Configs of a broker (by default only non-default values)")
+					.param("brokerId", P.integer("Broker id (default: the controller or the first broker)"))
+					.param("includeDefaults", P.bool("Also return default values (default false)"))
 					.listParams()
 					.handler(this::brokersConfigGet),
 				ToolSpec.read("brokers_config_drift",
-						"Broker'lar arasında değeri farklı olan config'ler (broker'a özgü anahtarlar; ZooKeeper ve KRaft broker'ları karışıksa moda özgü anahtarlar hariç)")
+						"Configs whose values differ between brokers (skips broker-specific keys, and mode-specific keys on mixed ZooKeeper/KRaft clusters)")
 					.listParams()
 					.handler(this::brokersConfigDrift),
 				ToolSpec.read("brokers_logdirs",
-						"Broker log dizinleri: yol, disk/kullanılan boyut, hata, partition sayısı ve en büyük partition'lar")
-					.param("brokerId", P.integer("Sadece bu broker (boşsa hepsi)"))
+						"Broker log dirs: path, disk and used size, error, partition count and the largest partitions")
+					.param("brokerId", P.integer("Only this broker (default: all brokers)"))
 					.listParams(20)
 					.handler(this::brokersLogdirs),
 				ToolSpec.read("brokers_partition_skew",
-						"Broker başına lider/replika sayısı, ortalamadan sapma (%) ve tercih edilmeyen lider sayısı")
+						"Leader/replica counts per broker, deviation from the average (%) and non-preferred leader count")
 					.handler(this::brokersPartitionSkew));
 	}
 
@@ -151,30 +151,30 @@ public class BrokerTools {
 				PER_BROKER_KEYS);
 		if (mixedModes) {
 			out.put("brokerModes", modes);
-			out.put("modeNote", "Broker'lar farklı modda (ZooKeeper→KRaft geçişi?): moda özgü anahtarlar ("
-					+ String.join(", ", MODE_SPECIFIC_KEYS) + ") karşılaştırılmadı"
+			out.put("modeNote", "Brokers run in different modes (ZooKeeper→KRaft migration?): mode-specific keys ("
+					+ String.join(", ", MODE_SPECIFIC_KEYS) + ") were not compared"
 					+ (authorizerByMode
-							? "; authorizer.class.name her broker'da moduna uygun (ZooKeeper: AclAuthorizer, KRaft: StandardAuthorizer)"
+							? "; authorizer.class.name matches each broker's mode (ZooKeeper: AclAuthorizer, KRaft: StandardAuthorizer)"
 							: ""));
 		}
 		if (!drift.presenceOnly().isEmpty()) {
 			out.put("keysOnlyOnSomeBrokers", drift.presenceOnly().size());
 			out.put("keysOnlyOnSomeBrokersNote",
-					"Bazı broker'larda hiç olmayan, diğerlerinde varsayılan değerli anahtarlar (farklı Kafka sürümü/modu) fark sayılmadı");
+					"Keys missing on some brokers and at their default value on the others (different Kafka version/mode) are not counted as drift");
 		}
 		if (!configs.errors().isEmpty()) {
 			out.put("failedBrokers", byBrokerId(configs.errors()));
 		}
 		if (byBroker.size() < 2) {
-			out.put("note", "Karşılaştırma için en az 2 broker gerekli");
+			out.put("note", "At least 2 brokers are needed for a comparison");
 		}
 		out.putAll(Results.page("differences", drift.differences(), call.limit()));
 		return out;
 	}
 
 	/**
-	 * Karşılaştırılacak anahtarlar: broker'a özgü olmayan ve {@code matches}'e uyan; broker'lar farklı moddaysa
-	 * moda özgü anahtarlar ve (her broker kendi modunun authorizer'ını kullanıyorsa) authorizer.class.name hariç.
+	 * Keys to compare: not broker-specific and accepted by {@code matches}; when brokers run in different modes,
+	 * mode-specific keys and (if each broker uses its own mode's authorizer) authorizer.class.name are skipped.
 	 */
 	static Predicate<String> compared(Map<Integer, Config> byBroker, Predicate<String> matches) {
 		boolean mixedModes = brokerModes(byBroker).size() > 1;
@@ -184,15 +184,15 @@ public class BrokerTools {
 	}
 
 	/**
-	 * Geçişte beklenen authorizer farkı mı: her ZooKeeper broker'ı AclAuthorizer (ya da SimpleAclAuthorizer), her
-	 * KRaft broker'ı StandardAuthorizer kullanıyor. Modu belirlenemeyen broker ya da başka bir kombinasyon (ör.
-	 * bir tarafta authorizer yok) gerçek fark sayılır.
+	 * Is this the authorizer difference expected during a migration: every ZooKeeper broker uses AclAuthorizer (or
+	 * SimpleAclAuthorizer) and every KRaft broker uses StandardAuthorizer. A broker with an unknown mode or any
+	 * other combination (e.g. no authorizer on one side) counts as a real difference.
 	 */
 	static boolean authorizerMatchesModes(Map<Integer, Config> byBroker) {
 		for (Config c : byBroker.values()) {
 			ClusterMeta.Mode mode = brokerMode(c);
 			String authorizer = Configs.value(c.get(AUTHORIZER));
-			// Set.of null kabul etmez: authorizer yoksa (ACL kapalı) beklenen kombinasyon değil
+			// Set.of does not accept null: no authorizer (ACLs disabled) is not an expected combination
 			boolean expected = authorizer != null && (mode.isZooKeeper() ? ZK_AUTHORIZERS.contains(authorizer)
 					: mode.isKraft() && KRAFT_AUTHORIZER.equals(authorizer));
 			if (!expected) {
@@ -202,7 +202,7 @@ public class BrokerTools {
 		return true;
 	}
 
-	/** Anahtar moda özgü mü ({@link #MODE_SPECIFIC_KEYS})? */
+	/** Is the key mode-specific ({@link #MODE_SPECIFIC_KEYS})? */
 	static boolean modeSpecific(String name) {
 		for (String k : MODE_SPECIFIC_KEYS) {
 			if (k.endsWith(".") ? name.startsWith(k) : name.equals(k)) {
@@ -213,8 +213,8 @@ public class BrokerTools {
 	}
 
 	/**
-	 * Broker'ın kendi config'ine göre modu: process.roles doluysa KRaft, zookeeper.connect doluysa ZooKeeper,
-	 * ikisi de yoksa bilinmiyor.
+	 * Mode of a broker from its own config: KRaft if process.roles is set, ZooKeeper if zookeeper.connect is set,
+	 * unknown if neither is.
 	 */
 	static ClusterMeta.Mode brokerMode(Config c) {
 		ConfigEntry roles = c.get("process.roles");
@@ -228,7 +228,7 @@ public class BrokerTools {
 		return ClusterMeta.Mode.UNKNOWN;
 	}
 
-	/** Mod → broker id'leri (modu belirlenemeyenler hariç). */
+	/** Mode → broker ids (brokers with an unknown mode are left out). */
 	static Map<String, List<Integer>> brokerModes(Map<Integer, Config> byBroker) {
 		Map<String, List<Integer>> out = new TreeMap<>();
 		byBroker.forEach((id, c) -> {
@@ -240,29 +240,29 @@ public class BrokerTools {
 		return out;
 	}
 
-	/** BROKER config kaynağı anahtarlı map'i broker id anahtarlı (sıralı) map'e çevirir. */
+	/** Turns a map keyed by BROKER config resource into a (sorted) map keyed by broker id. */
 	static <V> Map<Integer, V> byBrokerId(Map<ConfigResource, V> byResource) {
 		Map<Integer, V> out = new TreeMap<>();
 		byResource.forEach((r, v) -> out.put(Integer.parseInt(r.name()), v));
 		return out;
 	}
 
-	/** {@link #drift} sonucu: farklar ve sadece varlık farkı olan (sürüm/mod kaynaklı) anahtarlar. */
+	/** Result of {@link #drift}: the differences and the keys that differ only in presence (version/mode related). */
 	record Drift(List<Map<String, Object>> differences, List<String> presenceOnly) {
 	}
 
 	/**
-	 * Broker'lar arasında değeri farklı olan anahtarlar; her biri için (değer, kaynak) grupları ve o grubu
-	 * paylaşan broker'lar (kalabalık grup önce). Anahtarı hiç döndürmeyen broker "(yok)" değeriyle sayılır.
+	 * Keys whose values differ between brokers; for each, the (value, source) groups and the brokers sharing that
+	 * group (largest group first). A broker that does not return the key at all counts with the value "(missing)".
 	 */
 	static List<Map<String, Object>> differences(Map<Integer, Config> byBroker, Predicate<String> include) {
 		return drift(byBroker, include).differences();
 	}
 
 	/**
-	 * {@link #differences} gibi; ancak anahtarı döndüren tüm broker'larda varsayılan değerdeyse ve sadece bazı
-	 * broker'larda hiç yoksa (farklı Kafka sürümü ya da mod: ör. ZooKeeper 3.x'te olup KRaft 4.x'te olmayan
-	 * anahtarlar) fark sayılmaz, {@link Drift#presenceOnly()} içinde döner.
+	 * Like {@link #differences}; but a key that is at its default value on every broker returning it and is only
+	 * missing on some brokers (different Kafka version or mode: e.g. keys present on ZooKeeper 3.x but absent on
+	 * KRaft 4.x) is not a difference and is returned in {@link Drift#presenceOnly()} instead.
 	 */
 	static Drift drift(Map<Integer, Config> byBroker, Predicate<String> include) {
 		Map<String, Map<Integer, ConfigEntry>> byKey = new TreeMap<>();
@@ -292,7 +292,7 @@ public class BrokerTools {
 				continue;
 			}
 			List<Map<String, Object>> values = new ArrayList<>();
-			groups.forEach((k, brokers) -> values.add(Results.map("value", k.get(0) == null ? "(yok)" : k.get(0),
+			groups.forEach((k, brokers) -> values.add(Results.map("value", k.get(0) == null ? "(missing)" : k.get(0),
 					"source", k.get(1), "brokers", brokers)));
 			values.sort(Comparator.comparingInt((Map<String, Object> m) -> -((List<?>) m.get("brokers")).size()));
 			diffs.add(Results.map("name", e.getKey(), "values", values));
@@ -338,8 +338,8 @@ public class BrokerTools {
 						future > 0 ? future : null);
 				if (desc.totalBytes().isEmpty() || desc.usableBytes().isEmpty()) {
 					if (desc.error() == null) {
-						// DescribeLogDirs v4 (Kafka 3.3+) öncesi broker'lar disk boyutunu döndürmez
-						row.put("disk", KafkaErrors.UNSUPPORTED + ": disk boyutu Kafka 3.3+ broker'larda var");
+						// brokers before DescribeLogDirs v4 (Kafka 3.3+) do not return the disk size
+						row.put("disk", KafkaErrors.UNSUPPORTED + ": disk size requires Kafka 3.3+ brokers");
 					}
 				}
 				else {
@@ -347,7 +347,7 @@ public class BrokerTools {
 					long usable = desc.usableBytes().getAsLong();
 					row.put("totalBytes", total);
 					row.put("usableBytes", usable);
-					row.put("disk", Format.bytes(usable) + " boş / " + Format.bytes(total));
+					row.put("disk", Format.bytes(usable) + " free / " + Format.bytes(total));
 					if (total > 0) {
 						row.put("diskUsedPct", Format.round(100.0 * (total - usable) / total, 1));
 					}
@@ -368,14 +368,14 @@ public class BrokerTools {
 		return out;
 	}
 
-	/** Sıralama için hafif replika kaydı (map'e sadece ilk limit kadarı çevrilir). */
+	/** Lightweight replica record for sorting (only the first limit entries are turned into maps). */
 	private record Replica(TopicPartition tp, int broker, String dir, ReplicaInfo info) {
 	}
 
 	Object brokersPartitionSkew(ToolCall call) {
 		ClusterMeta.Info info = ClusterMeta.describe(call, false);
 		Map<String, TopicDescription> topics = Topics.describeAll(call, true);
-		// [lider, replika, tercih edilen lider olduğu, lider ama tercih edilen değil]
+		// [leader, replica, preferred leader of, leader but not preferred]
 		Map<Integer, int[]> counts = new TreeMap<>();
 		info.brokerIds().forEach(id -> counts.put(id, new int[4]));
 		int partitions = 0;
@@ -431,10 +431,10 @@ public class BrokerTools {
 				Format.round(maxReplicaDev, 1), "skewed", maxLeaderDev > 20 || maxReplicaDev > 20);
 		Map<String, Object> out = Results.map("summary", summary, "brokers", rows);
 		if (nonPreferred > 0) {
-			out.put("hint", "Tercih edilen lidere dönmek için brokers_elect_preferred_leaders kullanılabilir");
+			out.put("hint", "Use brokers_elect_preferred_leaders to move leadership back to the preferred replicas");
 		}
 		if (rows.stream().anyMatch(r -> Boolean.FALSE.equals(r.get("online")))) {
-			out.put("note", "online=false: replikası olan ama erişilebilir olmayan broker");
+			out.put("note", "online=false: the broker hosts replicas but is unreachable");
 		}
 		return out;
 	}

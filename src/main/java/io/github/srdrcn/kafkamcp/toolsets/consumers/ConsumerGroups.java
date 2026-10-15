@@ -34,34 +34,35 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
 /**
- * Consumer group listeleme ve toplu describe yardımcıları (state/type adları, üyeler, partition sahipleri).
- * Tüm çağrılar tek admin isteğiyle yapılır; tek bir grubun hatası ya da yanıtsız kalması diğerlerini etkilemez.
+ * Helpers for listing and bulk-describing consumer groups (state/type names, members, partition owners). Each
+ * call is a single admin request; an error or a missing response for one group does not affect the others.
  */
 public final class ConsumerGroups {
 
-	/** list(): ardından gelen committed + end offset sorguları için deadline'dan ayrılan varsayılan pay. */
+	/** list(): default share of the deadline kept for the committed + end offset queries that follow. */
 	public static final long LIST_RESERVE_MS = 6_000;
 
-	/** describe(): çıktı için deadline'dan ayrılan varsayılan pay. */
+	/** describe(): default share of the deadline kept for the output. */
 	public static final long DESCRIBE_RESERVE_MS = 1_000;
 
-	/** get/lag çıktısında reassigningTo alanının açıklaması. */
-	public static final String REASSIGNING_NOTE = "reassigningTo: sahibi bilinmiyor; partition bu üyeye aktarılıyor "
-			+ "(KIP-848 reconciling). Önceki sahibi revoke'u bitirene kadar describe'da görünmez, tüketim sürüyor olabilir";
+	/** Explanation of the reassigningTo field in the get/lag output. */
+	public static final String REASSIGNING_NOTE = "reassigningTo: owner unknown; the partition is being moved to this "
+			+ "member (KIP-848 reconciling). The previous owner is not shown in describe until it finishes revoking "
+			+ "and may still be consuming";
 
 	private static final String METADATA_VERSION = "metadata.version";
 
-	/** metadata.version 3.7-IV0: KIP-848 consumer tipi grupların (early access) geldiği ilk sürüm. */
+	/** metadata.version 3.7-IV0: first version with KIP-848 consumer-type groups (early access). */
 	private static final short CONSUMER_GROUPS_MIN_METADATA_LEVEL = 15;
 
-	/** Group listesindeki bir satır. state/type broker bildirmezse null. */
+	/** A row of the group list. state/type are null if the broker does not report them. */
 	public record GroupSummary(String groupId, String state, String type, String protocol, boolean simple) {
 
 		public boolean isEmptyState() {
 			return GroupState.EMPTY.toString().equals(state);
 		}
 
-		/** Üyesi olabilecek durumda mı (Empty/Dead değil). */
+		/** Can the group have members (not Empty/Dead)? */
 		public boolean mayHaveMembers() {
 			return !GroupState.EMPTY.toString().equals(state) && !GroupState.DEAD.toString().equals(state);
 		}
@@ -74,9 +75,10 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * listGroups sonucu: başarıyla listelenen gruplar (groupId'ye göre sıralı), broker hataları (hata varsa
-	 * liste eksik olabilir; eski broker'da state'i tamamlanamayan gruplar da burada sayılır) ve listeyi
-	 * tamamlarken (eski broker) zaten describe edilmiş grupların açıklamaları (tekrar describe etmemek için).
+	 * listGroups result: the groups listed successfully (sorted by groupId), broker errors (if any, the list may be
+	 * incomplete; on old brokers groups whose state could not be completed are also counted here) and the
+	 * descriptions of groups already described while completing the list (old brokers), so they are not described
+	 * again.
 	 */
 	public record GroupList(List<GroupSummary> groups, List<String> errors,
 			Map<String, ConsumerGroupDescription> descriptions) {
@@ -85,7 +87,7 @@ public final class ConsumerGroups {
 			this(groups, errors, Map.of());
 		}
 
-		/** Yanıt vermeyen/hata veren broker'lar ya da state'i alınamayan gruplar yüzünden liste eksik olabilir mi? */
+		/** May the list be incomplete (brokers without response or with errors, groups with unknown state)? */
 		public boolean partial() {
 			return !errors.isEmpty();
 		}
@@ -102,24 +104,24 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Tüm consumer group'lar (classic + consumer protokolü) tek listGroups çağrısıyla; deadline'dan
-	 * {@link #LIST_RESERVE_MS} pay bırakır.
+	 * All consumer groups (classic + consumer protocol) with a single listGroups call; keeps a share of
+	 * {@link #LIST_RESERVE_MS} of the deadline.
 	 */
 	public static GroupList list(ToolCall call) {
 		return list(call, LIST_RESERVE_MS);
 	}
 
 	/**
-	 * Tüm consumer group'lar; istek en geç (kalan süre - reserveMillis) içinde biter. Yanıt vermeyen broker'lar
-	 * {@link GroupList#errors()}'a düşer.
+	 * All consumer groups; the request finishes within (remaining time - reserveMillis) at the latest. Brokers that
+	 * do not respond end up in {@link GroupList#errors()}.
 	 */
 	public static GroupList list(ToolCall call, long reserveMillis) {
 		return list(call, reserveMillis, null);
 	}
 
 	/**
-	 * {@link #list(ToolCall, long)}; groupFilter null değilse sadece uyan gruplar döner (eski broker'da eksik
-	 * state/type'ı tamamlamak için sadece onlar describe edilir).
+	 * {@link #list(ToolCall, long)}; if groupFilter is not null, only matching groups are returned (on old brokers
+	 * only those are described to complete the missing state/type).
 	 */
 	public static GroupList list(ToolCall call, long reserveMillis, Predicate<String> groupFilter) {
 		ListGroupsResult r = call.admin()
@@ -128,7 +130,7 @@ public final class ConsumerGroups {
 		Settled<Collection<Throwable>> errors = Settled.within(call, r.errors(), reserveMillis);
 		if (!valid.ok()) {
 			if (valid.timedOut()) {
-				throw new ToolException("Consumer group listesi süre içinde alınamadı (broker'lar yanıt vermedi)",
+				throw new ToolException("Could not list consumer groups in time (brokers did not respond)",
 						valid.error());
 			}
 			throw new ToolException(valid.errorMessage(), valid.error());
@@ -146,9 +148,9 @@ public final class ConsumerGroups {
 				continue;
 			}
 			String protocol = g.protocol() == null || g.protocol().isBlank() ? null : g.protocol();
-			// GroupListing.isSimpleConsumerGroup() broker'ın type bildirmesini (ListGroups v5+, Kafka 3.8+)
-			// şart koşar; eski (ZooKeeper) broker'larda simple grup hiç işaretlenmezdi. Boş protocol type'ı
-			// sadece classic gruplarda olur: type yoksa da simple sayılır.
+			// GroupListing.isSimpleConsumerGroup() requires the broker to report the type (ListGroups v5+, Kafka
+			// 3.8+); on old (ZooKeeper) brokers simple groups were never marked. An empty protocol type only occurs
+			// in classic groups: without a type the group also counts as simple.
 			boolean simple = protocol == null && g.type().map(t -> t == GroupType.CLASSIC).orElse(true);
 			groups.add(new GroupSummary(g.groupId(), g.groupState().map(ConsumerGroups::state).orElse(null),
 					g.type().map(ConsumerGroups::type).orElse(null), protocol, simple));
@@ -158,15 +160,15 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Listede eksik kalan state/type alanlarını tamamlar:
+	 * Completes the state/type fields missing from the list:
 	 * <ul>
-	 * <li>Kafka 2.6 öncesi broker'lar (ListGroups v4 öncesi) state döndürmez: Empty/Stable filtreleri ve
-	 * consumer_groups_empty bu grupları sessizce kaçırmasın diye state'i bilinmeyen gruplar describe edilir.
-	 * Yanıt gelmeyen/hata verenler state'siz kalır ve {@link GroupList#errors()}'a sayılır (partial).</li>
-	 * <li>Kafka 3.8 öncesi broker'lar (ListGroups v5 öncesi; 2.6-3.7 ZooKeeper filolarının çoğu) type
-	 * döndürmez. Simple grup (boş protocol) ve classic'e/consumer'a özgü state'ler type'ı belirler; kalanlar
-	 * için tek describeFeatures: ZooKeeper'da (finalize edilmiş metadata.version yok) ve 3.7 öncesi KRaft'ta
-	 * consumer tipi grup olamaz, hepsi classic. Sadece 3.7 KRaft'ta (KIP-848 early access) describe edilir.</li>
+	 * <li>Brokers before Kafka 2.6 (before ListGroups v4) do not return the state: groups with an unknown state are
+	 * described so that the Empty/Stable filters and consumer_groups_empty do not silently miss them. Those without a
+	 * response or with an error stay without a state and are counted in {@link GroupList#errors()} (partial).</li>
+	 * <li>Brokers before Kafka 3.8 (before ListGroups v5; most 2.6-3.7 ZooKeeper fleets) do not return the type.
+	 * Simple groups (empty protocol) and classic-/consumer-specific states determine the type; for the rest a
+	 * single describeFeatures: on ZooKeeper (no finalized metadata.version) and on KRaft before 3.7 there cannot be
+	 * consumer-type groups, all are classic. Only on KRaft 3.7 (KIP-848 early access) are they described.</li>
 	 * </ul>
 	 */
 	private static GroupList complete(ToolCall call, List<GroupSummary> groups, List<String> errors,
@@ -190,7 +192,7 @@ public final class ConsumerGroups {
 		int stateUnknown = 0;
 		String firstError = null;
 		for (GroupSummary g : typed) {
-			// Broker type bildirmiyor ve consumer tipi grup olamaz: classic.
+			// The broker does not report the type and consumer-type groups are impossible: classic.
 			String type = g.type() == null && Boolean.FALSE.equals(consumerTypePossible) ? type(GroupType.CLASSIC)
 					: g.type();
 			String state = g.state();
@@ -203,7 +205,7 @@ public final class ConsumerGroups {
 			}
 			else if (s != null && state == null) {
 				if (notFound(s.error())) {
-					// listeden sonra silinmiş: eski broker'ların olmayan grup için döndürdüğü gibi Dead
+					// deleted after the listing: Dead, as old brokers return for a missing group
 					state = state(GroupState.DEAD);
 				}
 				else {
@@ -214,16 +216,16 @@ public final class ConsumerGroups {
 			out.add(new GroupSummary(g.groupId(), state, type, g.protocol(), g.simple()));
 		}
 		if (stateUnknown > 0) {
-			outErrors.add("State'i alınamayan grup: " + stateUnknown + " (broker listede state bildirmiyor; describe: "
-					+ firstError + ")");
+			outErrors.add("Groups whose state could not be fetched: " + stateUnknown
+					+ " (the broker does not report the state in the listing; describe: " + firstError + ")");
 		}
 		return new GroupList(out, outErrors, descriptions);
 	}
 
-	/** Listede type yoksa (Kafka &lt; 3.8) describe etmeden belirlenebilen type; belirlenemezse null. */
+	/** Type that can be determined without describe if the listing has no type (Kafka &lt; 3.8); otherwise null. */
 	private static String inferType(GroupSummary g) {
 		if (g.simple()) {
-			// boş protocol type'ı sadece classic gruplarda olur
+			// an empty protocol type only occurs in classic groups
 			return type(GroupType.CLASSIC);
 		}
 		if (g.state() == null) {
@@ -240,10 +242,10 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Type bildirmeyen (Kafka &lt; 3.8) cluster'da KIP-848 consumer tipi grup olabilir mi? Sadece 3.7 KRaft'ta
-	 * (early access) olabilir: ZooKeeper'da finalize edilmiş metadata.version yoktur (describeFeatures boş),
-	 * KRaft'ta broker'ın desteklediği en yüksek metadata.version 3.7-IV0'dan küçükse olamaz. Sorgu süre
-	 * içinde yanıtlanmazsa null (type bilinmiyor kalır; ağır describe yapılmaz).
+	 * Can a cluster that does not report the type (Kafka &lt; 3.8) have KIP-848 consumer-type groups? Only on KRaft
+	 * 3.7 (early access): ZooKeeper has no finalized metadata.version (describeFeatures is empty), and on KRaft it
+	 * cannot if the highest metadata.version the broker supports is below 3.7-IV0. null if the query is not
+	 * answered in time (the type stays unknown; no heavy describe is done).
 	 */
 	private static Boolean consumerTypeGroupsPossible(ToolCall call, long reserveMillis) {
 		DescribeFeaturesOptions options = new DescribeFeaturesOptions().timeoutMs(Settled.timeoutMs(call, reserveMillis));
@@ -260,14 +262,14 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * Grupları tek describeConsumerGroups çağrısıyla describe eder; kaybolan gruplar hata, yanıt gelmeyenler
-	 * {@link Settled#timedOut()} olarak döner. {@link #DESCRIBE_RESERVE_MS} pay bırakır.
+	 * Describes the groups with a single describeConsumerGroups call; groups that disappeared come back as errors,
+	 * those without a response as {@link Settled#timedOut()}. Keeps a share of {@link #DESCRIBE_RESERVE_MS}.
 	 */
 	public static Map<String, Settled<ConsumerGroupDescription>> describe(ToolCall call, Collection<String> groups) {
 		return describe(call, groups, DESCRIBE_RESERVE_MS);
 	}
 
-	/** {@link #describe(ToolCall, Collection)}; istek en geç (kalan süre - reserveMillis) içinde biter. */
+	/** {@link #describe(ToolCall, Collection)}; the request finishes within (remaining time - reserveMillis). */
 	public static Map<String, Settled<ConsumerGroupDescription>> describe(ToolCall call, Collection<String> groups,
 			long reserveMillis) {
 		Map<String, Settled<ConsumerGroupDescription>> out = new LinkedHashMap<>();
@@ -285,49 +287,49 @@ public final class ConsumerGroups {
 		return out;
 	}
 
-	/** Tek grubu describe eder; grup yoksa Türkçe {@link ToolException}. */
+	/** Describes a single group; {@link ToolException} if the group does not exist. */
 	public static ConsumerGroupDescription describeExisting(ToolCall call, String group) {
 		return describeExisting(call, group, DESCRIBE_RESERVE_MS);
 	}
 
-	/** {@link #describeExisting(ToolCall, String)}; deadline'dan reserveMillis pay bırakır. */
+	/** {@link #describeExisting(ToolCall, String)}; keeps a share of reserveMillis of the deadline. */
 	public static ConsumerGroupDescription describeExisting(ToolCall call, String group, long reserveMillis) {
 		Settled<ConsumerGroupDescription> s = describe(call, List.of(group), reserveMillis).get(group);
 		if (s == null || !s.ok()) {
 			if (s != null && notFound(s.error())) {
 				throw notFoundError(group);
 			}
-			throw new ToolException(s == null ? "Grup describe edilemedi: " + group : s.errorMessage(),
+			throw new ToolException(s == null ? "Could not describe group: " + group : s.errorMessage(),
 					s == null ? null : s.error());
 		}
 		return s.value();
 	}
 
 	public static ToolException notFoundError(String group) {
-		return new ToolException("Consumer group bulunamadı: " + group + " (consumer_groups_list ile bakın)");
+		return new ToolException("Consumer group not found: " + group + " (see consumer_groups_list)");
 	}
 
 	public static boolean notFound(Throwable e) {
 		return KafkaErrors.unwrap(e) instanceof GroupIdNotFoundException;
 	}
 
-	/** Eski broker'lar olmayan grup için Dead + üyesiz döner. */
+	/** Old brokers return Dead with no members for a missing group. */
 	public static boolean deadOrUnknown(ConsumerGroupDescription d) {
 		GroupState s = d.groupState();
 		return (s == null || s == GroupState.DEAD || s == GroupState.UNKNOWN) && d.members().isEmpty();
 	}
 
-	/** "Stable", "Empty", ... (Kafka'nın kendi adları). */
+	/** "Stable", "Empty", ... (Kafka's own names). */
 	public static String state(GroupState s) {
 		return s == null ? null : s.toString();
 	}
 
-	/** "classic" ya da "consumer" (KIP-848). */
+	/** "classic" or "consumer" (KIP-848). */
 	public static String type(GroupType t) {
 		return t == null ? null : t.toString().toLowerCase(Locale.ROOT);
 	}
 
-	/** Koordinatör broker'ı {id, host, port}; bilinmiyorsa null. */
+	/** Coordinator broker {id, host, port}; null if unknown. */
 	public static Map<String, Object> node(Node n) {
 		if (n == null || n.isEmpty()) {
 			return null;
@@ -335,7 +337,7 @@ public final class ConsumerGroups {
 		return Results.map("id", n.id(), "host", n.host(), "port", n.port());
 	}
 
-	/** Partition listesini topic → sıralı partition numaraları olarak gruplar (topic adına göre sıralı). */
+	/** Groups a partition list as topic → sorted partition numbers (sorted by topic name). */
 	public static Map<String, List<Integer>> byTopic(Collection<TopicPartition> partitions) {
 		Map<String, List<Integer>> m = new TreeMap<>();
 		for (TopicPartition tp : partitions) {
@@ -345,7 +347,7 @@ public final class ConsumerGroups {
 		return m;
 	}
 
-	/** Atanmış partition → sahibi üye. */
+	/** Assigned partition → owner member. */
 	public static Map<TopicPartition, MemberDescription> owners(ConsumerGroupDescription d) {
 		Map<TopicPartition, MemberDescription> m = new HashMap<>();
 		if (d == null) {
@@ -359,7 +361,7 @@ public final class ConsumerGroups {
 		return m;
 	}
 
-	/** Üyeler clientId, memberId sırasıyla. */
+	/** Members sorted by clientId, then memberId. */
 	public static List<MemberDescription> sortedMembers(ConsumerGroupDescription d) {
 		List<MemberDescription> members = new ArrayList<>(d.members());
 		members.sort(Comparator.comparing((MemberDescription m) -> String.valueOf(m.clientId()))
@@ -367,19 +369,19 @@ public final class ConsumerGroups {
 		return members;
 	}
 
-	/** Üye satırı: memberId, groupInstanceId, clientId, host ve topic → partition ataması. */
+	/** Member row: memberId, groupInstanceId, clientId, host and topic → partition assignment. */
 	public static Map<String, Object> memberMap(MemberDescription m) {
 		return memberMap(m, Integer.MAX_VALUE);
 	}
 
-	/** Üyeye atanmış partition sayısı. */
+	/** Number of partitions assigned to the member. */
 	public static int assignedCount(MemberDescription m) {
 		return m.assignment() == null ? 0 : m.assignment().topicPartitions().size();
 	}
 
 	/**
-	 * Üye satırı; atamada en fazla maxPartitions partition numarası gösterilir (topic adına göre sırayla, son
-	 * topic yarım kalabilir). Kesilirse assignedPartitions ve assignmentPartitionsOmitted sayıları eklenir.
+	 * Member row; at most maxPartitions partition numbers are shown in the assignment (in topic name order; the last
+	 * topic may be cut). If truncated, the assignedPartitions and assignmentPartitionsOmitted counts are added.
 	 */
 	public static Map<String, Object> memberMap(MemberDescription m, int maxPartitions) {
 		Map<String, List<Integer>> full = m.assignment() == null ? Map.of() : byTopic(m.assignment().topicPartitions());
@@ -407,15 +409,15 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * KIP-848 (consumer tipi, sadece KRaft) üye alanları: memberEpoch; hedef atamasında olup üyeye henüz
-	 * verilmemiş (başka üye bırakana kadar bekleyen) partition sayısı pendingPartitions; consumer tipi gruba
-	 * hâlâ classic protokolle bağlı üye (online geçiş) için classicMember. Classic gruplarda (ZooKeeper'da hep)
-	 * bu alanlar yoktur; boş map döner.
+	 * KIP-848 (consumer type, KRaft only) member fields: memberEpoch; pendingPartitions, the number of partitions in
+	 * the target assignment not yet given to the member (waiting until another member releases them); classicMember
+	 * for a member still connected to a consumer-type group with the classic protocol (online migration). Classic
+	 * groups (always the case on ZooKeeper) have none of these fields; an empty map is returned.
 	 * <p>
-	 * Bırakılacak partition'lar raporlanmaz: ConsumerGroupDescribe'daki atama broker'ın assignedPartitions'ıdır
-	 * (mevcut ∩ hedef); revoke edilmekte olanlar (partitionsPendingRevocation) yanıtta yoktur. assignment \
-	 * hedef farkı sadece yeni hedef epoch'u ile üyenin sonraki heartbeat'i arasındaki kısa anda dolar; gerçek
-	 * revoke sırasında boştur.
+	 * Partitions to be released are not reported: the assignment in ConsumerGroupDescribe is the broker's
+	 * assignedPartitions (current ∩ target); partitions being revoked (partitionsPendingRevocation) are not in the
+	 * response. The assignment \ target difference is only non-empty in the short moment between a new target epoch
+	 * and the member's next heartbeat; during an actual revoke it is empty.
 	 */
 	public static Map<String, Object> consumerProtocolFields(MemberDescription m) {
 		Map<String, Object> out = new LinkedHashMap<>();
@@ -430,7 +432,7 @@ public final class ConsumerGroups {
 		return out;
 	}
 
-	/** Üyenin hedef atamasında olup mevcut atamasında olmayan partition'lar (KIP-848); classic'te boş. */
+	/** Partitions in the member's target assignment but not in its current assignment (KIP-848); empty for classic. */
 	private static Set<TopicPartition> incoming(MemberDescription m) {
 		if (m.targetAssignment().isEmpty()) {
 			return Set.of();
@@ -442,9 +444,10 @@ public final class ConsumerGroups {
 	}
 
 	/**
-	 * KIP-848 consumer tipi grupta (sadece KRaft) hedef atamada bir üyeye verilmiş ama henüz o üyeye geçmemiş
-	 * partition → hedef üye. Bu partition'ların mevcut sahibi (revoke etmekte olan üye) describe yanıtında
-	 * görünmez: {@link #owners} onları sahipsiz bırakır, ama tüketim sürüyor olabilir. Classic gruplarda boş.
+	 * In a KIP-848 consumer-type group (KRaft only): partition given to a member in the target assignment but not yet
+	 * moved to it → target member. The current owner of these partitions (the member revoking them) is not visible
+	 * in the describe response: {@link #owners} leaves them without an owner, but consumption may still be going on.
+	 * Empty for classic groups.
 	 */
 	public static Map<TopicPartition, MemberDescription> incomingOwners(ConsumerGroupDescription d) {
 		Map<TopicPartition, MemberDescription> m = new HashMap<>();
@@ -457,7 +460,7 @@ public final class ConsumerGroups {
 		return m;
 	}
 
-	/** KIP-848 grup epoch'ları (groupEpoch, targetAssignmentEpoch); classic gruplarda boş map. */
+	/** KIP-848 group epochs (groupEpoch, targetAssignmentEpoch); empty map for classic groups. */
 	public static Map<String, Object> consumerProtocolFields(ConsumerGroupDescription d) {
 		Map<String, Object> out = new LinkedHashMap<>();
 		d.groupEpoch().ifPresent(e -> out.put("groupEpoch", e));

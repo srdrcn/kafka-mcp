@@ -1,8 +1,8 @@
 package io.github.srdrcn.kafkamcp.mcp;
 
 /**
- * READ: her zaman listelenir. WRITE: sadece readOnly=false cluster'larda. DESTRUCTIVE: WRITE'a ek
- * olarak disableDestructive=false ister (*_delete, *_reset araçları).
+ * READ: always listed. WRITE: only on readOnly=false clusters. DESTRUCTIVE: on top of WRITE, also
+ * requires disableDestructive=false (*_delete, *_reset tools).
  */
 public enum ToolKind {
 

@@ -7,16 +7,16 @@ import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 
 public final class TestConfigs {
 
-	/** Yazılabilir test cluster'ı (tüm araçlar açık). */
+	/** Writable test cluster (all tools enabled). */
 	public static final String CLUSTER = "test";
 
-	/** Aynı Kafka, readOnly: true override'ı ile. */
+	/** Same Kafka, with a readOnly: true override. */
 	public static final String READ_ONLY_CLUSTER = "test-ro";
 
 	private TestConfigs() {
 	}
 
-	/** Testcontainers Kafka'sına bağlanan, tüm toolset'leri açık config. */
+	/** Config connected to the Testcontainers Kafka with all toolsets enabled. */
 	public static KafkaMcpConfig kafka(String connectUrl, String schemaRegistryUrl) {
 		KafkaMcpConfig c = new KafkaMcpConfig();
 		c.setReadOnly(false);
@@ -40,8 +40,8 @@ public final class TestConfigs {
 	}
 
 	/**
-	 * Ağa hiç çıkmayan sabit config (şema/filtre testleri için): alpha (connect+SR, yazılabilir), beta
-	 * (readOnly, connect/SR yok).
+	 * Fixed config that never touches the network (for schema/filter tests): alpha (connect+SR, writable), beta
+	 * (readOnly, no connect/SR).
 	 */
 	public static KafkaMcpConfig offline() {
 		KafkaMcpConfig c = new KafkaMcpConfig();

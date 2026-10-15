@@ -2,7 +2,7 @@ package io.github.srdrcn.kafkamcp.mcp;
 
 import io.github.srdrcn.kafkamcp.config.ClusterConfig;
 
-/** Aracın hangi cluster'larda kullanılabileceği (cluster enum'u buna göre daraltılır). */
+/** Which clusters a tool can be used on (the cluster enum is narrowed accordingly). */
 public enum ClusterRequirement {
 
 	ANY, CONNECT, SCHEMA_REGISTRY;

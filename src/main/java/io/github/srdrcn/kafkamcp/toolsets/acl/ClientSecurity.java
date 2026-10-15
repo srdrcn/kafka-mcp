@@ -12,10 +12,10 @@ import io.github.srdrcn.kafkamcp.config.ClusterConfig;
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
-/** Bu sunucunun bir cluster'a bağlanırken kullandığı efektif güvenlik ayarları (parolalar maskeli). */
+/** Effective security settings this server uses to connect to a cluster (passwords masked). */
 public final class ClientSecurity {
 
-	/** JAAS değeri: "çift tırnaklı", 'tek tırnaklı' (Kafka JaasConfig ikisini de kabul eder) ya da tırnaksız. */
+	/** JAAS value: "double-quoted", 'single-quoted' (Kafka JaasConfig accepts both) or unquoted. */
 	private static final String JAAS_VALUE = "\"((?:[^\"\\\\]|\\\\.)*)\"|'((?:[^'\\\\]|\\\\.)*)'|[^\\s;]+";
 
 	private static final Pattern SECRET_OPTION = Pattern
@@ -40,7 +40,7 @@ public final class ClientSecurity {
 		this.jaasConfig = string(props.get(SaslConfigs.SASL_JAAS_CONFIG), null);
 	}
 
-	/** {@link KafkaClients#clientProperties(ClusterConfig)}'ten efektif ayarlar. */
+	/** Effective settings from {@link KafkaClients#clientProperties(ClusterConfig)}. */
 	public static ClientSecurity of(KafkaClients clients, ClusterConfig cluster) {
 		return new ClientSecurity(clients.clientProperties(cluster));
 	}
@@ -53,7 +53,7 @@ public final class ClientSecurity {
 		return securityProtocol;
 	}
 
-	/** SASL mekanizması; SASL kullanılmıyorsa null. */
+	/** SASL mechanism; null if SASL is not used. */
 	public String saslMechanism() {
 		return securityProtocol.startsWith("SASL") ? saslMechanism : null;
 	}
@@ -66,7 +66,7 @@ public final class ClientSecurity {
 		return "GSSAPI".equalsIgnoreCase(saslMechanism());
 	}
 
-	/** JAAS seçeneği (ör. keyTab, principal, username); yoksa null. */
+	/** JAAS option (e.g. keyTab, principal, username); null if absent. */
 	public String jaasOption(String option) {
 		return jaasOption(jaasConfig, option);
 	}
@@ -92,12 +92,12 @@ public final class ClientSecurity {
 		return v.isBlank() ? null : v;
 	}
 
-	/** JAAS config'teki password/secret/token değerlerini maskeler. */
+	/** Masks password/secret/token values in the JAAS config. */
 	public static String maskJaas(String jaas) {
 		return jaas == null ? null : SECRET_OPTION.matcher(jaas).replaceAll("$1" + Matcher.quoteReplacement(MASK));
 	}
 
-	/** {securityProtocol, saslMechanism, saslKerberosServiceName, saslJaasConfig(maskeli)} */
+	/** {securityProtocol, saslMechanism, saslKerberosServiceName, saslJaasConfig(masked)} */
 	public Map<String, Object> render() {
 		return Results.map("securityProtocol", securityProtocol, "saslMechanism", saslMechanism(),
 				"saslKerberosServiceName", gssapi() ? kerberosServiceName : null, "saslJaasConfig", maskJaas(jaasConfig));

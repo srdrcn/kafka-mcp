@@ -23,16 +23,16 @@ import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** ACL yardımcıları: binding'in JSON gösterimi, Kafka enum parametreleri, principal normalizasyonu, describeAcls. */
+/** ACL helpers: JSON view of a binding, Kafka enum parameters, principal normalization, describeAcls. */
 public final class Acls {
 
-	/** CLUSTER kaynağının Kafka'daki tek geçerli adı. */
+	/** The only valid Kafka name of the CLUSTER resource. */
 	public static final String CLUSTER_NAME = "kafka-cluster";
 
-	/** Her kullanıcıyı kapsayan principal. */
+	/** Principal that matches every user. */
 	public static final String WILDCARD_PRINCIPAL = "User:*";
 
-	/** LITERAL wildcard kaynak adı ve her host. */
+	/** LITERAL wildcard resource name and any host. */
 	public static final String WILDCARD = "*";
 
 	public static final List<String> RESOURCE_TYPES = List.of("TOPIC", "GROUP", "CLUSTER", "TRANSACTIONAL_ID",
@@ -46,11 +46,11 @@ public final class Acls {
 
 	public static final List<String> PERMISSIONS = List.of("ALLOW", "DENY", "ANY");
 
-	/** Authorizer kapalı cluster'lar için not. */
-	public static final String NO_AUTHORIZER_NOTE = "Cluster'da authorizer tanımlı değil (authorizer.class.name boş): "
-			+ "ACL'ler uygulanmıyor, kimliği doğrulanan her istemci her işlemi yapabilir.";
+	/** Note for clusters without an authorizer. */
+	public static final String NO_AUTHORIZER_NOTE = "No authorizer configured on the cluster (authorizer.class.name is empty): "
+			+ "ACLs are not enforced; every authenticated client can perform every operation.";
 
-	/** Kaynak tipi, kaynak adı, principal, işlem, izin sırası. */
+	/** Ordered by resource type, resource name, principal, operation, permission. */
 	public static final Comparator<AclBinding> ORDER = Comparator
 		.comparing((AclBinding b) -> b.pattern().resourceType().name())
 		.thenComparing(b -> b.pattern().name())
@@ -75,13 +75,13 @@ public final class Acls {
 		return bindings.stream().sorted(ORDER).map(Acls::render).toList();
 	}
 
-	/** Kaynak alanları olmadan (kaynağa göre gruplanmış çıktılar için). */
+	/** Without the resource fields (for output grouped by resource). */
 	public static Map<String, Object> renderEntry(AclBinding b) {
 		return Results.map("principal", b.entry().principal(), "host", b.entry().host(), "operation",
 				b.entry().operation().name(), "permission", b.entry().permissionType().name());
 	}
 
-	/** "alice" → "User:alice"; "User:alice" olduğu gibi. Boşsa null. */
+	/** "alice" → "User:alice"; "User:alice" is kept as is. Null if blank. */
 	public static String normalizePrincipal(String principal) {
 		if (principal == null || principal.isBlank()) {
 			return null;
@@ -92,12 +92,12 @@ public final class Acls {
 			return "User:" + p;
 		}
 		if (i == 0 || i == p.length() - 1) {
-			throw new ToolException("Geçersiz principal: " + p + " (biçim: User:alice)");
+			throw new ToolException("Invalid principal: " + p + " (format: User:alice)");
 		}
 		return p;
 	}
 
-	/** Zorunlu principal parametresi (normalize edilmiş). */
+	/** Required principal parameter (normalized). */
 	public static String principal(ToolCall call, String name) {
 		return normalizePrincipal(call.str(name));
 	}
@@ -118,11 +118,11 @@ public final class Acls {
 		return parse(call, name, defaultValue, AclPermissionType.class, PERMISSIONS);
 	}
 
-	/** Tek bir değeri enum'a çevirir; geçersizse Türkçe hata. */
+	/** Converts a single value to the enum; throws a readable error if it is invalid. */
 	public static <E extends Enum<E>> E parse(String param, String value, Class<E> type, List<String> allowed) {
 		String v = value.trim().toUpperCase(Locale.ROOT).replace('-', '_');
 		if (!allowed.contains(v)) {
-			throw new ToolException("Geçersiz " + param + ": " + value + " (geçerli: " + String.join(", ", allowed) + ")");
+			throw new ToolException("Invalid " + param + ": " + value + " (valid: " + String.join(", ", allowed) + ")");
 		}
 		return Enum.valueOf(type, v);
 	}
@@ -133,7 +133,7 @@ public final class Acls {
 		return v == null ? defaultValue : parse(name, v, type, allowed);
 	}
 
-	/** ANY olmayan değerler (oluşturma/karar araçları için). */
+	/** Values without ANY (for create/decision tools). */
 	public static List<String> withoutAny(List<String> values) {
 		List<String> out = new ArrayList<>(values);
 		out.remove("ANY");
@@ -149,14 +149,14 @@ public final class Acls {
 	}
 
 	/**
-	 * Tek describeAcls çağrısı. Cluster'da authorizer yoksa (SecurityDisabledException) null döner; çağıran
-	 * {@link #NO_AUTHORIZER_NOTE} ile not düşer.
+	 * Single describeAcls call. Returns null if the cluster has no authorizer (SecurityDisabledException); the
+	 * caller adds {@link #NO_AUTHORIZER_NOTE} as a note.
 	 */
 	public static List<AclBinding> describe(ToolCall call, AclBindingFilter filter) {
 		return await(call, call.admin().describeAcls(filter).values());
 	}
 
-	/** Önceden başlatılmış describeAcls sonucunu bekler; authorizer kapalıysa null. */
+	/** Waits for an already started describeAcls result; null if the authorizer is disabled. */
 	public static List<AclBinding> await(ToolCall call, KafkaFuture<Collection<AclBinding>> future) {
 		try {
 			return new ArrayList<>(call.await(future));
@@ -170,10 +170,10 @@ public final class Acls {
 	}
 
 	/**
-	 * createAcls/deleteAcls sonrası broker'ın ACL önbelleği güncellenene kadar kısa süre bekler (KRaft'ta
-	 * ACL'ler metadata log'u ile, ZooKeeper'da diğer broker'lara ZooKeeper değişiklik bildirimiyle biraz geç
-	 * ulaşır; describeAcls herhangi bir broker'a gidebilir). {@code present=true}: hepsi görünene; false:
-	 * filtreye uyan hiçbiri kalmayana kadar. Zamanında görünürse true.
+	 * After createAcls/deleteAcls, waits briefly until the broker ACL cache is updated (ACLs reach the other
+	 * brokers a little later: via the metadata log in KRaft, via ZooKeeper change notifications in ZooKeeper;
+	 * describeAcls may go to any broker). {@code present=true}: until all are visible; false: until none
+	 * matching the filter is left. True if this happens in time.
 	 */
 	public static boolean awaitVisible(ToolCall call, AclBindingFilter filter, Collection<AclBinding> expected,
 			boolean present) {
@@ -195,27 +195,27 @@ public final class Acls {
 	}
 
 	/**
-	 * Eski broker API'yi desteklemiyorsa (UnsupportedVersionException) kısa Türkçe not, değilse null.
-	 * @param requirement gereken sürüm açıklaması (ör. "SCRAM kullanıcılarını listelemek Kafka 2.7+ gerektirir")
+	 * Short note if an older broker does not support the API (UnsupportedVersionException), otherwise null.
+	 * @param requirement description of the required version (e.g. "listing SCRAM users requires Kafka 2.7+")
 	 */
 	public static String unsupportedNote(Throwable error, String requirement) {
 		if (!causedBy(error, UnsupportedVersionException.class)) {
 			return null;
 		}
-		return "Broker bu işlemi desteklemiyor (sürüm): " + requirement;
+		return KafkaErrors.UNSUPPORTED + ": " + requirement;
 	}
 
-	/** Desteklenmeyen işlem için standart sonuç: {supported: false, note}. */
+	/** Standard result for an unsupported operation: {supported: false, note}. */
 	public static Map<String, Object> unsupported(String note) {
 		return Results.map("supported", false, "note", note);
 	}
 
-	/** Hata zincirinde SecurityDisabledException (authorizer yok) var mı? */
+	/** Is there a SecurityDisabledException (no authorizer) in the error chain? */
 	public static boolean isSecurityDisabled(Throwable error) {
 		return causedBy(error, SecurityDisabledException.class);
 	}
 
-	/** Hata zincirinde verilen tipte bir istisna var mı? */
+	/** Is there an exception of the given type in the error chain? */
 	public static boolean causedBy(Throwable error, Class<? extends Throwable> type) {
 		Throwable t = error;
 		for (int i = 0; t != null && i < 10; i++) {
@@ -227,7 +227,7 @@ public final class Acls {
 		return false;
 	}
 
-	/** Authorizer kapalıyken dönen standart sonuç. */
+	/** Standard result when the authorizer is disabled. */
 	public static Map<String, Object> noAuthorizer() {
 		return Results.map("authorizerEnabled", false, "note", NO_AUTHORIZER_NOTE);
 	}

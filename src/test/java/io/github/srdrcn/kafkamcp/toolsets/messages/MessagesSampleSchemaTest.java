@@ -14,7 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 
-/** messages_sample_schema (json) ve serdes_list (Schema Registry'siz). */
+/** messages_sample_schema (json) and serdes_list (without Schema Registry). */
 class MessagesSampleSchemaTest extends KafkaIntegrationTest {
 
 	@Test
@@ -22,7 +22,7 @@ class MessagesSampleSchemaTest extends KafkaIntegrationTest {
 		String topic = unique("msg-schema");
 		TestData.createTopic(testAdmin(), topic, 2);
 		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
-		// eski kayıtlar (son maxRecords'a girmemeli)
+		// old records (must not be among the last maxRecords)
 		for (int i = 0; i < 5; i++) {
 			records.add(TestData.record(topic, i % 2, TestData.BASE_TS + i, null, "{\"legacy\":true}"));
 		}
@@ -32,7 +32,7 @@ class MessagesSampleSchemaTest extends KafkaIntegrationTest {
 			records.add(TestData.record(topic, i % 2, TestData.BASE_TS + 1_000 + i, null,
 					"{\"id\":" + i + ",\"user\":{\"email\":" + email + "}" + extra + "}"));
 		}
-		records.add(TestData.record(topic, 0, TestData.BASE_TS + 2_000, null, "kırık {json"));
+		records.add(TestData.record(topic, 0, TestData.BASE_TS + 2_000, null, "broken {json"));
 		records.add(TestData.record(topic, 1, TestData.BASE_TS + 2_001, "k", null));
 		TestData.send(records);
 
@@ -42,7 +42,7 @@ class MessagesSampleSchemaTest extends KafkaIntegrationTest {
 		assertThat(r.get("parsed").asInt()).isEqualTo(8);
 		assertThat(r.get("failed").asInt()).isEqualTo(1);
 		assertThat(r.get("tombstones").asInt()).isEqualTo(1);
-		assertThat(r.get("errors").get(0).get("error").asText()).startsWith("JSON değil");
+		assertThat(r.get("errors").get(0).get("error").asText()).startsWith("Not JSON");
 		Map<String, JsonNode> paths = new HashMap<>();
 		r.get("paths").forEach(p -> paths.put(p.get("path").asText(), p));
 		assertThat(paths).containsKeys("id", "user", "user.email", "items", "items[]", "items[].sku", "items[].qty")
@@ -54,7 +54,7 @@ class MessagesSampleSchemaTest extends KafkaIntegrationTest {
 		assertThat(paths.get("items").get("missingRatio").asDouble()).isEqualTo(0.5);
 
 		assertThat(error("messages_sample_schema", args("topic", topic, "format", "avro"))).contains("schemaRegistryUrl");
-		assertThat(error("messages_sample_schema", args("topic", topic, "format", "hex"))).contains("json ya da avro");
+		assertThat(error("messages_sample_schema", args("topic", topic, "format", "hex"))).contains("json or avro");
 	}
 
 	@Test

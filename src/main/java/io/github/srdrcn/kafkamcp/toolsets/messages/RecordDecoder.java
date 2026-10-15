@@ -45,23 +45,26 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.schemaregistry.SchemaRegistryClient;
 
 /**
- * Key/value baytlarını {@link MessageFormat}'a göre JSON'a uygun değere çevirir (string, json, hex, long,
- * avro). Avro şemaları Schema Registry'den alınır ve sadece bu nesne (tek araç çağrısı) boyunca tutulur.
- * Şema istekleri çağrı başına {@link #MAX_SCHEMA_LOOKUPS} ile ve (ToolCall verilmişse) deadline ile sınırlıdır;
- * atlanan şemalar hex + hata olarak döner, çağıran {@link #timeLimited()} ise "partial" işaretler.
- * Yapılandırılmış değerler {@link JsonNode} olarak döner (iç içe null alanlar korunur).
+ * Converts key/value bytes into JSON-friendly values according to {@link MessageFormat} (string, json, hex, long,
+ * avro). Avro schemas are fetched from Schema Registry and kept only for the lifetime of this object (a single tool
+ * call). Schema lookups are limited per call by {@link #MAX_SCHEMA_LOOKUPS} and (when a ToolCall is given) by the
+ * deadline; skipped schemas come back as hex + error, and the caller marks the result "partial" if
+ * {@link #timeLimited()}. Structured values are returned as {@link JsonNode} (nested null fields are kept).
  */
 public final class RecordDecoder {
 
 	public static final int DEFAULT_MAX_CHARS = 4096;
 
-	/** Çağrı başına en fazla Schema Registry isteği (wire format'a benzeyen sahte şema id'lerinde istek yağmurunu önler). */
+	/**
+	 * Maximum Schema Registry requests per call (prevents a flood of requests for bogus schema ids in data that looks
+	 * like wire format).
+	 */
 	public static final int MAX_SCHEMA_LOOKUPS = 50;
 
-	/** Şema isteği deadline'dan en az bu kadar önce bitmeli (okunanları partial döndürmeye pay). */
+	/** A schema lookup must finish at least this long before the deadline (margin to return the records read as partial). */
 	static final long LOOKUP_RESERVE_MS = RecordScanner.DEFAULT_RESERVE_MS;
 
-	/** Bundan kısa süre kaldıysa şema isteği hiç başlatılmaz. */
+	/** No schema lookup is started if less time than this is left. */
 	private static final long MIN_LOOKUP_MS = 200;
 
 	private static final ObjectMapper MAPPER = JsonMapper.builder()
@@ -87,7 +90,7 @@ public final class RecordDecoder {
 
 	private String registryDown;
 
-	/** Şema istekleri durdurulduysa nedeni (istek limiti ya da zaman sınırı). */
+	/** Why schema lookups were stopped, if they were (request limit or time limit). */
 	private String stopReason;
 
 	private boolean timeLimited;
@@ -95,16 +98,16 @@ public final class RecordDecoder {
 	private int lookups;
 
 	/**
-	 * Deadline'sız çözücü (testler ve araç dışı kullanım); şema istekleri yine {@link #MAX_SCHEMA_LOOKUPS} ile
-	 * sınırlıdır.
-	 * @param registry Schema Registry client'ı (avro gerekmiyorsa null olabilir)
-	 * @param cluster şemaların alınacağı cluster
+	 * Decoder without a deadline (tests and use outside tools); schema lookups are still limited by
+	 * {@link #MAX_SCHEMA_LOOKUPS}.
+	 * @param registry Schema Registry client (may be null if avro is not needed)
+	 * @param cluster cluster to fetch the schemas from
 	 */
 	public RecordDecoder(SchemaRegistryClient registry, String cluster) {
 		this(registry, cluster, null);
 	}
 
-	/** Araç çağrısının cluster'ı ve deadline'ı ile çözücü: şema istekleri deadline'a pay bırakarak kesilir. */
+	/** Decoder bound to the tool call's cluster and deadline: schema lookups are cut off with a margin before the deadline. */
 	public RecordDecoder(SchemaRegistryClient registry, ToolCall call) {
 		this(registry, call.cluster(), call);
 	}
@@ -115,38 +118,38 @@ public final class RecordDecoder {
 		this.call = call;
 	}
 
-	/** Zaman sınırı ya da istek limiti yüzünden şeması alınmayan farklı şema id sayısı. */
+	/** Number of distinct schema ids whose schema was not fetched because of the time limit or the request limit. */
 	public int skippedSchemaLookups() {
 		return skippedIds.size();
 	}
 
-	/** Bir şema isteği zaman sınırına takıldı mı (çağıran çıktıyı "partial" işaretler)? */
+	/** Did a schema lookup hit the time limit (the caller marks the output "partial")? */
 	public boolean timeLimited() {
 		return timeLimited;
 	}
 
-	/** Atlanan şema istekleri için çıktı notu; atlanan yoksa null. */
+	/** Output note for skipped schema lookups; null if none were skipped. */
 	public String skipNote() {
 		if (skippedIds.isEmpty()) {
 			return null;
 		}
-		return skippedIds.size() + " şema id'sinin şeması alınamadı (" + stopReason
-				+ "); bu kayıtlar hex + valueError/keyError ile döndü";
+		return skippedIds.size() + " schema id(s) not fetched (" + stopReason
+				+ "); these records were returned as hex + valueError/keyError";
 	}
 
-	/** Seçilen formatlardan biri avro ise cluster'da schemaRegistryUrl olmalı; değilse Türkçe hata. */
+	/** If one of the selected formats is avro, the cluster must have a schemaRegistryUrl; otherwise an error. */
 	public static void requireSupported(ToolCall call, MessageFormat... formats) {
 		for (MessageFormat f : formats) {
 			if (f != null && f.needsSchemaRegistry() && !call.clusterConfig().hasSchemaRegistry()) {
-				throw new ToolException("format=avro için cluster " + call.cluster()
-						+ " tanımında schemaRegistryUrl gerekli (tanımlı değil). string/json/hex/long formatlarını kullanın.");
+				throw new ToolException("format=avro requires a schemaRegistryUrl on cluster " + call.cluster()
+						+ " (none configured). Use the string/json/hex/long formats.");
 			}
 		}
 	}
 
 	/**
-	 * Çözülmüş değer. {@code value}: çıktıya konacak değer (String, Long ya da {@link JsonNode}; kesilmişse
-	 * String). {@code text}: filtreler için kesilmemiş metin. {@code error}: geri dönüş/hata açıklaması.
+	 * Decoded value. {@code value}: the value for the output (String, Long or {@link JsonNode}; a String if
+	 * truncated). {@code text}: the untruncated text for filters. {@code error}: fallback/error description.
 	 */
 	public record Decoded(Object value, String text, boolean truncated, String error, Integer schemaId) {
 
@@ -158,11 +161,11 @@ public final class RecordDecoder {
 
 	}
 
-	/** Yapısal çözüm sonucu (şema çıkarımı için): {@code value} ya da {@code error}. */
+	/** Structured decode result (for shape inference): {@code value} or {@code error}. */
 	public record Structured(JsonNode value, String error, Integer schemaId) {
 	}
 
-	/** Baytları çözer; uzun değerler {@code maxChars} karakterde kesilir. */
+	/** Decodes the bytes; long values are truncated at {@code maxChars} characters. */
 	public Decoded decode(byte[] bytes, MessageFormat format, int maxChars) {
 		if (bytes == null) {
 			return Decoded.NULL;
@@ -176,8 +179,7 @@ public final class RecordDecoder {
 			}
 			case LONG -> {
 				if (bytes.length != Long.BYTES) {
-					yield hexFallback(bytes, maxChars, "long için 8 bayt bekleniyordu, " + bytes.length + " bayt var; hex gösterildi",
-							null);
+					yield hexFallback(bytes, maxChars, "long expects 8 bytes, got " + bytes.length + "; shown as hex", null);
 				}
 				long v = ByteBuffer.wrap(bytes).getLong();
 				yield new Decoded(v, Long.toString(v), false, null, null);
@@ -186,7 +188,7 @@ public final class RecordDecoder {
 		};
 	}
 
-	/** json/avro değerini kesmeden yapısal olarak çözer; başarısızsa {@code error} dolu döner. */
+	/** Decodes a json/avro value structurally without truncation; {@code error} is set on failure. */
 	public Structured structured(byte[] bytes, MessageFormat format) {
 		if (bytes == null) {
 			return new Structured(null, "null value (tombstone)", null);
@@ -202,23 +204,23 @@ public final class RecordDecoder {
 		}
 		String s = utf8(bytes);
 		if (s == null) {
-			return new Structured(null, "Geçerli UTF-8 değil", null);
+			return new Structured(null, "Not valid UTF-8", null);
 		}
 		if (s.isBlank()) {
-			return new Structured(null, "Boş değer; JSON değil", null);
+			return new Structured(null, "Empty value; not JSON", null);
 		}
 		try {
 			return new Structured(MAPPER.readTree(s), null, null);
 		}
 		catch (JsonProcessingException e) {
-			return new Structured(null, "JSON değil: " + shortMessage(e), null);
+			return new Structured(null, "Not JSON: " + shortMessage(e), null);
 		}
 	}
 
 	private Decoded decodeString(byte[] bytes, int maxChars) {
 		String s = utf8(bytes);
 		if (s == null) {
-			return hexFallback(bytes, maxChars, "Geçerli UTF-8 değil; hex gösterildi", null);
+			return hexFallback(bytes, maxChars, "Not valid UTF-8; shown as hex", null);
 		}
 		return new Decoded(cut(s, maxChars), s, s.length() > maxChars, null, null);
 	}
@@ -226,10 +228,10 @@ public final class RecordDecoder {
 	private Decoded decodeJson(byte[] bytes, int maxChars) {
 		String s = utf8(bytes);
 		if (s == null) {
-			return hexFallback(bytes, maxChars, "Geçerli UTF-8 değil; hex gösterildi", null);
+			return hexFallback(bytes, maxChars, "Not valid UTF-8; shown as hex", null);
 		}
 		if (s.isBlank()) {
-			return new Decoded(s, s, false, "Boş değer; JSON değil", null);
+			return new Decoded(s, s, false, "Empty value; not JSON", null);
 		}
 		if (s.length() > maxChars) {
 			return new Decoded(cut(s, maxChars), s, true, null, null);
@@ -238,7 +240,7 @@ public final class RecordDecoder {
 			return new Decoded(MAPPER.readTree(s), s, false, null, null);
 		}
 		catch (JsonProcessingException e) {
-			return new Decoded(s, s, false, "JSON değil: " + shortMessage(e) + "; ham metin gösterildi", null);
+			return new Decoded(s, s, false, "Not JSON: " + shortMessage(e) + "; shown as raw text", null);
 		}
 	}
 
@@ -252,10 +254,10 @@ public final class RecordDecoder {
 			return new Decoded(a.node(), text, false, null, a.schemaId());
 		}
 		catch (DecodeException e) {
-			return hexFallback(bytes, maxChars, e.getMessage() + "; hex gösterildi", e.schemaId);
+			return hexFallback(bytes, maxChars, e.getMessage() + "; shown as hex", e.schemaId);
 		}
 		catch (JsonProcessingException e) {
-			return hexFallback(bytes, maxChars, "Avro değeri JSON'a çevrilemedi; hex gösterildi", null);
+			return hexFallback(bytes, maxChars, "Could not convert the Avro value to JSON; shown as hex", null);
 		}
 	}
 
@@ -264,7 +266,7 @@ public final class RecordDecoder {
 
 	private AvroValue avro(byte[] bytes) throws DecodeException {
 		if (bytes.length < 5 || bytes[0] != 0) {
-			throw new DecodeException("Confluent wire format değil (0x0 magic byte + 4 bayt şema id yok)", null);
+			throw new DecodeException("Not Confluent wire format (no 0x0 magic byte + 4-byte schema id)", null);
 		}
 		int id = ByteBuffer.wrap(bytes, 1, 4).getInt();
 		Schema schema = schema(id);
@@ -275,14 +277,14 @@ public final class RecordDecoder {
 			return new AvroValue(MAPPER.valueToTree(toJava(datum, schema)), id);
 		}
 		catch (IOException | RuntimeException e) {
-			throw new DecodeException(cut("Avro çözülemedi (şema " + id + "): " + e.getClass().getSimpleName()
+			throw new DecodeException(cut("Could not decode Avro (schema " + id + "): " + e.getClass().getSimpleName()
 					+ (e.getMessage() == null ? "" : ": " + e.getMessage()), 200), id);
 		}
 		catch (OutOfMemoryError e) {
-			// bozuk/yanlış şemalı veride uzunluk alanı devasa tek bir dizi ayırmaya çalışır; başarısız olan bu tek
-			// ayırma heap'te kalıcı bir şey bırakmaz
-			throw new DecodeException("Avro çözülemedi (şema " + id
-					+ "): bozuk uzunluk alanı (veri bu şemayla yazılmamış olabilir)", id);
+			// with corrupt data or the wrong schema a length field tries to allocate one huge array; this single
+			// failed allocation leaves nothing behind on the heap
+			throw new DecodeException("Could not decode Avro (schema " + id
+					+ "): corrupt length field (the data may not have been written with this schema)", id);
 		}
 	}
 
@@ -299,13 +301,13 @@ public final class RecordDecoder {
 			throw new DecodeException(registryDown, id);
 		}
 		if (registry == null) {
-			throw new DecodeException("Schema Registry tanımlı değil", id);
+			throw new DecodeException("No Schema Registry configured", id);
 		}
 		try {
 			JsonNode node = fetch("/schemas/ids/" + id);
 			String type = node.path("schemaType").asText("AVRO");
 			if (!"AVRO".equalsIgnoreCase(type)) {
-				throw new DecodeException("Şema " + id + " tipi " + type + "; avro formatı sadece AVRO şemalarını çözer", id);
+				throw new DecodeException("Schema " + id + " has type " + type + "; the avro format only decodes AVRO schemas", id);
 			}
 			Schema.Parser parser = new Schema.Parser();
 			parseReferences(parser, node.path("references"), 0, new HashSet<>());
@@ -319,41 +321,42 @@ public final class RecordDecoder {
 		}
 		catch (LookupSkipped e) {
 			skippedIds.add(id);
-			String msg = "Şema " + id + " alınamadı: " + e.getMessage();
+			String msg = "Could not fetch schema " + id + ": " + e.getMessage();
 			schemaErrors.put(id, msg);
 			throw new DecodeException(msg, id);
 		}
 		catch (ToolException e) {
-			String msg = "Şema " + id + " alınamadı: " + e.getMessage();
-			if (e.getMessage() != null && e.getMessage().contains("ulaşılamadı")) {
+			String msg = "Could not fetch schema " + id + ": " + e.getMessage();
+			if (e instanceof SchemaRegistryClient.UnreachableException) {
+				// registry down: fail the remaining schema ids fast instead of trying each one
 				registryDown = msg;
 			}
 			schemaErrors.put(id, msg);
 			throw new DecodeException(msg, id);
 		}
 		catch (RuntimeException e) {
-			String msg = "Şema " + id + " ayrıştırılamadı: " + e.getMessage();
+			String msg = "Could not parse schema " + id + ": " + e.getMessage();
 			schemaErrors.put(id, msg);
 			throw new DecodeException(msg, id);
 		}
 	}
 
 	/**
-	 * Schema Registry GET'i: çağrı başına istek limiti ve deadline ile sınırlı. ToolCall varsa istek ayrı (virtual)
-	 * thread'de çalışır ve en fazla deadline'a {@link #LOOKUP_RESERVE_MS} kalana kadar beklenir; yavaş registry
-	 * böylece okunan kayıtları zaman aşımına sokmaz.
+	 * Schema Registry GET, limited by the per-call request limit and the deadline. With a ToolCall the request runs
+	 * on a separate (virtual) thread and is awaited at most until {@link #LOOKUP_RESERVE_MS} before the deadline, so a
+	 * slow registry does not push the records read into a timeout.
 	 */
 	private JsonNode fetch(String path) {
 		if (stopReason == null && lookups >= MAX_SCHEMA_LOOKUPS) {
-			stopReason = "çağrı başına en fazla " + MAX_SCHEMA_LOOKUPS + " şema isteği";
+			stopReason = "at most " + MAX_SCHEMA_LOOKUPS + " schema lookups per call";
 		}
 		long budget = call == null ? Long.MAX_VALUE : call.remainingMillis() - LOOKUP_RESERVE_MS;
 		if (stopReason == null && budget < MIN_LOOKUP_MS) {
-			stopReason = "araç zaman sınırına yaklaşıldı";
+			stopReason = "approaching the tool time limit";
 			timeLimited = true;
 		}
 		if (stopReason != null) {
-			throw new LookupSkipped("istek atlandı (" + stopReason + ")");
+			throw new LookupSkipped("lookup skipped (" + stopReason + ")");
 		}
 		lookups++;
 		if (call == null) {
@@ -366,7 +369,7 @@ public final class RecordDecoder {
 		}
 		catch (TimeoutException e) {
 			task.cancel(true);
-			stopReason = "Schema Registry araç zaman sınırı içinde yanıt vermedi";
+			stopReason = "Schema Registry did not respond within the tool time limit";
 			timeLimited = true;
 			throw new LookupSkipped(stopReason);
 		}
@@ -374,22 +377,22 @@ public final class RecordDecoder {
 			if (e.getCause() instanceof RuntimeException re) {
 				throw re;
 			}
-			throw new ToolException("Schema Registry isteği başarısız: " + e.getCause());
+			throw new ToolException("Schema Registry request failed: " + e.getCause());
 		}
 		catch (InterruptedException e) {
 			task.cancel(true);
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 	}
 
-	/** Şema referanslarını (başka subject'lerdeki tipler) önce parser'a tanıtır. */
+	/** Registers the schema references (types in other subjects) with the parser first. */
 	private void parseReferences(Schema.Parser parser, JsonNode refs, int depth, Set<String> seen) {
 		if (!refs.isArray() || refs.isEmpty()) {
 			return;
 		}
 		if (depth >= MAX_REFERENCE_DEPTH) {
-			throw new ToolException("şema referans derinliği " + MAX_REFERENCE_DEPTH + "'i aşıyor");
+			throw new ToolException("Schema reference depth exceeds " + MAX_REFERENCE_DEPTH);
 		}
 		for (JsonNode ref : refs) {
 			String subject = ref.path("subject").asText();
@@ -404,7 +407,7 @@ public final class RecordDecoder {
 		}
 	}
 
-	/** Avro datum'unu JSON'a uygun Java değerine çevirir (logical type'lar okunur biçimde). */
+	/** Converts an Avro datum into a JSON-friendly Java value (logical types in readable form). */
 	static Object toJava(Object v, Schema s) {
 		if (v == null) {
 			return null;
@@ -470,7 +473,7 @@ public final class RecordDecoder {
 		}
 	}
 
-	/** Katı UTF-8 çözümü; geçersiz bayt varsa null. */
+	/** Strict UTF-8 decoding; null if there is an invalid byte. */
 	public static String utf8(byte[] bytes) {
 		try {
 			CharBuffer cb = StandardCharsets.UTF_8.newDecoder()
@@ -488,7 +491,7 @@ public final class RecordDecoder {
 		return HEX.formatHex(bytes);
 	}
 
-	/** En fazla {@code max} karakter (surrogate çifti bölünmez). */
+	/** At most {@code max} characters (a surrogate pair is never split). */
 	public static String cut(String s, int max) {
 		if (s == null || s.length() <= max) {
 			return s;
@@ -513,7 +516,7 @@ public final class RecordDecoder {
 		return cut(m.replaceAll("\\s+", " "), 120);
 	}
 
-	/** Şema isteği limit ya da zaman sınırı nedeniyle yapılmadı/beklenmedi. */
+	/** The schema lookup was not made or not awaited because of the request limit or the time limit. */
 	private static final class LookupSkipped extends RuntimeException {
 
 		LookupSkipped(String message) {

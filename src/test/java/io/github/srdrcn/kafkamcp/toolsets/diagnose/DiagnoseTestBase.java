@@ -32,12 +32,12 @@ import io.github.srdrcn.kafkamcp.support.TestConfigs;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * diagnose testleri için ortak hazırlık: her iki cluster tipinde (KRaft "test", ZooKeeper "zk") topic, veri,
- * offset commit, gerçek consumer ve arka planda üretim; bulgu arama yardımcıları.
+ * Shared setup for the diagnose tests: topics, data, offset commits, real consumers and background production on
+ * both cluster types (KRaft "test", ZooKeeper "zk"); helpers for looking up findings.
  */
 abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 
-	/** Testlerin koştuğu iki cluster: KRaft ve ZooKeeper. */
+	/** The two clusters the tests run on: KRaft and ZooKeeper. */
 	static final List<String> CLUSTERS = List.of(TestConfigs.CLUSTER, ZK_CLUSTER);
 
 	private final List<AutoCloseable> closeables = new ArrayList<>();
@@ -49,7 +49,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 				c.close();
 			}
 			catch (Exception ignored) {
-				// test bitti
+				// test finished
 			}
 		}
 		closeables.clear();
@@ -67,7 +67,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		return zk(cluster) ? ZkKafkaTestCluster.clientProperties(user) : KafkaTestCluster.clientProperties(user);
 	}
 
-	/** cluster parametresiyle argümanlar. */
+	/** Arguments with the cluster parameter. */
 	static Map<String, Object> on(String cluster, Object... keyValues) {
 		Map<String, Object> m = args(keyValues);
 		m.put("cluster", cluster);
@@ -91,7 +91,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 			catch (Exception e) {
 				return false;
 			}
-		}, "topic hazır olmadı: " + topic);
+		}, "topic not ready: " + topic);
 	}
 
 	static KafkaProducer<byte[], byte[]> producer(String cluster) {
@@ -110,7 +110,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * Zaman damgası ageMs önce olan kayıtlar yazar (çoktan beri bekleyen backlog: takılma kanıtı için kayıt yaşı).
+	 * Writes records with a timestamp ageMs in the past (a long-pending backlog: record age as evidence of being stuck).
 	 */
 	static void produceAged(String cluster, String topic, int partition, int count, long ageMs) throws Exception {
 		long ts = System.currentTimeMillis() - ageMs;
@@ -122,14 +122,14 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** Admin ile commit (üyesiz grup: Empty kalır). */
+	/** Commit via Admin (group without members: stays Empty). */
 	static void commit(String cluster, String group, String topic, Map<Integer, Long> offsets) throws Exception {
 		Map<TopicPartition, OffsetAndMetadata> m = new LinkedHashMap<>();
 		offsets.forEach((p, o) -> m.put(new TopicPartition(topic, p), new OffsetAndMetadata(o)));
 		admin(cluster).alterConsumerGroupOffsets(group, m).all().get(30, TimeUnit.SECONDS);
 	}
 
-	/** Arka planda partition'a sürekli yazar (test sonunda durur). */
+	/** Keeps writing to the partition in the background (stops at the end of the test). */
 	void produceInBackground(String cluster, String topic, int partition) {
 		KafkaProducer<byte[], byte[]> p = producer(cluster);
 		Thread t = Thread.ofPlatform().daemon().start(() -> {
@@ -142,7 +142,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 					return;
 				}
 				catch (Exception e) {
-					// geçici hata: devam
+					// transient error: continue
 				}
 			}
 		});
@@ -154,8 +154,8 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * Gruba katılan, ataması gelince offset'i commit eden ve sonra poll etmeyen consumer (heartbeat thread'i
-	 * üyeliği korur: grup Stable, commit ilerlemez).
+	 * Consumer that joins the group, commits the offset once it gets an assignment and then stops polling (the
+	 * heartbeat thread keeps the membership: the group is Stable, the commit does not advance).
 	 */
 	KafkaConsumer<byte[], byte[]> joinAndCommit(String cluster, String group, String topic, Map<Integer, Long> offsets) {
 		Map<String, Object> p = clientProperties(cluster, "admin");
@@ -172,7 +172,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		long deadline = System.currentTimeMillis() + 90_000;
 		while (c.assignment().isEmpty()) {
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("Consumer gruba katılamadı: " + group);
+				throw new IllegalStateException("Consumer could not join the group: " + group);
 			}
 			c.poll(Duration.ofMillis(200));
 		}
@@ -183,8 +183,8 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 	}
 
 	/**
-	 * Sağlıklı ama seyrek commit eden consumer (Streams/Connect sink gibi): gruba katılır, konumunu bir kez commit
-	 * eder, sonra durmadan tüketir ama ölçüm boyunca bir daha commit etmez. Hazır olunca döner.
+	 * Healthy consumer that commits rarely (like Streams/Connect sink): joins the group, commits its position once,
+	 * then keeps consuming but does not commit again during the measurement. Returns when ready.
 	 */
 	void consumeWithRareCommits(String cluster, String group, String topic) throws InterruptedException {
 		Map<String, Object> p = clientProperties(cluster, "admin");
@@ -203,7 +203,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 				while (!stop.get()) {
 					c.poll(Duration.ofMillis(200));
 					if (committed.getCount() > 0 && !c.assignment().isEmpty()) {
-						// konum bilinene kadar bekleyip açıkça commit (ilk poll'da konum henüz yoksa commitSync() boş geçer)
+						// wait until the position is known and commit explicitly (commitSync() is a no-op if there is no position yet on the first poll)
 						Map<TopicPartition, OffsetAndMetadata> m = new LinkedHashMap<>();
 						for (TopicPartition tp : c.assignment()) {
 							m.put(tp, new OffsetAndMetadata(c.position(tp, Duration.ofSeconds(60))));
@@ -214,7 +214,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 				}
 			}
 			catch (WakeupException e) {
-				// durduruldu
+				// stopped
 			}
 			finally {
 				c.close(Duration.ofSeconds(5));
@@ -226,7 +226,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 			t.join(15_000);
 		});
 		if (!committed.await(90, TimeUnit.SECONDS)) {
-			throw new IllegalStateException("Consumer gruba katılıp commit edemedi: " + group);
+			throw new IllegalStateException("Consumer could not join the group and commit: " + group);
 		}
 	}
 
@@ -246,7 +246,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		}
 	}
 
-	/** Verilen koddaki bulgular. */
+	/** Findings with the given code. */
 	static List<JsonNode> findings(JsonNode r, String code) {
 		List<JsonNode> out = new ArrayList<>();
 		r.path("findings").forEach(f -> {
@@ -257,11 +257,11 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		return out;
 	}
 
-	/** Verilen koddaki tek bulgu (yoksa hata). */
+	/** The single finding with the given code (error if absent). */
 	static JsonNode finding(JsonNode r, String code) {
 		List<JsonNode> f = findings(r, code);
 		if (f.isEmpty()) {
-			throw new AssertionError(code + " bulgusu yok: " + r.path("findings"));
+			throw new AssertionError("No " + code + " finding: " + r.path("findings"));
 		}
 		return f.get(0);
 	}
@@ -280,7 +280,7 @@ abstract class DiagnoseTestBase extends MixedClusterIntegrationTest {
 		return out;
 	}
 
-	/** Bulguların önem sırası: critical, warning, info. */
+	/** Severity order of the findings: critical, warning, info. */
 	static boolean sortedBySeverity(JsonNode r) {
 		List<String> order = List.of("critical", "warning", "info");
 		int last = 0;

@@ -25,12 +25,12 @@ import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectorOverview;
 import io.github.srdrcn.kafkamcp.toolsets.connect.ConnectorStatus;
 
 /**
- * Bir topic'e referans veren Connect connector'ları: config'te adında "topic" geçen anahtarlar (liste, *regex,
- * *pattern, *prefix) ve connector'ın aktif topic'leri ({@code GET /connectors/{name}/topics}, sınırlı paralel).
+ * Connect connectors that reference a topic: config keys whose name contains "topic" (list, *regex, *pattern,
+ * *prefix) and the connector's active topics ({@code GET /connectors/{name}/topics}, bounded parallelism).
  */
 public final class ConnectorRefs {
 
-	/** Aktif topic sorgusu yapılan en fazla connector (fazlası unchecked sayılır). */
+	/** Maximum number of connectors whose active topics are queried (the rest are counted as unchecked). */
 	public static final int MAX_ACTIVE_CHECKS = 100;
 
 	private static final int PARALLELISM = 8;
@@ -38,7 +38,7 @@ public final class ConnectorRefs {
 	private ConnectorRefs() {
 	}
 
-	/** Eşleşen connector. */
+	/** Matching connector. */
 	public record Ref(String name, String type, String connectorClass, ConnectorStatus status, List<String> matchedBy) {
 
 		public Map<String, Object> toMap() {
@@ -49,11 +49,11 @@ public final class ConnectorRefs {
 
 	}
 
-	/** Tarama sonucu: taranan connector sayısı, eşleşenler, aktif topic'i kontrol edilemeyenler. */
+	/** Scan result: number of connectors scanned, matches, connectors whose active topics could not be checked. */
 	public record Result(int scanned, List<Ref> refs, int activeUnchecked) {
 	}
 
-	/** Topic'e referans veren connector'lar; aktif topic kontrolü en fazla maxMillis sürer. */
+	/** Connectors that reference the topic; the active-topic check takes at most maxMillis. */
 	public static Result find(ConnectApi api, ToolCall call, String topic, long maxMillis) {
 		String cluster = call.cluster();
 		List<ConnectorOverview> all = api.overview(cluster);
@@ -104,7 +104,7 @@ public final class ConnectorRefs {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new ToolException("Araç iptal edildi");
+			throw new ToolException("Tool was cancelled");
 		}
 		finally {
 			pool.shutdownNow();
@@ -120,8 +120,8 @@ public final class ConnectorRefs {
 	}
 
 	/**
-	 * Config'te topic'e referans veren anahtarlar: adında "topic" geçen ve değeri (virgülle ayrılmış) topic olan,
-	 * *regex/*pattern ile eşleşen ya da *prefix ile başlayan.
+	 * Config keys that reference the topic: keys whose name contains "topic" and whose (comma-separated) value is the
+	 * topic, that match it as *regex/*pattern, or whose *prefix it starts with.
 	 */
 	public static List<String> configMatches(Map<String, String> config, String topic) {
 		List<String> out = new ArrayList<>();
@@ -140,7 +140,7 @@ public final class ConnectorRefs {
 					match = Pattern.compile(value).matcher(topic).matches();
 				}
 				catch (PatternSyntaxException ignored) {
-					// geçersiz regex: eşleşme yok
+					// invalid regex: no match
 				}
 			}
 			else if (key.endsWith("prefix")) {

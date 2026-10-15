@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import io.github.srdrcn.kafkamcp.kafka.ClusterMeta.Mode;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** KRaft/ZooKeeper mod tespiti ve moda özgü alanların (ELR, topic id, desteklenmeyen API) saf mantığı. */
+/** Pure logic of KRaft/ZooKeeper mode detection and of mode-specific fields (ELR, topic id, unsupported API). */
 class ClusterModeTest {
 
 	private static final Map<String, Short> KRAFT_FEATURES = Map.of("metadata.version", (short) 27, "group.version",
@@ -28,23 +28,23 @@ class ClusterModeTest {
 	@Test
 	void modeFromFinalizedFeatures() {
 		assertThat(ClusterMeta.modeOf(KRAFT_FEATURES)).isEqualTo(Mode.KRAFT);
-		// ZooKeeper broker'ları metadata.version finalize etmez (describeFeatures boş döner)
+		// ZooKeeper brokers do not finalize metadata.version (describeFeatures returns nothing)
 		assertThat(ClusterMeta.modeOf(Map.of())).isEqualTo(Mode.ZOOKEEPER);
 		assertThat(ClusterMeta.modeOf((Map<String, ?>) null)).isEqualTo(Mode.UNKNOWN);
 	}
 
 	@Test
 	void resolveModeFallsBackToFeaturesWhenQuorumDeniedOrUnsupported() {
-		// quorum yanıtı: KRaft
+		// quorum response: KRaft
 		assertThat(ClusterMeta.resolveMode(true, false, null)).isEqualTo(Mode.KRAFT);
-		// quorum yetkisi yok / zaman aşımı: feature'lar karar verir
+		// quorum not authorized / timeout: the features decide
 		assertThat(ClusterMeta.resolveMode(false, false, KRAFT_FEATURES)).isEqualTo(Mode.KRAFT);
 		assertThat(ClusterMeta.resolveMode(false, false, Map.of())).isEqualTo(Mode.ZOOKEEPER);
-		// DescribeQuorum desteklenmiyor: ZooKeeper; ama metadata.version varsa DescribeQuorum'u bilmeyen eski KRaft
+		// DescribeQuorum not supported: ZooKeeper; but with metadata.version an older KRaft without DescribeQuorum
 		assertThat(ClusterMeta.resolveMode(false, true, Map.of())).isEqualTo(Mode.ZOOKEEPER);
 		assertThat(ClusterMeta.resolveMode(false, true, null)).isEqualTo(Mode.ZOOKEEPER);
 		assertThat(ClusterMeta.resolveMode(false, true, KRAFT_FEATURES)).isEqualTo(Mode.KRAFT);
-		// ikisi de yanıtsız
+		// neither answers
 		assertThat(ClusterMeta.resolveMode(false, false, null)).isEqualTo(Mode.UNKNOWN);
 	}
 
@@ -58,20 +58,20 @@ class ClusterModeTest {
 
 		Node b1 = new Node(1, "h1", 9092);
 		Node b2 = new Node(2, "h2", 9092);
-		// KRaft, ayrı controller düğümü (3000): varsayılan broker en küçük id
+		// KRaft, separate controller node (3000): the default broker is the lowest id
 		ClusterMeta.Info dedicated = new ClusterMeta.Info("c", List.of(b1, b2), 3000, ClusterMeta.KRAFT, null, null,
 				KRAFT_FEATURES);
 		assertThat(dedicated.controllerIsBroker()).isFalse();
 		assertThat(dedicated.defaultBrokerId()).isEqualTo(1);
 		assertThat(dedicated.metadataVersionLevel()).isEqualTo((short) 27);
 		assertThat(dedicated.clusterMode()).isEqualTo(Mode.KRAFT);
-		// ZooKeeper: controller broker'dır; eski 6 parametreli kurucu feature'sız
+		// ZooKeeper: the controller is a broker; the old 6-argument constructor has no features
 		ClusterMeta.Info zk = new ClusterMeta.Info("c", List.of(b1, b2), 2, ClusterMeta.ZOOKEEPER, null, null);
 		assertThat(zk.controllerIsBroker()).isTrue();
 		assertThat(zk.defaultBrokerId()).isEqualTo(2);
 		assertThat(zk.metadataVersionLevel()).isNull();
 		assertThat(new ClusterMeta.Info("c", List.of(b1), null, null, null, "x").clusterMode()).isEqualTo(Mode.UNKNOWN);
-		// eski kurucular geçiş bilgisi taşımaz (bilinmiyor)
+		// the old constructors carry no migration info (unknown)
 		assertThat(zk.zkMigration()).isNull();
 		assertThat(zk.migration()).isFalse();
 		assertThat(dedicated.migration()).isFalse();
@@ -93,12 +93,12 @@ class ClusterModeTest {
 	void elrIsNullSafeForZooKeeperPartitions() {
 		Node b1 = new Node(1, "h1", 9092);
 		Node b2 = new Node(2, "h2", 9092);
-		// ZooKeeper (Metadata API): client ELR alanlarını null bırakır
+		// ZooKeeper (Metadata API): the client leaves the ELR fields null
 		TopicPartitionInfo zk = new TopicPartitionInfo(0, b1, List.of(b1, b2), List.of(b1));
 		assertThat(zk.elr()).isNull();
 		assertThat(Topics.elr(zk)).isNull();
 		assertThat(Topics.lastKnownElr(zk)).isNull();
-		// KRaft: ISR min.insync altına düşünce ELR dolu olabilir
+		// KRaft: the ELR can be non-empty once the ISR drops below min.insync
 		TopicPartitionInfo kraft = new TopicPartitionInfo(0, b1, List.of(b1, b2), List.of(b1), List.of(b2), List.of());
 		assertThat(Topics.elr(kraft)).containsExactly(2);
 		assertThat(Topics.lastKnownElr(kraft)).isEmpty();

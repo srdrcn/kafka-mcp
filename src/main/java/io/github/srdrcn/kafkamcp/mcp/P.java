@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Parametre şeması parçaları. Üretilen map'lerde null değer olmaz (Claude Code uyumluluğu).
+ * Parameter schema building blocks. The generated maps never contain null values (Claude Code compatibility).
  */
 public final class P {
 
@@ -53,19 +53,19 @@ public final class P {
 		return m;
 	}
 
-	/** Serbest anahtar/değer map'i (değerler string). */
+	/** Free-form key/value map (string values). */
 	public static Map<String, Object> stringMap(String description) {
 		Map<String, Object> m = base("object", description);
 		m.put("additionalProperties", Map.of("type", "string"));
 		return m;
 	}
 
-	/** Serbest JSON nesnesi. */
+	/** Free-form JSON object. */
 	public static Map<String, Object> object(String description) {
 		return base("object", description);
 	}
 
-	/** Verilen alt şemadan oluşan nesne dizisi. */
+	/** Array of objects with the given item schema. */
 	public static Map<String, Object> objectArray(String description, Map<String, Object> itemProperties,
 			List<String> itemRequired) {
 		Map<String, Object> item = new LinkedHashMap<>();

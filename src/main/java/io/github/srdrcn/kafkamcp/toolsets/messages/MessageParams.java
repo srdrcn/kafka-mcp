@@ -9,7 +9,7 @@ import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** messages araçlarının ortak parametre şemaları ve okuyucuları. */
+/** Shared parameter schemas and readers of the messages tools. */
 final class MessageParams {
 
 	static final int MAX_VALUE_CHARS_LIMIT = 100_000;
@@ -20,14 +20,14 @@ final class MessageParams {
 	}
 
 	static Map<String, Object> topic() {
-		return P.string("Topic adı");
+		return P.string("Topic name");
 	}
 
 	static Map<String, Object> partition() {
-		return nonNegative("Partition (boşsa tüm partition'lar)");
+		return nonNegative("Partition (all partitions if omitted)");
 	}
 
-	/** En az 0 olan tamsayı (üst sınır yok). */
+	/** Integer of at least 0 (no upper bound). */
 	static Map<String, Object> nonNegative(String description) {
 		Map<String, Object> m = P.integer(description);
 		m.put("minimum", 0);
@@ -35,7 +35,7 @@ final class MessageParams {
 	}
 
 	static Map<String, Object> format(String what, List<String> values, String defaultValue) {
-		Map<String, Object> m = P.enumOf(what + " formatı (varsayılan " + defaultValue + ")", values);
+		Map<String, Object> m = P.enumOf(what + " format (default " + defaultValue + ")", values);
 		m.put("default", defaultValue);
 		return m;
 	}
@@ -49,21 +49,21 @@ final class MessageParams {
 	}
 
 	static Map<String, Object> maxValueChars() {
-		Map<String, Object> m = P.integer("Value/key için en fazla karakter; fazlası kesilir (varsayılan "
+		Map<String, Object> m = P.integer("Maximum characters per value/key; longer values are truncated (default "
 				+ RecordDecoder.DEFAULT_MAX_CHARS + ")", 16, MAX_VALUE_CHARS_LIMIT);
 		m.put("default", RecordDecoder.DEFAULT_MAX_CHARS);
 		return m;
 	}
 
 	static Map<String, Object> maxScan() {
-		Map<String, Object> m = P.integer("Filtrede/latest'te taranacak en fazla kayıt (varsayılan "
+		Map<String, Object> m = P.integer("Maximum records to scan with filters or from=latest (default "
 				+ MessageReader.DEFAULT_MAX_SCAN + ")", 1, MessageReader.MAX_SCAN_LIMIT);
 		m.put("default", MessageReader.DEFAULT_MAX_SCAN);
 		return m;
 	}
 
 	static Map<String, Object> timestamp(String description) {
-		return P.string(description + ": ISO-8601 (ör. 2025-01-31T10:00:00Z) ya da epoch ms");
+		return P.string(description + ": ISO-8601 (e.g. 2025-01-31T10:00:00Z) or epoch ms");
 	}
 
 	static MessageFormat valueFormat(ToolCall call) {
@@ -83,8 +83,8 @@ final class MessageParams {
 	}
 
 	/**
-	 * Ham string argüman (trim edilmez: key/regex/header adındaki boşluklar anlamlıdır); yoksa ya da boş string
-	 * ise null.
+	 * Raw string argument (not trimmed: whitespace in keys, regexes and header names is significant); null if absent
+	 * or an empty string.
 	 */
 	static String raw(ToolCall call, String name) {
 		Object v = call.args().get(name);
@@ -95,7 +95,7 @@ final class MessageParams {
 		return s.isEmpty() ? null : s;
 	}
 
-	/** Ham (trim edilmemiş) regex argümanını derler; yoksa null. */
+	/** Compiles the raw (untrimmed) regex argument; null if absent. */
 	static Pattern rawRegex(ToolCall call, String name) {
 		String s = raw(call, name);
 		if (s == null) {
@@ -105,7 +105,7 @@ final class MessageParams {
 			return Pattern.compile(s);
 		}
 		catch (PatternSyntaxException e) {
-			throw new ToolException("Geçersiz regex (" + name + "): " + e.getDescription());
+			throw new ToolException("Invalid regex (" + name + "): " + e.getDescription());
 		}
 	}
 

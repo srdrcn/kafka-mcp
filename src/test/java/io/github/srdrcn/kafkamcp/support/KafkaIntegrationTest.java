@@ -17,8 +17,8 @@ import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 
 /**
- * Testcontainers Kafka'sına (SASL/PLAIN) bağlı, tüm toolset'leri açık uygulama bağlamı. Araçlar
- * {@link ToolRegistry} üzerinden doğrudan çağrılır. Cluster'lar: {@code test} (yazılabilir) ve
+ * Application context connected to the Testcontainers Kafka (SASL/PLAIN) with all toolsets enabled. Tools
+ * are called directly through {@link ToolRegistry}. Clusters: {@code test} (writable) and
  * {@code test-ro} (readOnly).
  */
 @SpringBootTest(classes = { KafkaMcpApplication.class, KafkaIntegrationTest.Config.class },
@@ -54,7 +54,7 @@ public abstract class KafkaIntegrationTest {
 		return ToolAssertions.args(keyValues);
 	}
 
-	/** Test hazırlığı için admin kullanıcısıyla paylaşılan AdminClient. */
+	/** Shared AdminClient with the admin user, for test setup. */
 	protected static synchronized Admin testAdmin() {
 		if (testAdmin == null) {
 			testAdmin = KafkaTestCluster.admin();
@@ -62,7 +62,7 @@ public abstract class KafkaIntegrationTest {
 		return testAdmin;
 	}
 
-	/** Testler arası çakışmayan topic/group adı. */
+	/** Topic/group name that does not clash between tests. */
 	protected static String unique(String prefix) {
 		return prefix + "-" + System.nanoTime() % 1_000_000 + "-" + SEQ.incrementAndGet();
 	}

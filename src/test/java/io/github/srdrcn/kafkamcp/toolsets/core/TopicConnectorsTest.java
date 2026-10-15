@@ -38,7 +38,7 @@ class TopicConnectorsTest extends ConnectIntegrationTest {
 			putConnector(unrelated, Map.of("connector.class", SOURCE, "tasks.max", "1", "topic", unique("elsewhere"),
 					"file", "/tmp/" + unrelated + ".txt"));
 			try (KafkaProducer<byte[], byte[]> p = KafkaTestCluster.producer(null)) {
-				p.send(new ProducerRecord<>(topic, "\"merhaba\"".getBytes(StandardCharsets.UTF_8))).get();
+				p.send(new ProducerRecord<>(topic, "\"hello\"".getBytes(StandardCharsets.UTF_8))).get();
 			}
 			awaitActiveTopic(direct, topic);
 
@@ -54,7 +54,7 @@ class TopicConnectorsTest extends ConnectIntegrationTest {
 			assertThat(strings(d.get("matchedBy"))).contains("config:topics", "activeTopics");
 			assertThat(strings(byName.get(regex).get("matchedBy"))).contains("config:topics.regex");
 
-			JsonNode none = ok("topics_connectors", args("topic", unique("bos")));
+			JsonNode none = ok("topics_connectors", args("topic", unique("unused")));
 			assertThat(none.get("connectors")).isEmpty();
 		}
 		finally {
@@ -86,11 +86,11 @@ class TopicConnectorsTest extends ConnectIntegrationTest {
 				}
 			}
 			catch (IllegalStateException ignored) {
-				// connector henüz hazır değil
+				// connector not ready yet
 			}
 			Thread.sleep(500);
 		}
-		throw new AssertionError("Connector aktif topic'i raporlamadı: " + connector);
+		throw new AssertionError("Connector did not report the active topic: " + connector);
 	}
 
 	private static List<String> strings(JsonNode array) {

@@ -11,51 +11,51 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
-/** Schema Registry şema referansı ({@code name, subject, version}); araç argümanından ve SR yanıtından okunur. */
+/** Schema Registry schema reference ({@code name, subject, version}); read from a tool argument or an SR response. */
 public record SchemaReference(String name, String subject, int version) {
 
-	/** {@code references} parametresinin şeması (araçlar arasında ortak). */
+	/** Schema of the {@code references} parameter (shared by the tools). */
 	public static Map<String, Object> param() {
 		Map<String, Object> item = new LinkedHashMap<>();
-		item.put("name", P.string("Referans adı (Avro'da tam tip adı, JSON/PROTOBUF'ta dosya/URL adı)"));
-		item.put("subject", P.string("Referans verilen subject"));
-		item.put("version", P.integer("Referans verilen versiyon"));
-		return P.objectArray("Şema referansları (opsiyonel)", item, List.of("name", "subject", "version"));
+		item.put("name", P.string("Reference name (full type name for Avro, file/URL name for JSON/PROTOBUF)"));
+		item.put("subject", P.string("Referenced subject"));
+		item.put("version", P.integer("Referenced version"));
+		return P.objectArray("Schema references (optional)", item, List.of("name", "subject", "version"));
 	}
 
-	/** Araç argümanından referans listesi; yoksa boş liste. Eksik alanlarda Türkçe hata. */
+	/** Reference list from the tool argument; empty list if absent. Error if a field is missing. */
 	public static List<SchemaReference> fromArg(Object arg) {
 		List<SchemaReference> out = new ArrayList<>();
 		if (arg == null) {
 			return out;
 		}
 		if (!(arg instanceof Collection<?> c)) {
-			throw new ToolException("references bir dizi olmalı: [{name, subject, version}]");
+			throw new ToolException("references must be an array: [{name, subject, version}]");
 		}
 		for (Object o : c) {
 			if (!(o instanceof Map<?, ?> m)) {
-				throw new ToolException("references elemanları nesne olmalı: {name, subject, version}");
+				throw new ToolException("references items must be objects: {name, subject, version}");
 			}
 			Object name = m.get("name");
 			Object subject = m.get("subject");
 			Object version = m.get("version");
 			if (name == null || subject == null || version == null || String.valueOf(name).isBlank()
 					|| String.valueOf(subject).isBlank()) {
-				throw new ToolException("Her referansta name, subject ve version zorunlu");
+				throw new ToolException("Each reference requires name, subject and version");
 			}
 			int v;
 			try {
 				v = version instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(version).trim());
 			}
 			catch (NumberFormatException e) {
-				throw new ToolException("Referans versiyonu tamsayı olmalı: " + version);
+				throw new ToolException("Reference version must be an integer: " + version);
 			}
 			out.add(new SchemaReference(String.valueOf(name).trim(), String.valueOf(subject).trim(), v));
 		}
 		return out;
 	}
 
-	/** SR yanıtındaki {@code references} dizisi; yoksa boş liste. */
+	/** The {@code references} array of an SR response; empty list if absent. */
 	public static List<SchemaReference> fromJson(JsonNode node) {
 		List<SchemaReference> out = new ArrayList<>();
 		if (node != null && node.isArray()) {
@@ -67,7 +67,7 @@ public record SchemaReference(String name, String subject, int version) {
 		return out;
 	}
 
-	/** SR istek gövdesi için. */
+	/** For the SR request body. */
 	public Map<String, Object> toMap() {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("name", name);

@@ -30,7 +30,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 
-/** Topic okuma araçları: liste, detay, config, config'e göre arama. */
+/** Topic read tools: list, details, configs, search by config. */
 @Component
 public class TopicTools {
 
@@ -38,25 +38,25 @@ public class TopicTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("topics_list", "Topic'leri partition sayısı ve replication factor ile listeler")
-					.param("includeInternal", P.bool("İç topic'leri de listele (varsayılan false)"))
+				ToolSpec.read("topics_list", "List topics with partition count and replication factor")
+					.param("includeInternal", P.bool("Also list internal topics (default false)"))
 					.listParams()
 					.handler(this::topicsList),
 				ToolSpec.read("topics_get",
-						"Topic detayı: partition'lar (lider, replika, ISR, KRaft'ta ELR, URP), varsayılandan farklı config'ler, boyut, offset'ler")
-					.required("topic", P.string("Topic adı"))
+						"Topic details: partitions (leader, replicas, ISR, ELR on KRaft, URP), non-default configs, size, offsets")
+					.required("topic", P.string("Topic name"))
 					.handler(this::topicsGet),
-				ToolSpec.read("topics_config_get", "Topic config'leri: değer, kaynak, varsayılan mı, salt okunur mu")
-					.required("topic", P.string("Topic adı"))
-					.param("includeDefaults", P.bool("Varsayılan değerleri de getir (varsayılan true)"))
-					.param("filter", P.string("Config adı filtresi (regex, kısmi eşleşme)"))
+				ToolSpec.read("topics_config_get", "Topic configs: value, source, default and read-only flags")
+					.required("topic", P.string("Topic name"))
+					.param("includeDefaults", P.bool("Also return default values (default true)"))
+					.param("filter", P.string("Config name filter (regex, partial match)"))
 					.handler(this::topicsConfigGet),
 				ToolSpec.read("topics_find_by_config",
-						"Config değerine göre topic arar (ör. retention.ms gt 604800000, cleanup.policy eq compact)")
-					.required("key", P.string("Config adı (ör. retention.ms)"))
-					.required("operator", P.enumOf("Karşılaştırma (gt/gte/lt/lte sayısal)", OPERATORS))
-					.param("value", P.string("Karşılaştırılacak değer (exists için gerekmez)"))
-					.param("onlyNonDefault", P.bool("Sadece varsayılandan farklı değerler (varsayılan false)"))
+						"Find topics by config value (e.g. retention.ms gt 604800000, cleanup.policy eq compact)")
+					.required("key", P.string("Config name (e.g. retention.ms)"))
+					.required("operator", P.enumOf("Comparison operator (gt/gte/lt/lte are numeric)", OPERATORS))
+					.param("value", P.string("Value to compare with (not needed for exists)"))
+					.param("onlyNonDefault", P.bool("Only non-default values (default false)"))
 					.listParams()
 					.handler(this::topicsFindByConfig));
 	}
@@ -87,7 +87,7 @@ public class TopicTools {
 		KafkaFuture<Map<TopicPartition, PartitionReassignment>> pendingReassignments = Topics
 			.submitReassignments(call);
 		TopicDescription d = Topics.describeOne(call, topic);
-		// offset, config ve boyut istekleri paralel gider: biri takılırsa diğerlerinin süresini tüketmesin
+		// offset, config and size requests run in parallel so that one that hangs does not use up the others' time
 		ConfigResource resource = Configs.topic(topic);
 		Offsets.PendingRanges pendingOffsets = Offsets.submitRanges(call, Topics.onlinePartitions(List.of(d)));
 		KafkaFuture<Config> pendingConfigs = Configs.submitOne(call, resource);
@@ -104,7 +104,7 @@ public class TopicTools {
 			boolean isOffline = Topics.offline(p);
 			urp += isUrp ? 1 : 0;
 			offline += isOffline ? 1 : 0;
-			// ELR (KIP-966) sadece KRaft'ta; ZooKeeper'da null, boşsa da gösterilmez
+			// ELR (KIP-966) exists only on KRaft; it is null on ZooKeeper and omitted when empty
 			List<Integer> elr = Topics.elr(p);
 			List<Integer> lastKnownElr = Topics.lastKnownElr(p);
 			partitions.add(Results.map("partition", p.partition(), "leader", Topics.leader(p), "replicas",
@@ -182,18 +182,18 @@ public class TopicTools {
 		String key = call.str("key");
 		String op = call.str("operator").toLowerCase();
 		if (!OPERATORS.contains(op)) {
-			throw new ToolException("Geçersiz operator: " + op + " (geçerli: " + OPERATORS + ")");
+			throw new ToolException("Invalid operator: " + op + " (valid: " + OPERATORS + ")");
 		}
 		String value = call.str("value", null);
 		if (value == null && !"exists".equals(op)) {
-			throw new ToolException("value parametresi gerekli (operator=exists hariç)");
+			throw new ToolException("Missing parameter: value (required unless operator=exists)");
 		}
 		Pattern regex = "regex".equals(op) ? call.regex("value") : null;
 		BigDecimal number = null;
 		if (List.of("gt", "gte", "lt", "lte").contains(op)) {
 			number = decimal(value);
 			if (number == null) {
-				throw new ToolException(op + " için value sayı olmalı: " + value);
+				throw new ToolException("value must be a number for " + op + ": " + value);
 			}
 		}
 		boolean onlyNonDefault = call.bool("onlyNonDefault", false);
@@ -245,7 +245,7 @@ public class TopicTools {
 		Map<String, Object> out = Results.map("key", key, "operator", op, "value", value, "topicsChecked",
 				names.size());
 		if (!keyFound && !names.isEmpty() && configs.errors().size() < names.size()) {
-			out.put("warning", "Bu anahtar topic config'lerinde yok: " + key);
+			out.put("warning", "Key not found in topic configs: " + key);
 		}
 		if (nonNumeric > 0) {
 			out.put("nonNumericValues", nonNumeric);

@@ -25,13 +25,14 @@ import io.github.srdrcn.kafkamcp.toolsets.acl.Acls;
 import io.github.srdrcn.kafkamcp.toolsets.acl.BrokerSecurity;
 
 /**
- * Seçili kaynaklara uygulanan ACL'ler (kaynak başına bir describeAcls, MATCH: literal + "*" + prefixed) ve
- * broker'ın super.users / allow.everyone.if.no.acl.found değerleriyle {@link AclEvaluator} üzerinden yetki
- * kararları. Authorizer yoksa {@link #authorizerEnabled()} false olur (her şeye izin var).
+ * ACLs that apply to the selected resources (one describeAcls per resource, MATCH: literal + "*" + prefixed) and
+ * authorization decisions through {@link AclEvaluator} using the broker's super.users /
+ * allow.everyone.if.no.acl.found values. Without an authorizer {@link #authorizerEnabled()} is false (everything is
+ * allowed).
  */
 public final class AclView {
 
-	/** Kaynak tipi + adı. */
+	/** Resource type + name. */
 	public record Resource(ResourceType type, String name) {
 	}
 
@@ -52,8 +53,8 @@ public final class AclView {
 	}
 
 	/**
-	 * Kaynakların ACL'lerini (paralel describeAcls) ve broker güvenlik config'lerini okur.
-	 * @param knownSuperUsers broker super.users'ı gizlerse kullanılacak liste (null olabilir)
+	 * Reads the ACLs of the resources (parallel describeAcls) and the broker security configs.
+	 * @param knownSuperUsers list to use if the broker hides super.users (may be null)
 	 */
 	public static AclView load(ToolCall call, Collection<Resource> resources, Collection<String> knownSuperUsers) {
 		Map<Resource, KafkaFuture<Collection<AclBinding>>> futures = new LinkedHashMap<>();
@@ -78,12 +79,12 @@ public final class AclView {
 				broker.allowEveryone());
 	}
 
-	/** Authorizer tanımlı mı (describeAcls SecurityDisabled dönmedi)? */
+	/** Is an authorizer configured (describeAcls did not return SecurityDisabled)? */
 	public boolean authorizerEnabled() {
 		return bindings != null;
 	}
 
-	/** Okunan binding'ler (authorizer yoksa boş). */
+	/** Bindings read (empty without an authorizer). */
 	public List<AclBinding> bindings() {
 		return bindings == null ? List.of() : bindings;
 	}
@@ -100,19 +101,19 @@ public final class AclView {
 		return allowEveryone;
 	}
 
-	/** authorizer.class.name (okunamadıysa ya da tanımsızsa null). */
+	/** authorizer.class.name (null if unreadable or not set). */
 	public String authorizerClass() {
 		return broker.value(BrokerSecurity.AUTHORIZER);
 	}
 
-	/** Kafka kurallarıyla karar (süper kullanıcılar dahil). Authorizer yoksa çağırmayın. */
+	/** Decision by Kafka's rules (super users included). Do not call without an authorizer. */
 	public AclEvaluator.Decision decide(String principal, AclOperation op, ResourceType type, String name,
 			String host) {
 		return new AclEvaluator(bindings(), superUsers.users(), allowEveryone.value()).authorize(principal, op, type,
 				name, host);
 	}
 
-	/** DENY binding'leri yok sayılsaydı karar (DENY kaldırılınca izin olur mu?). */
+	/** Decision if the DENY bindings were ignored (would it be allowed once the DENY is removed?). */
 	public AclEvaluator.Decision decideIgnoringDeny(String principal, AclOperation op, ResourceType type, String name,
 			String host) {
 		List<AclBinding> allowOnly = bindings().stream()
@@ -122,12 +123,12 @@ public final class AclView {
 				name, host);
 	}
 
-	/** Kaynağa uygulanan binding sayısı (literal, "*" ve prefixed). */
+	/** Number of bindings that apply to the resource (literal, "*" and prefixed). */
 	public int resourceAclCount(ResourceType type, String name) {
 		return new AclEvaluator(bindings(), Set.of(), false).resourceBindings(type, name).size();
 	}
 
-	/** Kaynağa uygulanan binding'lerdeki principal'lar (sıralı). */
+	/** Principals in the bindings that apply to the resource (sorted). */
 	public Set<String> principals(ResourceType type, String name) {
 		Set<String> out = new TreeSet<>();
 		new AclEvaluator(bindings(), Set.of(), false).resourceBindings(type, name)
@@ -136,8 +137,8 @@ public final class AclView {
 	}
 
 	/**
-	 * Kaynakta işlemi en az bir host'tan yapabilen principal'lar (binding'lerde geçenler; süper kullanıcılar
-	 * ayrıca değerlendirilir, burada sayılmaz).
+	 * Principals that can perform the operation on the resource from at least one host (those in the bindings; super
+	 * users are evaluated separately and not counted here).
 	 */
 	public List<String> allowedPrincipals(AclOperation op, ResourceType type, String name) {
 		AclEvaluator e = new AclEvaluator(bindings(), Set.of(), allowEveryone.value());
@@ -153,7 +154,7 @@ public final class AclView {
 		return out;
 	}
 
-	/** Kaynakta işlem için eşleşen DENY binding'i olan principal'lar. */
+	/** Principals with a matching DENY binding for the operation on the resource. */
 	public List<String> deniedPrincipals(AclOperation op, ResourceType type, String name) {
 		AclEvaluator e = new AclEvaluator(bindings(), Set.of(), allowEveryone.value());
 		List<String> out = new ArrayList<>();
@@ -168,7 +169,7 @@ public final class AclView {
 		return out;
 	}
 
-	/** Principal'ın binding'lerinde geçen host'lar ("*" dahil). */
+	/** Hosts in the principal's bindings ("*" included). */
 	public Set<String> hosts(String principal) {
 		Set<String> out = new LinkedHashSet<>();
 		out.add(Acls.WILDCARD);
@@ -180,7 +181,7 @@ public final class AclView {
 		return out;
 	}
 
-	/** Principal için host'u "*" olmayan binding var mı (host parametresi önemli)? */
+	/** Does the principal have a binding whose host is not "*" (the host parameter matters)? */
 	public boolean hasHostSpecific(String principal) {
 		return bindings().stream()
 			.anyMatch(b -> !Acls.WILDCARD.equals(b.entry().host())

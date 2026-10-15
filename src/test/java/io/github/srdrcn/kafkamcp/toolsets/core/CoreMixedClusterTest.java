@@ -35,27 +35,27 @@ import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * core okuma araçları ZooKeeper modlu cluster'da ({@code zk}, Kafka 3.9) gerçek veriyle; moda göre farklı
- * çıktılar (mod, controller, sürüm kaynağı, feature'lar, authorizer, ELR, quorum, grup tipi) KRaft
- * cluster'ıyla ({@code test}, Kafka 4.1) karşılaştırmalı doğrulanır.
+ * core read tools on the ZooKeeper-mode cluster ({@code zk}, Kafka 3.9) with real data; outputs that depend on the
+ * mode (mode, controller, version source, features, authorizer, ELR, quorum, group type) are checked against the
+ * KRaft cluster ({@code test}, Kafka 4.1).
  */
 class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 
-	/** zk topic'i: p0'a 10, p1'e 5 mesaj (sabit zaman damgalı), p2 boş. */
+	/** zk topic: 10 messages in p0, 5 in p1 (fixed timestamps), p2 empty. */
 	private static String topic;
 
-	/** Aynı adla KRaft cluster'ında da bir topic (moda göre karşılaştırma için). */
+	/** A topic on the KRaft cluster too (for comparing by mode). */
 	private static String kraftTopic;
 
-	/** zk'da commit'li offset'i olan, üyesiz grup. */
+	/** Group without members that has committed offsets on zk. */
 	private static String emptyGroup;
 
-	/** Retention (1 gün) içinde kalan sabit zaman damgaları: 2 ve 1 saat önce (saniyeye yuvarlı). */
+	/** Fixed timestamps within the retention (1 day): 2 and 1 hours ago (rounded to the second). */
 	private static final long TS0 = System.currentTimeMillis() / 1000 * 1000 - 7_200_000L;
 
 	private static final long TS1 = TS0 + 3_600_000L;
 
-	/** Az yetkili kullanıcıyla (alice: Cluster:Describe yok) iki cluster'a bağlanan ayrı client'lar. */
+	/** Separate clients connecting to both clusters as a user with few permissions (alice: no Cluster:Describe). */
 	private static KafkaClients aliceClients;
 
 	@Autowired
@@ -67,7 +67,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		TestData.createTopic(zkAdmin(), topic, 3, Map.of("retention.ms", "86400000", "cleanup.policy", "delete"));
 		TestData.produceZk(topic, 0, 10, TS0);
 		TestData.produceZk(topic, 1, 5, TS1);
-		// boş (üyesiz) Classic grup; ZooKeeper'da __consumer_offsets'i de oluşturur
+		// empty Classic group (no members); also creates __consumer_offsets on ZooKeeper
 		emptyGroup = unique("zk-g-empty");
 		zkAdmin().alterConsumerGroupOffsets(emptyGroup,
 				Map.of(new TopicPartition(topic, 0), new OffsetAndMetadata(4), new TopicPartition(topic, 1),
@@ -100,7 +100,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		JsonNode zk = byName.get(ZK_CLUSTER);
 		assertThat(zk.get("status").asText()).isEqualTo("ok");
 		assertThat(zk.get("mode").asText()).isEqualTo("ZooKeeper");
-		// ZooKeeper'da describeCluster controller'ı gerçek controller'dır
+		// on ZooKeeper the describeCluster controller is the real controller
 		assertThat(zk.get("controllerId").asInt()).isEqualTo(1);
 		assertThat(zk.has("zkMigration")).isFalse();
 		assertThat(zk.get("brokerCount").asInt()).isEqualTo(1);
@@ -108,7 +108,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 			JsonNode k = byName.get(kraft);
 			assertThat(k.get("status").asText()).isEqualTo("ok");
 			assertThat(k.get("mode").asText()).as(kraft).isEqualTo("KRaft");
-			// KRaft broker'ları describeCluster'da rastgele broker döndürür: controller olarak raporlanmaz
+			// KRaft brokers return a random broker in describeCluster: it is not reported as the controller
 			assertThat(k.has("controllerId")).as(kraft).isFalse();
 		}
 		assertThat(byName.get("test").get("clusterId").asText()).isNotEqualTo(zk.get("clusterId").asText());
@@ -126,7 +126,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zk.get("mode").asText()).isEqualTo("ZooKeeper");
 		assertThat(zk.get("controllerId").asInt()).isEqualTo(1);
 		assertThat(zk.has("controllerNote")).isFalse();
-		// ZooKeeper'da metadata.version yok: sürüm IBP'den; IBP varsayılan (sabitlenmemiş) = broker yazılımı
+		// no metadata.version on ZooKeeper: the version comes from the IBP; default IBP (not pinned) = broker software
 		assertThat(zk.get("minKafkaVersion").asText()).isEqualTo("3.9");
 		assertThat(zk.has("kafkaVersion")).isFalse();
 		assertThat(zk.get("versionSource").asText()).startsWith("inter.broker.protocol.version=3.9");
@@ -135,7 +135,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zk.has("zkMigration")).isFalse();
 		assertThat(zk.has("modeNote")).isFalse();
 		assertThat(zk.has("quorum")).isFalse();
-		assertThat(zk.has("quorumError")).as("ZooKeeper'da DescribeQuorum yokluğu hata değildir").isFalse();
+		assertThat(zk.has("quorumError")).as("a missing DescribeQuorum on ZooKeeper is not an error").isFalse();
 		assertThat(zk.has("features")).isFalse();
 		assertThat(zk.at("/zookeeper/connect").asText()).isEqualTo("zookeeper:2181");
 		assertThat(zk.at("/zookeeper").has("migrationEnabled")).isFalse();
@@ -150,12 +150,12 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 
 		JsonNode kraft = ok("clusters_get", args());
 		assertThat(kraft.get("mode").asText()).isEqualTo("KRaft");
-		// KRaft'ta aktif controller quorum lideridir
+		// on KRaft the active controller is the quorum leader
 		assertThat(kraft.get("controllerId").asInt()).isEqualTo(kraft.at("/quorum/leaderId").asInt()).isEqualTo(1);
 		assertThat(kraft.get("minKafkaVersion").asText()).isEqualTo("4.1");
 		assertThat(kraft.get("versionSource").asText()).startsWith("metadata.version=");
-		// metadata.version yükseltmeden sonra artar: yazılım sürümünün gerisinde kalabilir
-		assertThat(kraft.get("versionNote").asText()).contains("broker yazılımı daha yeni olabilir");
+		// metadata.version goes up after an upgrade: it can lag behind the software version
+		assertThat(kraft.get("versionNote").asText()).contains("broker software may be newer");
 		assertThat(kraft.has("zkMigration")).isFalse();
 		assertThat(kraft.at("/features/metadata.version").asInt()).isGreaterThanOrEqualTo(27);
 		assertThat(kraft.get("features").has("group.version")).isTrue();
@@ -171,7 +171,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 
 		ClusterMeta.Info zk = ClusterMeta.describe(call(clients, ZK_CLUSTER), true);
 		assertThat(zk.mode()).isEqualTo(ClusterMeta.ZOOKEEPER);
-		// controller broker'ının config'i okundu: ZooKeeper→KRaft geçişi kapalı, describeCluster controller'ı gerçek
+		// controller broker config was read: ZooKeeper→KRaft migration is off, the describeCluster controller is real
 		assertThat(zk.zkMigration()).isFalse();
 		assertThat(zk.controllerId()).isEqualTo(1);
 		assertThat(zk.quorum()).isNull();
@@ -185,14 +185,14 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(kraft.zkMigration()).isNull();
 		assertThat(kraft.metadataVersionLevel()).isNotNull();
 
-		// alice'in Cluster:Describe yetkisi yok: KRaft'ta quorum reddedilir, mod feature'lardan bulunur
+		// alice has no Cluster:Describe permission: the quorum is denied on KRaft, the mode comes from the features
 		ClusterMeta.Info denied = ClusterMeta.describe(call(aliceClients, "kraft-alice"), true);
 		assertThat(denied.quorum()).isNull();
 		assertThat(denied.quorumError()).isNotBlank();
 		assertThat(denied.clusterMode()).isEqualTo(ClusterMeta.Mode.KRAFT);
-		assertThat(denied.controllerId()).as("rastgele describeCluster controller'ı kullanılmamalı").isNull();
+		assertThat(denied.controllerId()).as("the random describeCluster controller must not be used").isNull();
 		assertThat(ClusterMeta.mode(call(aliceClients, "kraft-alice"))).isEqualTo(ClusterMeta.Mode.KRAFT);
-		// ZooKeeper'da da yetkisiz kullanıcıyla mod ve controller belli
+		// on ZooKeeper the mode and controller are known even for the unprivileged user
 		ClusterMeta.Info zkAlice = ClusterMeta.describe(call(aliceClients, "zk-alice"), true);
 		assertThat(zkAlice.clusterMode()).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
 		assertThat(zkAlice.migration()).isFalse();
@@ -232,7 +232,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 			.isEqualTo("kafka.security.authorizer.AclAuthorizer");
 		assertThat(ClusterBrokerToolsTest.find(configs, "listener.name.sasl.plain.sasl.jaas.config").get("value")
 			.asText()).isEqualTo("******");
-		// authorizer config'leri (KafkaConfig'te tanımsız) iki modda da hassas/değersiz döner
+		// authorizer configs (not defined in KafkaConfig) come back sensitive/without a value in both modes
 		assertThat(ClusterBrokerToolsTest.find(configs, "super.users").get("value").asText()).isEqualTo("******");
 		assertThat(ClusterBrokerToolsTest.find(configs, "allow.everyone.if.no.acl.found").get("value").asText())
 			.isEqualTo("******");
@@ -250,9 +250,9 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 			.isEqualTo("org.apache.kafka.metadata.authorizer.StandardAuthorizer");
 		assertThat(ClusterBrokerToolsTest.find(kc, "super.users").get("value").asText()).isEqualTo("******");
 		assertThat(ok("brokers_config_get", args("includeDefaults", true, "filter", "^zookeeper\\.")).get("total")
-			.asInt()).as("Kafka 4.x KRaft'ta zookeeper.* anahtarı yok").isZero();
+			.asInt()).as("Kafka 4.x KRaft has no zookeeper.* keys").isZero();
 
-		assertThat(error("brokers_config_get", zkArgs("brokerId", 99))).contains("Broker bulunamadı: 99");
+		assertThat(error("brokers_config_get", zkArgs("brokerId", 99))).contains("Broker not found: 99");
 	}
 
 	@Test
@@ -260,7 +260,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		JsonNode drift = ok("brokers_config_drift", zkArgs());
 		assertThat(drift.get("brokersCompared")).hasSize(1);
 		assertThat(drift.get("differences")).isEmpty();
-		assertThat(drift.get("note").asText()).contains("en az 2 broker");
+		assertThat(drift.get("note").asText()).contains("At least 2 brokers");
 		assertThat(drift.has("brokerModes")).isFalse();
 
 		JsonNode skew = ok("brokers_partition_skew", zkArgs());
@@ -279,13 +279,13 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(dir.get("path").asText()).isEqualTo("/var/lib/kafka/data");
 		assertThat(dir.get("partitions").asInt()).isGreaterThanOrEqualTo(3);
 		assertThat(dir.get("sizeBytes").asLong()).isPositive();
-		// Kafka 3.9 disk boyutunu döndürür (3.3+)
+		// Kafka 3.9 returns the disk size (3.3+)
 		assertThat(dir.get("totalBytes").asLong()).isPositive();
-		assertThat(dir.get("disk").asText()).contains("boş");
+		assertThat(dir.get("disk").asText()).contains("free");
 		assertThat(dirs.get("total").asInt()).isEqualTo(3);
 		assertThat(dirs.at("/largestPartitions/0/topic").asText()).isEqualTo(topic);
 		assertThat(dirs.at("/largestPartitions/0/partition").asInt()).isZero();
-		assertThat(error("brokers_logdirs", zkArgs("brokerId", 42))).contains("Broker bulunamadı");
+		assertThat(error("brokers_logdirs", zkArgs("brokerId", 42))).contains("Broker not found");
 	}
 
 	@Test
@@ -312,13 +312,13 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		for (JsonNode p : get.get("partitions")) {
 			assertThat(p.get("leader").asInt()).isEqualTo(1);
 			assertThat(p.get("isr").get(0).asInt()).isEqualTo(1);
-			// ZooKeeper ELR döndürmez (client'ta null): alan hiç yok, NPE yok
+			// ZooKeeper returns no ELR (null in the client): the field is absent, no NPE
 			assertThat(p.has("elr")).isFalse();
 			assertThat(p.has("lastKnownElr")).isFalse();
 		}
 		JsonNode kraft = ok("topics_get", args("topic", kraftTopic));
 		assertThat(kraft.get("topicId").asText()).isNotBlank();
-		// KRaft'ta ELR listesi var ama tek broker'da boş: gösterilmez
+		// KRaft has an ELR list, but it is empty with a single broker: not shown
 		kraft.get("partitions").forEach(p -> assertThat(p.has("elr")).isFalse());
 
 		JsonNode cfg = ok("topics_config_get", zkArgs("topic", topic, "includeDefaults", false));
@@ -337,7 +337,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 				zkArgs("key", "cleanup.policy", "operator", "eq", "value", "delete", "filter", "^" + topic + "$"));
 		assertThat(eq.get("total").asInt()).isEqualTo(1);
 		assertThat(eq.at("/topics/0/source").asText()).isEqualTo("DYNAMIC_TOPIC_CONFIG");
-		assertThat(error("topics_get", zkArgs("topic", unique("yok")))).contains("Topic bulunamadı");
+		assertThat(error("topics_get", zkArgs("topic", unique("missing")))).contains("Topic not found");
 	}
 
 	@Test
@@ -361,7 +361,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(offsets.at("/partitions/2/count").asLong()).isZero();
 
 		JsonNode last = ok("topics_last_write_time", zkArgs("topic", topic));
-		// ListOffsets maxTimestamp Kafka 3.9'da var: son kayıt okunmaz
+		// Kafka 3.9 has ListOffsets maxTimestamp: the last record is not read
 		assertThat(last.get("method").asText()).isEqualTo("maxTimestamp");
 		assertThat(last.has("note")).isFalse();
 		assertThat(last.get("lastWriteTime").asText()).isEqualTo(Instant.ofEpochMilli(TS1).toString());
@@ -382,11 +382,11 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 				}
 			}
 			catch (Exception e) {
-				// test bitti
+				// test finished
 			}
 		});
 		try {
-			// yazıcı ilk mesajları göndermeden ölçüm başlamasın
+			// do not start measuring before the writer sends its first messages
 			awaitLatest(rateTopic, 1);
 			JsonNode rate = ok("topics_write_rate", zkArgs("topic", rateTopic, "intervalSeconds", 2));
 			assertThat(rate.get("topic").asText()).isEqualTo(rateTopic);
@@ -418,7 +418,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 			assertThat(e.get("lag").asLong()).isEqualTo(6);
 			assertThat(e.get("partitions").asInt()).isEqualTo(2);
 			JsonNode l = groups.get(live);
-			// ZooKeeper cluster'ında consumer group'lar hep Classic
+			// consumer groups on a ZooKeeper cluster are always Classic
 			assertThat(l.get("type").asText()).isEqualTo("Classic");
 			assertThat(l.get("state").asText()).isEqualToIgnoringCase("stable");
 			assertThat(l.get("members").asInt()).isEqualTo(1);
@@ -434,7 +434,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 
 			JsonNode r = ok("topics_consumers", args("topic", kraftTopic, "filter", "^kr-g-"));
 			JsonNode g = byGroup(r.get("groups")).get(kip848);
-			// KRaft 4.x: KIP-848 (group.protocol=consumer) grubu Consumer tipinde
+			// KRaft 4.x: a KIP-848 (group.protocol=consumer) group has the Consumer type
 			assertThat(g.get("type").asText()).isEqualTo("Consumer");
 			assertThat(g.get("members").asInt()).isEqualTo(1);
 			assertThat(g.get("lag").asLong()).isEqualTo(2);
@@ -495,7 +495,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 			.partitionResult(tp)
 			.get()
 			.offset() < atLeast) {
-			assertThat(System.currentTimeMillis()).as("yazıcı başlamadı").isLessThan(end);
+			assertThat(System.currentTimeMillis()).as("writer did not start").isLessThan(end);
 			Thread.sleep(50);
 		}
 	}
@@ -514,7 +514,7 @@ class CoreMixedClusterTest extends MixedClusterIntegrationTest {
 	private static void awaitAssignment(KafkaConsumer<byte[], byte[]> c) {
 		long end = System.currentTimeMillis() + 60_000;
 		while (c.assignment().isEmpty()) {
-			assertThat(System.currentTimeMillis()).as("consumer'a partition atanmadı").isLessThan(end);
+			assertThat(System.currentTimeMillis()).as("no partition assigned to the consumer").isLessThan(end);
 			c.poll(Duration.ofMillis(200));
 		}
 	}

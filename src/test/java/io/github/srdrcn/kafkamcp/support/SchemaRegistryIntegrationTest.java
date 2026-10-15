@@ -8,8 +8,8 @@ import io.github.srdrcn.kafkamcp.KafkaMcpApplication;
 import io.github.srdrcn.kafkamcp.config.KafkaMcpConfig;
 
 /**
- * {@link KafkaIntegrationTest} + Testcontainers Schema Registry: {@code test} ve {@code test-ro}
- * cluster'larında schemaRegistryUrl tanımlı.
+ * {@link KafkaIntegrationTest} + Testcontainers Schema Registry: the {@code test} and {@code test-ro}
+ * clusters have a schemaRegistryUrl.
  */
 @SpringBootTest(classes = { KafkaMcpApplication.class, SchemaRegistryIntegrationTest.SrConfig.class },
 		webEnvironment = SpringBootTest.WebEnvironment.NONE)

@@ -19,7 +19,7 @@ import io.github.srdrcn.kafkamcp.mcp.Toolset;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 import io.modelcontextprotocol.spec.McpSchema;
 
-/** connect araçları sadece connectUrl'si olan cluster'larda sunulur (ağsız). */
+/** connect tools are offered only on clusters that have a connectUrl (no network). */
 class ConnectToolAvailabilityTest {
 
 	static final List<String> TOOLS = List.of("connect_clusters_list", "connect_plugins_list",
@@ -30,7 +30,7 @@ class ConnectToolAvailabilityTest {
 			"connectors_offsets_reset");
 
 	private static KafkaMcpConfig config() {
-		// alpha: connect + yazılabilir; beta: readOnly, connectUrl yok
+		// alpha: connect + writable; beta: readOnly, no connectUrl
 		KafkaMcpConfig c = TestConfigs.offline();
 		c.setToolsets(List.of("connect"));
 		return c;
@@ -69,7 +69,7 @@ class ConnectToolAvailabilityTest {
 		assertThat(tools).allSatisfy(r -> assertThat(r.clusters()).as(r.spec().name()).containsExactly("alpha"));
 
 		c.cluster("alpha").setConnectUrl(null);
-		assertThat(ToolFilter.select(c, List.of(t))).as("connectUrl'siz config'te connect aracı yok").isEmpty();
+		assertThat(ToolFilter.select(c, List.of(t))).as("no connect tool in a config without a connectUrl").isEmpty();
 	}
 
 	@Test

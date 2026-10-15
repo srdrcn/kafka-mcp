@@ -13,7 +13,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolRegistry;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 
-/** Araçları {@link ToolRegistry} üzerinden çağırıp sonucu doğrulayan yardımcılar. */
+/** Helpers that call tools through {@link ToolRegistry} and check the result. */
 public final class ToolAssertions {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -21,7 +21,7 @@ public final class ToolAssertions {
 	private ToolAssertions() {
 	}
 
-	/** {@code args("topic", "x", "limit", 5)}; cluster verilmemişse {@link TestConfigs#CLUSTER} eklenir. */
+	/** {@code args("topic", "x", "limit", 5)}; {@link TestConfigs#CLUSTER} is added if no cluster is given. */
 	public static Map<String, Object> args(Object... keyValues) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("cluster", TestConfigs.CLUSTER);
@@ -36,11 +36,11 @@ public final class ToolAssertions {
 		return ((McpSchema.TextContent) r.content().get(0)).text();
 	}
 
-	/** Başarılı olmalı; JSON ise parse edilmiş, değilse TextNode döner. */
+	/** Must succeed; returns the parsed JSON, or a TextNode if it is not JSON. */
 	public static JsonNode ok(ToolRegistry registry, String tool, Map<String, Object> args) {
 		CallToolResult r = registry.call(tool, args);
 		String text = text(r);
-		assertThat(r.isError()).as("%s hata döndü: %s", tool, text).isFalse();
+		assertThat(r.isError()).as("%s returned an error: %s", tool, text).isFalse();
 		try {
 			return MAPPER.readTree(text);
 		}
@@ -49,11 +49,11 @@ public final class ToolAssertions {
 		}
 	}
 
-	/** Hata dönmeli; hata mesajını döner. */
+	/** Must fail; returns the error message. */
 	public static String error(ToolRegistry registry, String tool, Map<String, Object> args) {
 		CallToolResult r = registry.call(tool, args);
 		String text = text(r);
-		assertThat(r.isError()).as("%s hata dönmeliydi, dönen: %s", tool, text).isTrue();
+		assertThat(r.isError()).as("%s should have failed, returned: %s", tool, text).isTrue();
 		return text;
 	}
 

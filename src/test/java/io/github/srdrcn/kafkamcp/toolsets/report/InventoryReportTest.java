@@ -21,7 +21,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** report_team_inventory ve report_cleanup_candidates (KRaft ve ZooKeeper). */
+/** report_team_inventory and report_cleanup_candidates (KRaft and ZooKeeper). */
 class InventoryReportTest extends ReportTestBase {
 
 	static AclBinding acl(ResourceType type, String name, PatternType pattern, String principal, AclOperation op) {
@@ -29,13 +29,13 @@ class InventoryReportTest extends ReportTestBase {
 				new AccessControlEntry(principal, "*", op, AclPermissionType.ALLOW));
 	}
 
-	/** ACL'leri oluşturur ve describeAcls'te görünene kadar bekler. */
+	/** Creates the ACLs and waits until describeAcls shows them. */
 	static void createAcls(Admin admin, List<AclBinding> bindings) throws Exception {
 		admin.createAcls(bindings).all().get(30, TimeUnit.SECONDS);
 		long deadline = System.currentTimeMillis() + 30_000;
 		while (!admin.describeAcls(AclBindingFilter.ANY).values().get(30, TimeUnit.SECONDS).containsAll(bindings)) {
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("ACL'ler görünmedi");
+				throw new IllegalStateException("ACLs did not show up");
 			}
 			Thread.sleep(100);
 		}
@@ -46,7 +46,7 @@ class InventoryReportTest extends ReportTestBase {
 			admin.deleteAcls(bindings.stream().map(AclBinding::toFilter).toList()).all().get(30, TimeUnit.SECONDS);
 		}
 		catch (Exception ignored) {
-			// temizlik
+			// cleanup
 		}
 	}
 
@@ -70,7 +70,7 @@ class InventoryReportTest extends ReportTestBase {
 		String external = unique("rep-ext");
 		commit(zk, external, orders, 0, 5);
 		commit(zk, unique("rep-unrelated"), outside, 0, 1);
-		// önekle adlandırılmış ama takım topic'lerini tüketmeyen gruplar
+		// groups named with the prefix that do not consume the team topics
 		commit(zk, prefix + "other1", outside, 0, 1);
 		commit(zk, prefix + "other2", outside, 0, 1);
 		String alice = "User:" + token + "-alice";
@@ -126,7 +126,7 @@ class InventoryReportTest extends ReportTestBase {
 			assertThat(r.has("connectors")).isFalse();
 			assertThat(r.at("/examined/topics").asInt()).isEqualTo(3);
 
-			// kırpılan liste sayısıyla birlikte döner
+			// a truncated list comes with its counts
 			JsonNode limited = ok("report_team_inventory", on(zk, "prefix", prefix, "limit", 1));
 			JsonNode limitedGroups = limited.get("consumerGroups");
 			assertThat(limitedGroups.get("otherGroupsWithPrefixCount").asInt()).isEqualTo(2);
@@ -155,7 +155,7 @@ class InventoryReportTest extends ReportTestBase {
 		produce(zk, busy, 0, 3, null);
 		commit(zk, p + "-idlegrp", idle, 0, 4);
 		commit(zk, p + "-busygrp", busy, 0, 1);
-		// filtreye uymayan topic/grup/ACL: atlananlar sayılır
+		// topic/group/ACL not matching the filter: skipped ones are counted
 		String out = unique("rep-cleanout");
 		createTopic(zk, out, 1, Map.of());
 		commit(zk, out + "-grp", out, 0, 0);
@@ -197,13 +197,13 @@ class InventoryReportTest extends ReportTestBase {
 			JsonNode groupAcl = find(c, "name", ghostGroup);
 			assertThat(texts(groupAcl.get("reasons"), null)).containsExactly("orphan_group_acl");
 			assertThat(groupAcl.get("risk").asText()).isEqualTo("medium");
-			// sıralama: önce düşük risk
+			// ordering: low risk first
 			assertThat(c.get(0).get("risk").asText()).isEqualTo("low");
 			assertThat(r.at("/byType/topic").asInt()).isEqualTo(3);
 			assertThat(r.at("/byType/group").asInt()).isEqualTo(1);
 			assertThat(r.at("/byType/acl").asInt()).isEqualTo(2);
 			assertThat(r.at("/byRisk/high").asInt()).isEqualTo(1);
-			assertThat(r.get("notes").toString()).contains("hiçbir şey silinmez");
+			assertThat(r.get("notes").toString()).contains("nothing is deleted");
 			assertThat(r.at("/examined/aclBindings").asInt()).isGreaterThanOrEqualTo(6);
 			assertThat(r.at("/skipped/topicsNotMatchingFilter").asInt()).isGreaterThanOrEqualTo(1);
 			assertThat(r.at("/skipped/groupsNotMatchingFilter").asInt()).isGreaterThanOrEqualTo(1);
@@ -211,7 +211,7 @@ class InventoryReportTest extends ReportTestBase {
 			assertThat(r.at("/examined/topics").asInt())
 				.isGreaterThanOrEqualTo(4 + r.at("/skipped/topicsNotMatchingFilter").asInt());
 
-			// eşik büyüyünce idle nedeni kalkar
+			// with a larger threshold the idle reason goes away
 			JsonNode longer = ok("report_cleanup_candidates", on(zk, "filter", p, "olderThanDays", 90));
 			assertThat(texts(longer.get("candidates"), "name")).doesNotContain(idle, p + "-idlegrp");
 		}

@@ -8,9 +8,9 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 
 /**
- * {@link ToolCall#newConsumer()} sarmalayıcısı: try-with-resources kapanışı kalan süreyle sınırlıdır (en fazla
- * 1 sn). Varsayılan {@code close()} yavaş bir broker'ın fetch-session kapanışını request.timeout (15 sn) kadar
- * bekleyebilir ve deadline'dan önce durup hazırlanan partial sonucu zaman aşımına sokar.
+ * Wrapper around {@link ToolCall#newConsumer()}: the try-with-resources close is bounded by the remaining time (at
+ * most 1 s). The default {@code close()} can wait up to request.timeout (15 s) for a slow broker's fetch-session
+ * close, pushing the partial result prepared before the deadline into a timeout.
  */
 public final class BoundedConsumer implements AutoCloseable {
 
@@ -27,7 +27,7 @@ public final class BoundedConsumer implements AutoCloseable {
 		this.consumer = consumer;
 	}
 
-	/** Seçilen cluster için yeni assign-only consumer açar. */
+	/** Opens a new assign-only consumer for the selected cluster. */
 	public static BoundedConsumer open(ToolCall call) {
 		return new BoundedConsumer(call, call.newConsumer());
 	}
@@ -41,7 +41,7 @@ public final class BoundedConsumer implements AutoCloseable {
 		consumer.close(CloseOptions.timeout(Duration.ofMillis(closeMillis(call.remainingMillis()))));
 	}
 
-	/** Kapanış için beklenecek süre: en fazla 1 sn, deadline'a 0,5 sn pay bırakarak. */
+	/** Time to wait for the close: at most 1 s, leaving a 0.5 s margin before the deadline. */
 	static long closeMillis(long remainingMillis) {
 		return Math.min(MAX_CLOSE_MS, Math.max(0, remainingMillis - CLOSE_MARGIN_MS));
 	}

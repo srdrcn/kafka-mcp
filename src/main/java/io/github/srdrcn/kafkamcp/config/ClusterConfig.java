@@ -15,10 +15,10 @@ public class ClusterConfig {
 
 	private String schemaRegistryUrl;
 
-	/** null ise global readOnly geçerlidir. */
+	/** If null, the global readOnly applies. */
 	private Boolean readOnly;
 
-	/** Kafka client property override'ları (AdminClient ve KafkaConsumer'a uygulanır). */
+	/** Kafka client property overrides (applied to the AdminClient and the KafkaConsumer). */
 	private Map<String, String> properties = new LinkedHashMap<>();
 
 	public String getName() {

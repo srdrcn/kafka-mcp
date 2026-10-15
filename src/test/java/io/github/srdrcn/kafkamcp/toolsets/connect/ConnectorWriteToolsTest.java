@@ -13,9 +13,8 @@ import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 import io.github.srdrcn.kafkamcp.support.TestConfigs;
 
 /**
- * Yazma araçları: create_or_update, pause/resume/stop, restart, offsets_reset (RUNNING'de reddedilir,
- * STOPPED'da çalışır), delete; ';' içeren adlar, görevsiz connector'ın resume'u; test-ro'da yazma
- * araçlarının reddi.
+ * Write tools: create_or_update, pause/resume/stop, restart, offsets_reset (refused when RUNNING, works when
+ * STOPPED), delete; names containing ';', resume of a connector without tasks; write tools refused on test-ro.
  */
 class ConnectorWriteToolsTest extends ConnectToolTestBase {
 
@@ -44,7 +43,7 @@ class ConnectorWriteToolsTest extends ConnectToolTestBase {
 		assertThat(restConfig.get("tasks.max").asText()).isEqualTo("2");
 		assertThat(restConfig.get("database.password").asText()).isEqualTo("pw-x");
 		assertThat(error("connectors_create_or_update", args("name", name, "config", Map.of())))
-			.contains("config boş olamaz");
+			.contains("config cannot be empty");
 
 		JsonNode paused = ok("connectors_pause", args("name", name));
 		assertThat(paused.get("httpStatus").asInt()).isEqualTo(202);
@@ -62,11 +61,11 @@ class ConnectorWriteToolsTest extends ConnectToolTestBase {
 		assertThat(restartAll.get("httpStatus").asInt()).isEqualTo(202);
 		assertThat(restartAll.at("/restarting/connector").asBoolean()).isTrue();
 		awaitTaskState(name, "RUNNING");
-		await("tasks.max=2 sonrası görev 1", () -> restStatus(name), s -> task(s, 1).isPresent());
+		await("task 1 after tasks.max=2", () -> restStatus(name), s -> task(s, 1).isPresent());
 		JsonNode taskRestart = ok("connectors_task_restart", args("name", name, "taskId", 1));
 		assertThat(taskRestart.get("httpStatus").asInt()).isEqualTo(204);
 		assertThat(taskRestart.at("/task/id").asInt()).isEqualTo(1);
-		await("görev 1 RUNNING", () -> restStatus(name),
+		await("task 1 RUNNING", () -> restStatus(name),
 				s -> task(s, 1).map(t -> "RUNNING".equals(t.path("state").asText())).orElse(false));
 
 		JsonNode stopped = ok("connectors_stop", args("name", name));
@@ -104,9 +103,9 @@ class ConnectorWriteToolsTest extends ConnectToolTestBase {
 
 		JsonNode stopped = ok("connectors_stop", args("name", name));
 		assertThat(stopped.get("httpStatus").asInt()).isBetween(202, 204);
-		// durdurma (config topic yazımı + görev kapanışı + rebalance) yüklü makinede aracın kısa beklemesini
-		// aşabilir: REST üzerinden sınırlı bekle
-		await(name + " STOPPED, görevsiz", () -> restStatus(name),
+		// stopping (config topic write + task shutdown + rebalance) can take longer than the tool's short wait on a
+		// busy machine: wait (bounded) via REST
+		await(name + " STOPPED, no tasks", () -> restStatus(name),
 				st -> "STOPPED".equals(state(st)) && st.path("tasks").isEmpty());
 
 		JsonNode reset = ok("connectors_offsets_reset", args("name", name));
@@ -127,7 +126,8 @@ class ConnectorWriteToolsTest extends ConnectToolTestBase {
 		String other = base + ";v2=1&x";
 		assertThat(create(base, sinkConfig(topic, "/tmp/" + token + "-a.txt")).get("result").asText())
 			.isEqualTo("created");
-		// kodlanmamış ';' Connect'te matrix parametresi sayılır: ad "base"e kırpılır ve base güncellenirdi
+		// an unencoded ';' is a matrix parameter for Connect: the name would be cut to "base" and base would be
+		// updated
 		JsonNode created = create(other, sinkConfig(topic, "/tmp/" + token + "-b.txt"));
 		assertThat(created.get("result").asText()).isEqualTo("created");
 		assertThat(texts(rest.get(TestConfigs.CLUSTER, "/connectors"))).contains(base, other);
@@ -151,13 +151,14 @@ class ConnectorWriteToolsTest extends ConnectToolTestBase {
 		config.put("target.cluster.alias", "dst");
 		config.put("source.cluster.bootstrap.servers", KafkaTestCluster.INTERNAL_BOOTSTRAP);
 		config.put("target.cluster.bootstrap.servers", KafkaTestCluster.INTERNAL_BOOTSTRAP);
-		// heartbeat kapalı → connector hiç görev üretmez (taskConfigs boş)
+		// heartbeats off → the connector creates no tasks (taskConfigs is empty)
 		config.put("emit.heartbeats.enabled", "false");
-		// tek broker'da RF=5 oluşturulamaz: paylaşılan cluster'da "heartbeats" topic'i açılmasın (hata sadece loglanır)
+		// RF=5 cannot be created on a single broker: keeps the "heartbeats" topic from being created on the shared
+		// cluster (the error is only logged)
 		config.put("heartbeats.topic.replication.factor", "5");
 		JsonNode created = create(name, config);
 		assertThat(created.get("result").asText()).isEqualTo("created");
-		JsonNode running = await(name + " görevsiz RUNNING", () -> restStatus(name),
+		JsonNode running = await(name + " RUNNING without tasks", () -> restStatus(name),
 				st -> "RUNNING".equals(state(st)) && st.path("tasks").isEmpty());
 		assertThat(running.get("tasks")).isEmpty();
 		assertNoFalseNote(created);
@@ -174,13 +175,14 @@ class ConnectorWriteToolsTest extends ConnectToolTestBase {
 		awaitConnectorState(name, "RUNNING");
 	}
 
-	/** Görevsiz RUNNING connector için araç "RUNNING değil"/"oturmadı" diye yanlış not düşmemeli. */
+	/** For a task-less RUNNING connector the tool must not add a false "not RUNNING"/"not settled" note. */
 	private static void assertNoFalseNote(JsonNode result) {
 		if ("RUNNING".equals(result.at("/status/state").asText()) && result.at("/status/tasks").isEmpty()
 				&& !result.get("settled").asBoolean()) {
-			// yüklü makinede 6 sn'lik bekleme görevsiz durumun kalıcılık penceresine yetmeyebilir; not doğru olmalı
+			// on a busy machine the 6 s wait may not cover the stability window of the task-less state; the note
+			// must be correct
 			assertThat(result.get("note").asText()).as(result.toString())
-				.doesNotContain("RUNNING değil")
+				.doesNotContain("not RUNNING")
 				.contains("connectors_status");
 		}
 	}

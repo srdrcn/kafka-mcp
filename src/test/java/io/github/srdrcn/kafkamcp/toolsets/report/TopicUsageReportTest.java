@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** report_empty_topics, report_idle_topics, report_topics_without_consumers (KRaft ve ZooKeeper). */
+/** report_empty_topics, report_idle_topics, report_topics_without_consumers (KRaft and ZooKeeper). */
 class TopicUsageReportTest extends ReportTestBase {
 
 	@ParameterizedTest(name = "zk={0}")
@@ -44,7 +44,7 @@ class TopicUsageReportTest extends ReportTestBase {
 		assertThat(find(r.get("topics"), "topic", purged).get("neverWritten").asBoolean()).isFalse();
 		assertThat(r.has("partial")).isFalse();
 
-		// iç/sistem topic'leri (ör. Connect offset topic'i) varsayılan olarak hariç; atlanan sayısı belirtilir
+		// internal/system topics (e.g. the Connect offsets topic) are excluded by default; the skipped count is reported
 		assertThat(r.at("/skipped/internalOrSystemTopics").asInt()).isPositive();
 		JsonNode all = ok("report_empty_topics", on(zk, "filter", p, "includeInternal", true, "limit", 1));
 		assertThat(all.get("total").asInt()).isEqualTo(3);

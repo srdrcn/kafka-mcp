@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 import io.github.srdrcn.kafkamcp.mcp.Toolset;
 
-/** consumers: consumer group listeleme, lag analizi ve offset yönetimi araçları. */
+/** consumers: consumer group listing, lag analysis and offset management tools. */
 @Component
 public class ConsumersToolset implements Toolset {
 
@@ -31,7 +31,7 @@ public class ConsumersToolset implements Toolset {
 
 	@Override
 	public String description() {
-		return "Consumer group, lag ve offset araçları";
+		return "Consumer group, lag and offset tools";
 	}
 
 	@Override

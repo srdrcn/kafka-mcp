@@ -20,12 +20,12 @@ import java.util.concurrent.TimeoutException;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 
 /**
- * Süre sınırlı ağ kontrolleri: host:port listesi ayrıştırma, DNS çözümleme ve TCP bağlantı denemesi; hatalar
- * Türkçe açıklanır (DNS, connection refused, zaman aşımı → firewall/NetworkPolicy/egress, ağ yolu yok).
+ * Time-bounded network checks: host:port list parsing, DNS resolution and TCP connection attempts; errors are
+ * explained (DNS, connection refused, timeout → firewall/NetworkPolicy/egress, no route).
  */
 public final class Net {
 
-	/** Hata tipleri. */
+	/** Error types. */
 	public static final String DNS = "dns";
 
 	public static final String DNS_TIMEOUT = "dnsTimeout";
@@ -52,11 +52,11 @@ public final class Net {
 
 	}
 
-	/** Ayrıştırılmış adres listesi ve geçersiz girdiler. */
+	/** Parsed address list and invalid entries. */
 	public record Parsed(List<Endpoint> endpoints, List<String> invalid) {
 	}
 
-	/** "h1:9092,SASL_SSL://h2:9093,[::1]:9092" → endpoint'ler (protokol öneki atlanır). */
+	/** "h1:9092,SASL_SSL://h2:9093,[::1]:9092" → endpoints (the protocol prefix is skipped). */
 	public static Parsed parseServers(String servers) {
 		List<Endpoint> out = new ArrayList<>();
 		List<String> invalid = new ArrayList<>();
@@ -104,7 +104,7 @@ public final class Net {
 		return new Parsed(out, invalid);
 	}
 
-	/** DNS sonucu: adresler (en fazla 5) ya da hata tipi ve Türkçe açıklaması. */
+	/** DNS result: addresses (at most 5) or the error type and its explanation. */
 	public record Resolution(String host, List<InetAddress> addresses, long durationMs, String errorType,
 			String error) {
 
@@ -119,7 +119,7 @@ public final class Net {
 
 	}
 
-	/** Host'u en fazla timeoutMs içinde çözer. */
+	/** Resolves the host within at most timeoutMs. */
 	public static Resolution resolve(String host, long timeoutMs) {
 		long start = System.nanoTime();
 		CompletableFuture<InetAddress[]> f = new CompletableFuture<>();
@@ -146,11 +146,11 @@ public final class Net {
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			return new Resolution(host, List.of(), elapsed(start), ERROR, "DNS sorgusu iptal edildi");
+			return new Resolution(host, List.of(), elapsed(start), ERROR, "DNS lookup was cancelled");
 		}
 	}
 
-	/** TCP bağlantı denemesi sonucu. */
+	/** Result of a TCP connection attempt. */
 	public record Probe(String target, String address, long durationMs, String errorType, String error) {
 
 		public boolean ok() {
@@ -164,7 +164,7 @@ public final class Net {
 
 	}
 
-	/** Endpoint'e (çözülmüş adresine) en fazla timeoutMs içinde TCP bağlantısı kurup kapatır. */
+	/** Opens a TCP connection to the endpoint (its resolved address) within at most timeoutMs and closes it. */
 	public static Probe connect(Endpoint e, InetAddress address, long timeoutMs) {
 		long start = System.nanoTime();
 		String target = e.address();
@@ -184,7 +184,7 @@ public final class Net {
 		}
 	}
 
-	/** Endpoint'i çözüp bağlanır (DNS + TCP; toplam en fazla dnsTimeout + connectTimeout). */
+	/** Resolves the endpoint and connects to it (DNS + TCP; at most dnsTimeout + connectTimeout in total). */
 	public static Probe resolveAndConnect(Endpoint e, long dnsTimeoutMs, long connectTimeoutMs) {
 		Resolution r = resolve(e.host(), dnsTimeoutMs);
 		if (!r.ok()) {
@@ -194,7 +194,7 @@ public final class Net {
 		return new Probe(p.target(), p.address(), r.durationMs() + p.durationMs(), p.errorType(), p.error());
 	}
 
-	/** İstisnanın hata tipi (dns, refused, timeout, noRoute, error). */
+	/** Error type of the exception (dns, refused, timeout, noRoute, error). */
 	public static String errorType(Throwable t) {
 		for (Throwable c = t; c != null; c = c.getCause()) {
 			if (c instanceof UnknownHostException) {
@@ -217,19 +217,19 @@ public final class Net {
 		return ERROR;
 	}
 
-	/** Hata tipinin Türkçe açıklaması (target: host ya da host:port). */
+	/** Explanation of the error type (target: host or host:port). */
 	public static String explain(String type, String target, long timeoutMs, Throwable cause) {
 		return switch (type) {
-			case DNS -> "DNS çözümlenemedi: " + target + " (ad yanlış ya da bu pod'un DNS'i bu adı bilmiyor; "
-					+ "OpenShift'te Service/Route adını ve namespace'i kontrol edin)";
-			case DNS_TIMEOUT -> "DNS sorgusu " + timeoutMs + " ms içinde yanıtlanmadı: " + target
-					+ " (DNS sunucusu erişilemiyor ya da yavaş)";
-			case REFUSED -> "Bağlantı reddedildi: " + target
-					+ " (port kapalı ya da bu adreste dinleyen yok; listeners/port numarasını kontrol edin)";
-			case TIMEOUT -> "Bağlantı zaman aşımı: " + target + " (" + timeoutMs
-					+ " ms; paketler düşürülüyor olabilir: firewall, NetworkPolicy ya da egress kuralı)";
-			case NO_ROUTE -> "Ağ yolu yok: " + target + " (routing/firewall)";
-			default -> "Bağlantı hatası: " + target
+			case DNS -> "DNS resolution failed: " + target + " (wrong name, or this pod's DNS does not know it; "
+					+ "on OpenShift check the Service/Route name and the namespace)";
+			case DNS_TIMEOUT -> "DNS lookup got no answer within " + timeoutMs + " ms: " + target
+					+ " (DNS server unreachable or slow)";
+			case REFUSED -> "Connection refused: " + target
+					+ " (port closed or nothing listening at this address; check listeners and the port number)";
+			case TIMEOUT -> "Connection timed out: " + target + " (" + timeoutMs
+					+ " ms; packets may be dropped by a firewall, NetworkPolicy or egress rule)";
+			case NO_ROUTE -> "No route to host: " + target + " (routing/firewall)";
+			default -> "Connection error: " + target
 					+ (cause == null ? "" : " (" + cause.getClass().getSimpleName() + ": " + cause.getMessage() + ")");
 		};
 	}

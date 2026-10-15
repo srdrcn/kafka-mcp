@@ -54,13 +54,13 @@ public class ClusterTools {
 	public List<ToolSpec> tools() {
 		return List.of(
 				ToolSpec.read("clusters_list",
-						"Config'teki cluster'ları, erişilebilirliklerini ve modlarını (KRaft/ZooKeeper) listeler")
+						"List configured clusters with reachability and mode (KRaft/ZooKeeper)")
 					.clusterOptional()
 					.listParams()
-					.param("check", P.bool("Bağlantıyı da test et (varsayılan true)"))
+					.param("check", P.bool("Also test the connection (default true)"))
 					.handler(this::clustersList),
 				ToolSpec.read("clusters_get",
-						"Cluster özeti: id, mod (KRaft/ZooKeeper, geçiş), aktif controller/quorum, en düşük Kafka sürümü (IBP/metadata.version), KRaft feature'ları ya da ZooKeeper bağlantısı, authorizer, broker/topic/partition sayıları, URP ve offline partition'lar")
+						"Cluster summary: id, mode, controller/quorum, min Kafka version, features or ZooKeeper connection, authorizer, broker/topic/partition counts, URP/offline partitions")
 					.handler(this::clustersGet));
 	}
 
@@ -93,7 +93,7 @@ public class ClusterTools {
 					catch (java.util.concurrent.TimeoutException e) {
 						f.cancel(true);
 						row.put("status", "timeout");
-						row.put("error", "Bağlantı testi zaman sınırında bitmedi");
+						row.put("error", "Connection test did not finish within the time limit");
 					}
 				}
 				rows.add(row);
@@ -107,7 +107,7 @@ public class ClusterTools {
 		KafkaFuture<Map<TopicPartition, PartitionReassignment>> pendingReassignments = Topics
 			.submitReassignments(call);
 		ClusterMeta.Info info = ClusterMeta.describe(call, true);
-		// varsayılan broker'ın config'i: authorizer, ZooKeeper'da IBP ve zookeeper.connect
+		// config of the default broker: authorizer, plus IBP and zookeeper.connect on ZooKeeper
 		ConfigResource brokerResource = info.brokers().isEmpty() ? null : Configs.broker(info.defaultBrokerId());
 		KafkaFuture<Config> pendingBrokerConfig = brokerResource == null ? null
 				: Configs.submitOne(call, brokerResource);
@@ -143,11 +143,11 @@ public class ClusterTools {
 			}
 		}
 		if (!mode.isKnown() && brokerConfig != null) {
-			// quorum ve feature sorguları yanıtsız: broker'ın kendi config'i (process.roles / zookeeper.connect)
+			// no answer to the quorum and feature queries: use the broker's config (process.roles / zookeeper.connect)
 			mode = BrokerTools.brokerMode(brokerConfig);
 		}
-		// ZooKeeper→KRaft geçişi: ZooKeeper broker'larının describeCluster controller'ı güvenilmez, mod da
-		// yanıtlayan broker'a göre değişebilir
+		// ZooKeeper→KRaft migration: the describeCluster controller of ZooKeeper brokers is unreliable, and the
+		// mode may depend on the responding broker
 		boolean migration = info.migration() || ClusterMeta.migrationEnabled(brokerConfig);
 		Integer controllerId = migration && !mode.isKraft() ? null : info.controllerId();
 		Map<String, Object> out = Results.map("cluster", call.cluster(), "clusterId", info.clusterId(), "mode",
@@ -170,7 +170,7 @@ public class ClusterTools {
 				out.put("zookeeper", zk);
 			}
 			String authorizer = value(brokerConfig, "authorizer.class.name");
-			out.put("authorizer", authorizer == null || authorizer.isBlank() ? "yok (ACL kapalı)" : authorizer);
+			out.put("authorizer", authorizer == null || authorizer.isBlank() ? "none (ACLs disabled)" : authorizer);
 		}
 		else if (brokerConfigError != null) {
 			out.put("brokerConfigError", brokerConfigError);
@@ -200,39 +200,39 @@ public class ClusterTools {
 		return out;
 	}
 
-	/** ZooKeeper→KRaft geçişinde controller raporlanmadığında not. */
-	static final String MIGRATION_CONTROLLER_NOTE = "ZooKeeper→KRaft geçişi: aktif controller KRaft quorum lideri olabilir; ZooKeeper broker'ları describeCluster'da rastgele broker döndürür";
+	/** Note for when the controller is not reported during a ZooKeeper→KRaft migration. */
+	static final String MIGRATION_CONTROLLER_NOTE = "ZooKeeper→KRaft migration: the active controller may be the KRaft quorum leader; ZooKeeper brokers return a random broker in describeCluster";
 
-	/** ZooKeeper→KRaft geçişinde mod hakkında not. */
-	static final String MIGRATION_MODE_NOTE = "ZooKeeper→KRaft geçişi açık (zookeeper.metadata.migration.enable=true): mod ve controller yanıtlayan broker'a göre değişebilir; broker bazında modlar için brokers_config_drift";
+	/** Note about the mode during a ZooKeeper→KRaft migration. */
+	static final String MIGRATION_MODE_NOTE = "ZooKeeper→KRaft migration is enabled (zookeeper.metadata.migration.enable=true): mode and controller may depend on the responding broker; see brokers_config_drift for per-broker modes";
 
 	/**
-	 * Controller hakkında not: KRaft'ta quorum sorgusu başarısızsa controller bilinmez (describeCluster'ın
-	 * döndürdüğü rastgele broker raporlanmaz); ZooKeeper→KRaft geçişinde de describeCluster controller'ı
-	 * güvenilmez; quorum lideri broker değilse ayrı controller düğümüdür.
+	 * Note about the controller: on KRaft the controller is unknown if the quorum query fails (the random broker
+	 * returned by describeCluster is not reported); during a ZooKeeper→KRaft migration the describeCluster
+	 * controller is unreliable too; a quorum leader that is not a broker is a separate controller node.
 	 */
 	static String controllerNote(ClusterMeta.Info info) {
 		if (info.controllerId() == null && info.migration()) {
 			return MIGRATION_CONTROLLER_NOTE;
 		}
 		if (info.controllerId() == null) {
-			return info.clusterMode().isZooKeeper() ? "Aktif controller yok (seçim sürüyor olabilir)"
-					: "Aktif controller belirlenemedi (metadata quorum sorgusu başarısız)";
+			return info.clusterMode().isZooKeeper() ? "No active controller (an election may be in progress)"
+					: "Active controller could not be determined (metadata quorum query failed)";
 		}
 		if (info.clusterMode().isKraft() && !info.controllerIsBroker()) {
-			return "Aktif controller ayrı bir KRaft controller düğümü (broker değil)";
+			return "Active controller is a separate KRaft controller node (not a broker)";
 		}
 		return null;
 	}
 
-	/** Sürüm alanının ne olduğunu açıklayan not (protokol seviyesi yazılım sürümünün gerisinde kalabilir). */
-	static final String VERSION_NOTE = "Protokol seviyesi: broker yazılımı daha yeni olabilir (IBP/metadata.version yükseltilmemiş ya da sabitlenmiş olabilir)";
+	/** Note explaining the version field (the protocol level can lag behind the software version). */
+	static final String VERSION_NOTE = "Protocol level: the broker software may be newer (IBP/metadata.version may not be upgraded yet, or may be pinned)";
 
 	/**
-	 * En düşük Kafka sürümü: KRaft'ta finalize edilmiş metadata.version, ZooKeeper'da (ya da mod bilinmiyorsa)
-	 * inter.broker.protocol.version. İkisi de protokol seviyesidir; broker yazılımı daha yeni olabilir
-	 * (metadata.version yükseltme sonrası "kafka-features upgrade" ile artar; IBP elle sabitlenebilir). IBP
-	 * varsayılan değerindeyse broker yazılımının sürümüdür; açıkça verilmişse {@code versionPinned}.
+	 * Minimum Kafka version: the finalized metadata.version on KRaft, inter.broker.protocol.version on ZooKeeper
+	 * (or when the mode is unknown). Both are protocol levels; the broker software may be newer (metadata.version
+	 * goes up with "kafka-features upgrade" after an upgrade; the IBP can be pinned by hand). An IBP at its default
+	 * value is the broker software version; an explicitly set one is reported as {@code versionPinned}.
 	 */
 	private static Map<String, Object> version(ClusterMeta.Info info, ClusterMeta.Mode mode, Config brokerConfig,
 			String configError) {
@@ -259,7 +259,7 @@ public class ClusterTools {
 		return Map.of();
 	}
 
-	/** ZooKeeper cluster'ı için bağlantı ve ZooKeeper→KRaft geçiş bilgisi; KRaft'ta null. */
+	/** Connection and ZooKeeper→KRaft migration info of a ZooKeeper cluster; null on KRaft. */
 	static Map<String, Object> zookeeper(Config brokerConfig, ClusterMeta.Mode mode) {
 		if (mode.isKraft()) {
 			return null;
@@ -272,13 +272,13 @@ public class ClusterTools {
 		return Results.map("connect", connect, "migrationEnabled", migration ? true : null);
 	}
 
-	/** Config değeri (hassas ise null). */
+	/** Config value (null if sensitive). */
 	private static String value(Config c, String key) {
 		ConfigEntry e = c.get(key);
 		return e == null || e.isSensitive() ? null : e.value();
 	}
 
-	/** URP olan topic'lerde ISR, min.insync.replicas'ın altında olan partition sayısı (tek describeConfigs). */
+	/** Number of partitions in URP topics whose ISR is below min.insync.replicas (one describeConfigs). */
 	private static Map<String, Object> underMinIsr(ToolCall call, Map<String, TopicDescription> topics,
 			Set<String> urpTopics) {
 		if (urpTopics.isEmpty()) {
@@ -321,16 +321,16 @@ public class ClusterTools {
 				lagging.isEmpty() ? null : lagging);
 	}
 
-	/** Quorum replika gecikmesi; lider replikanın log end offset'ini bilmiyorsa (-1) null. */
+	/** Quorum replica lag; null if the leader does not know the replica's log end offset (-1). */
 	static Long quorumLag(long highWatermark, long logEndOffset) {
 		return logEndOffset < 0 ? null : Math.max(0, highWatermark - logEndOffset);
 	}
 
 	/**
-	 * Bağlantı testi: describeCluster + describeFeatures (ucuz; mod için). controllerId sadece ZooKeeper'da
-	 * verilir: KRaft broker'ları describeCluster'da rastgele bir broker'ı controller diye döndürür (aktif
-	 * controller için clusters_get). ZooKeeper'da controller broker'ının geçiş bayrağına da bakılır (tek
-	 * describeConfigs): ZooKeeper→KRaft geçişinde controller raporlanmaz.
+	 * Connection test: describeCluster + describeFeatures (cheap; for the mode). controllerId is only reported on
+	 * ZooKeeper: KRaft brokers return a random broker as the controller in describeCluster (use clusters_get for
+	 * the active controller). On ZooKeeper the controller broker's migration flag is checked too (one
+	 * describeConfigs): during a ZooKeeper→KRaft migration the controller is not reported.
 	 */
 	private Map<String, Object> probe(ClusterConfig c, ToolCall call) {
 		try {
