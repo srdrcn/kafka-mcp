@@ -44,7 +44,10 @@ Built with Java 21, Spring Boot 3.5, the official MCP Java SDK 2.0.1 and kafka-c
 
 ## Quick start
 
-You need JDK 21 to build and run the server. Docker or Podman is needed only for the container image and the tests.
+Run it either with Java (JDK 21) or as a container with Docker/Podman (no JDK needed on the host). Docker or Podman
+is also needed for the tests.
+
+### With Java
 
 ```bash
 make build                                       # ./mvnw -B package -DskipTests -> target/kafka-mcp.jar
@@ -61,6 +64,60 @@ itself):
 java -jar target/kafka-mcp.jar --config kafka-mcp.local.yaml --transport stdio
 # or: make run-stdio CONFIG=kafka-mcp.local.yaml
 ```
+
+### With Docker
+
+The image is built in a multi-stage build, so the host needs no JDK or Maven. The default base images come from
+`registry.access.redhat.com`; to use a mirror, pass `BUILD_ARGS` (see [Container image](#container-image)).
+
+```bash
+make image                                       # or: docker build -t kafka-mcp:latest .
+cp kafka-mcp.example.yaml kafka-mcp.local.yaml   # git-ignored; fill in the <...> values
+```
+
+Keep the container paths from the example config (`krb5Conf: /etc/kafka-mcp/krb5/krb5.conf`,
+`keytab: /etc/kafka-mcp/keytabs/svc.keytab`) and mount the files there:
+
+| File | Path in the container |
+|---|---|
+| config | `/etc/kafka-mcp/config/kafka-mcp.yaml` (the image's default `--config`) |
+| `krb5.conf` | `/etc/kafka-mcp/krb5/krb5.conf` (the image's `JAVA_TOOL_OPTIONS` points the JVM there) |
+| keytab | `/etc/kafka-mcp/keytabs/svc.keytab` |
+
+Streamable HTTP on `http://localhost:8080/mcp`:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v "$PWD/kafka-mcp.local.yaml:/etc/kafka-mcp/config/kafka-mcp.yaml:ro" \
+  -v "$PWD/krb5.conf:/etc/kafka-mcp/krb5/krb5.conf:ro" \
+  -v "$PWD/svc.keytab:/etc/kafka-mcp/keytabs/svc.keytab:ro" \
+  kafka-mcp:latest
+
+curl -s localhost:8080/actuator/health/readiness   # {"status":"UP"}
+```
+
+stdio (`-i` keeps stdin open; arguments after the image name replace the default command, so pass `--config` too):
+
+```bash
+docker run --rm -i \
+  -v "$PWD/kafka-mcp.local.yaml:/etc/kafka-mcp/config/kafka-mcp.yaml:ro" \
+  -v "$PWD/krb5.conf:/etc/kafka-mcp/krb5/krb5.conf:ro" \
+  -v "$PWD/svc.keytab:/etc/kafka-mcp/keytabs/svc.keytab:ro" \
+  kafka-mcp:latest --config /etc/kafka-mcp/config/kafka-mcp.yaml --transport stdio
+```
+
+Notes:
+
+- The process runs as UID 185 (group 0) and must be able to read the mounted files. A keytab with mode `600` owned
+  by your user is not readable by UID 185; run the container as your UID with `--user "$(id -u):0"` so the keytab
+  can stay private. `kerberos_self_check` shows whether the keytab is readable.
+- Without Kerberos (no `kerberos` block, e.g. a local test cluster), mount only the config.
+- Inside the container `localhost` is the container itself. To reach a broker on the host, use
+  `--network host` (Linux; then `-p` is not needed) or the host's address, and make sure the brokers'
+  advertised listeners are reachable from the container.
+- With Podman, use the same commands with `podman`; on SELinux hosts add `:Z` to the volume options
+  (e.g. `:ro,Z`).
+- To mimic OpenShift's read-only root filesystem, add `--read-only --tmpfs /tmp`.
 
 ### Command line
 
@@ -730,6 +787,28 @@ because a config with `port` set would otherwise start HTTP:
 ```
 
 For a local run, set `kerberos.krb5Conf` (or add `-Djava.security.krb5.conf=/path/to/krb5.conf` before `-jar`).
+
+The same with the container image (absolute host paths; see [With Docker](#with-docker) for the mounts and file
+permissions):
+
+```json
+{
+  "mcpServers": {
+    "kafka": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/path/to/kafka-mcp.local.yaml:/etc/kafka-mcp/config/kafka-mcp.yaml:ro",
+        "-v", "/path/to/krb5.conf:/etc/kafka-mcp/krb5/krb5.conf:ro",
+        "-v", "/path/to/svc.keytab:/etc/kafka-mcp/keytabs/svc.keytab:ro",
+        "kafka-mcp:latest",
+        "--config", "/etc/kafka-mcp/config/kafka-mcp.yaml", "--transport", "stdio"
+      ]
+    }
+  }
+}
+```
 
 ## Troubleshooting
 
