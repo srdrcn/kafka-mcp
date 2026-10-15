@@ -19,7 +19,7 @@ class SrErrorMappingTest {
 		ToolException invalid = SchemaTools.invalidSchemaError(sr(422, 42201,
 				"Invalid schema {\"type\":\"record\"} with refs [] of type AVRO, details: No type", "x"));
 		assertThat(invalid).isNotInstanceOf(SchemaRegistryException.class);
-		assertThat(invalid.getMessage()).startsWith("Schema rejected (422/42201): ")
+		assertThat(invalid.getMessage()).startsWith("Schema is invalid (422/42201): ")
 			.contains("Invalid schema: No type")
 			.doesNotContain("with refs");
 
@@ -29,7 +29,7 @@ class SrErrorMappingTest {
 					"Schema Registry error 422 (POST /subjects/x/versions): Operation not permitted (READONLY/IMPORT)");
 			ToolException mapped = SchemaTools.invalidSchemaError(e);
 			assertThat(mapped).as("code %d", code).isSameAs(e);
-			assertThat(mapped.getMessage()).doesNotContain("Schema rejected");
+			assertThat(mapped.getMessage()).doesNotContain("Schema is invalid");
 		}
 
 		SchemaRegistryException notFound = sr(404, 40401, "Subject 'x' not found.", "Subject not found");

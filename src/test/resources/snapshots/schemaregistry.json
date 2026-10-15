@@ -238,7 +238,7 @@
       },
       "subject" : {
         "type" : "string",
-        "description" : "Subject name (if omitted, only the global level)"
+        "description" : "Subject name (omit to get only the global level)"
       }
     },
     "required" : [ "cluster" ]

@@ -160,7 +160,7 @@ public class SchemaTools {
 				return out;
 			}
 			catch (RuntimeException e) {
-				out.put("avroParseError", "Could not parse the Avro schema, returned a line diff: " + e.getMessage());
+				out.put("avroParseError", "Could not parse the Avro schema; showing a line diff instead: " + e.getMessage());
 			}
 		}
 		LineDiff.Result r = LineDiff.diff(SchemaTexts.pretty(a.schemaType(), a.schema()),
@@ -267,7 +267,7 @@ public class SchemaTools {
 	 */
 	static ToolException invalidSchemaError(SchemaRegistryException e) {
 		if (e.status() == 422 && e.errorCode() == INVALID_SCHEMA_CODE) {
-			return new ToolException("Schema rejected (422/" + INVALID_SCHEMA_CODE + "): " + cleanSrMessage(e.srMessage()),
+			return new ToolException("Schema is invalid (422/" + INVALID_SCHEMA_CODE + "): " + cleanSrMessage(e.srMessage()),
 					e);
 		}
 		return e;

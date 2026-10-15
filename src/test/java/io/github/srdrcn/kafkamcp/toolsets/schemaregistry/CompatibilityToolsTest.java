@@ -110,7 +110,7 @@ class CompatibilityToolsTest extends SchemaRegistryIntegrationTest {
 		assertThat(fresh.get("note").asText()).contains("no active versions");
 
 		assertThat(error("schemas_compatibility_check", args("subject", s, "schema", "{not json")))
-			.contains("Schema rejected").contains("Invalid schema");
+			.contains("Schema is invalid").contains("Invalid schema");
 		assertThat(error("schemas_compatibility_check", args("subject", s, "schema", SrRest.V2, "schemaType", "XML")))
 			.contains("schemaType");
 	}

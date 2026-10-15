@@ -66,8 +66,8 @@ public final class AvroSchemaDiff {
 				return "FULL compatible: the new schema can read old data and the old schema can read new data";
 			}
 			if (backward) {
-				return "BACKWARD compatible only: the new schema reads old data; consumers on the old schema may not "
-						+ "read new data";
+				return "BACKWARD compatible only: the new schema reads old data; consumers on the old schema may be "
+						+ "unable to read new data";
 			}
 			if (forward) {
 				return "FORWARD compatible only: the old schema reads new data; consumers on the new schema cannot "

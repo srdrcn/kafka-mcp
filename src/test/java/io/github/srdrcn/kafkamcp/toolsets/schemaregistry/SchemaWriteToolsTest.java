@@ -70,7 +70,7 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 			.doesNotContain("oldSchema:");
 
 		String invalid = error("schemas_register", args("subject", s, "schema", "{not json"));
-		assertThat(invalid).contains("422").contains("Schema rejected (422/42201): Invalid schema").doesNotContain("with refs");
+		assertThat(invalid).contains("422").contains("Schema is invalid (422/42201): Invalid schema").doesNotContain("with refs");
 
 		assertThat(SrRest.versions(s, false)).containsExactly(1);
 	}
@@ -83,7 +83,7 @@ class SchemaWriteToolsTest extends SchemaRegistryIntegrationTest {
 		SrRest.ok("PUT", modePath, Map.of("mode", "READONLY"));
 		try {
 			String err = error("schemas_register", args("subject", s, "schema", SrRest.V2));
-			assertThat(err).contains("422").contains("42205").contains("READONLY").doesNotContain("Schema rejected");
+			assertThat(err).contains("422").contains("42205").contains("READONLY").doesNotContain("Schema is invalid");
 			assertThat(SrRest.versions(s, false)).containsExactly(1);
 		}
 		finally {

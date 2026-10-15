@@ -31,7 +31,7 @@ public class CompatibilityTools {
 		return List.of(
 				ToolSpec.read("schemas_compatibility_get", "Get the compatibility level: subject level, global level and which one applies")
 					.schemaRegistry()
-					.param("subject", P.string("Subject name (if omitted, only the global level)"))
+					.param("subject", P.string("Subject name (omit to get only the global level)"))
 					.handler(this::get),
 				ToolSpec.read("schemas_compatibility_check", "Test whether a schema is compatible with a subject version without registering it; returns the detailed SR messages")
 					.schemaRegistry()
@@ -84,7 +84,7 @@ public class CompatibilityTools {
 				.filter(m -> m.startsWith("Invalid schema"))
 				.findFirst()
 				.ifPresent(m -> {
-					throw new ToolException("Schema rejected: " + SchemaTools.cleanSrMessage(m));
+					throw new ToolException("Schema is invalid: " + SchemaTools.cleanSrMessage(m));
 				});
 		}
 		String level;
