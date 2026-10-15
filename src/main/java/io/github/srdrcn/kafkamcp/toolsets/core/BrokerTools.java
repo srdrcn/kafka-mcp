@@ -39,10 +39,21 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 @Component
 public class BrokerTools {
 
-	/** Broker'a özgü olduğu için karşılaştırmaya alınmayan anahtarlar. */
+	/**
+	 * Broker'a özgü olduğu için karşılaştırmaya alınmayan anahtarlar. process.roles KRaft'ta düğüm rolüdür
+	 * (broker / broker,controller); farklı olması drift değildir.
+	 */
 	static final List<String> PER_BROKER_KEYS = List.of("broker.id", "node.id", "broker.rack", "listeners",
 			"advertised.listeners", "advertised.host.name", "advertised.port", "host.name", "port", "log.dir",
-			"log.dirs", "metadata.log.dir");
+			"log.dirs", "metadata.log.dir", "process.roles");
+
+	/**
+	 * Sadece bir moda anlam taşıyan anahtarlar (önek ya da tam ad). Aynı cluster'da ZooKeeper ve KRaft
+	 * broker'ları birlikteyse (ZooKeeper→KRaft geçişi) bunların farklı olması beklenir; karşılaştırılmaz.
+	 */
+	static final List<String> MODE_SPECIFIC_KEYS = List.of("zookeeper.", "controller.quorum.",
+			"controller.listener.names", "inter.broker.protocol.version", "log.message.format.version",
+			"broker.id.generation.enable", "reserved.broker.max.id", "process.roles");
 
 	public List<ToolSpec> tools() {
 		return List.of(
@@ -55,7 +66,7 @@ public class BrokerTools {
 					.listParams()
 					.handler(this::brokersConfigGet),
 				ToolSpec.read("brokers_config_drift",
-						"Broker'lar arasında değeri farklı olan config'ler (broker'a özgü anahtarlar hariç)")
+						"Broker'lar arasında değeri farklı olan config'ler (broker'a özgü anahtarlar; ZooKeeper ve KRaft broker'ları karışıksa moda özgü anahtarlar hariç)")
 					.listParams()
 					.handler(this::brokersConfigDrift),
 				ToolSpec.read("brokers_logdirs",
@@ -95,7 +106,8 @@ public class BrokerTools {
 			row.put("replicas", c[1]);
 			rows.add(row);
 		}
-		Map<String, Object> out = Results.map("controllerId", info.controllerId(), "mode", info.mode());
+		Map<String, Object> out = Results.map("controllerId", info.controllerId(), "mode",
+				info.clusterMode().label(), "controllerNote", ClusterTools.controllerNote(info));
 		out.putAll(Results.page("brokers", rows, call.limit()));
 		return out;
 	}
@@ -121,17 +133,67 @@ public class BrokerTools {
 		List<ConfigResource> resources = info.brokerIds().stream().map(Configs::broker).toList();
 		Futures.Each<ConfigResource, Config> configs = Configs.describe(call, resources).requireAny();
 		Map<Integer, Config> byBroker = byBrokerId(configs.values());
-		List<Map<String, Object>> diffs = differences(byBroker,
-				name -> !PER_BROKER_KEYS.contains(name) && call.matches(name));
+		Map<String, List<Integer>> modes = brokerModes(byBroker);
+		boolean mixedModes = modes.size() > 1;
+		Drift drift = drift(byBroker, name -> !PER_BROKER_KEYS.contains(name) && call.matches(name)
+				&& !(mixedModes && modeSpecific(name)));
 		Map<String, Object> out = Results.map("brokersCompared", List.copyOf(byBroker.keySet()), "excludedKeys",
 				PER_BROKER_KEYS);
+		if (mixedModes) {
+			out.put("brokerModes", modes);
+			out.put("modeNote", "Broker'lar farklı modda (ZooKeeper→KRaft geçişi?): moda özgü anahtarlar ("
+					+ String.join(", ", MODE_SPECIFIC_KEYS) + ") karşılaştırılmadı");
+		}
+		if (!drift.presenceOnly().isEmpty()) {
+			out.put("keysOnlyOnSomeBrokers", drift.presenceOnly().size());
+			out.put("keysOnlyOnSomeBrokersNote",
+					"Bazı broker'larda hiç olmayan, diğerlerinde varsayılan değerli anahtarlar (farklı Kafka sürümü/modu) fark sayılmadı");
+		}
 		if (!configs.errors().isEmpty()) {
 			out.put("failedBrokers", byBrokerId(configs.errors()));
 		}
 		if (byBroker.size() < 2) {
 			out.put("note", "Karşılaştırma için en az 2 broker gerekli");
 		}
-		out.putAll(Results.page("differences", diffs, call.limit()));
+		out.putAll(Results.page("differences", drift.differences(), call.limit()));
+		return out;
+	}
+
+	/** Anahtar moda özgü mü ({@link #MODE_SPECIFIC_KEYS})? */
+	static boolean modeSpecific(String name) {
+		for (String k : MODE_SPECIFIC_KEYS) {
+			if (k.endsWith(".") ? name.startsWith(k) : name.equals(k)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Broker'ın kendi config'ine göre modu: process.roles doluysa KRaft, zookeeper.connect doluysa ZooKeeper,
+	 * ikisi de yoksa bilinmiyor.
+	 */
+	static ClusterMeta.Mode brokerMode(Config c) {
+		ConfigEntry roles = c.get("process.roles");
+		if (roles != null && roles.value() != null && !roles.value().isBlank()) {
+			return ClusterMeta.Mode.KRAFT;
+		}
+		ConfigEntry zk = c.get("zookeeper.connect");
+		if (zk != null && zk.value() != null && !zk.value().isBlank()) {
+			return ClusterMeta.Mode.ZOOKEEPER;
+		}
+		return ClusterMeta.Mode.UNKNOWN;
+	}
+
+	/** Mod → broker id'leri (modu belirlenemeyenler hariç). */
+	static Map<String, List<Integer>> brokerModes(Map<Integer, Config> byBroker) {
+		Map<String, List<Integer>> out = new TreeMap<>();
+		byBroker.forEach((id, c) -> {
+			ClusterMeta.Mode m = brokerMode(c);
+			if (m.isKnown()) {
+				out.computeIfAbsent(m.label(), k -> new ArrayList<>()).add(id);
+			}
+		});
 		return out;
 	}
 
@@ -142,11 +204,24 @@ public class BrokerTools {
 		return out;
 	}
 
+	/** {@link #drift} sonucu: farklar ve sadece varlık farkı olan (sürüm/mod kaynaklı) anahtarlar. */
+	record Drift(List<Map<String, Object>> differences, List<String> presenceOnly) {
+	}
+
 	/**
 	 * Broker'lar arasında değeri farklı olan anahtarlar; her biri için (değer, kaynak) grupları ve o grubu
 	 * paylaşan broker'lar (kalabalık grup önce). Anahtarı hiç döndürmeyen broker "(yok)" değeriyle sayılır.
 	 */
 	static List<Map<String, Object>> differences(Map<Integer, Config> byBroker, Predicate<String> include) {
+		return drift(byBroker, include).differences();
+	}
+
+	/**
+	 * {@link #differences} gibi; ancak anahtarı döndüren tüm broker'larda varsayılan değerdeyse ve sadece bazı
+	 * broker'larda hiç yoksa (farklı Kafka sürümü ya da mod: ör. ZooKeeper 3.x'te olup KRaft 4.x'te olmayan
+	 * anahtarlar) fark sayılmaz, {@link Drift#presenceOnly()} içinde döner.
+	 */
+	static Drift drift(Map<Integer, Config> byBroker, Predicate<String> include) {
 		Map<String, Map<Integer, ConfigEntry>> byKey = new TreeMap<>();
 		byBroker.forEach((broker, config) -> {
 			for (ConfigEntry c : config.entries()) {
@@ -156,6 +231,7 @@ public class BrokerTools {
 			}
 		});
 		List<Map<String, Object>> diffs = new ArrayList<>();
+		List<String> presenceOnly = new ArrayList<>();
 		for (Map.Entry<String, Map<Integer, ConfigEntry>> e : byKey.entrySet()) {
 			Map<List<String>, List<Integer>> groups = new LinkedHashMap<>();
 			for (Integer broker : byBroker.keySet()) {
@@ -166,13 +242,23 @@ public class BrokerTools {
 			if (groups.keySet().stream().map(k -> k.get(0)).distinct().count() < 2) {
 				continue;
 			}
+			boolean missingSomewhere = e.getValue().size() < byBroker.size();
+			boolean allDefault = e.getValue().values().stream().allMatch(Configs::isDefault);
+			if (missingSomewhere && allDefault && distinctPresentValues(e.getValue()) < 2) {
+				presenceOnly.add(e.getKey());
+				continue;
+			}
 			List<Map<String, Object>> values = new ArrayList<>();
 			groups.forEach((k, brokers) -> values.add(Results.map("value", k.get(0) == null ? "(yok)" : k.get(0),
 					"source", k.get(1), "brokers", brokers)));
 			values.sort(Comparator.comparingInt((Map<String, Object> m) -> -((List<?>) m.get("brokers")).size()));
 			diffs.add(Results.map("name", e.getKey(), "values", values));
 		}
-		return diffs;
+		return new Drift(diffs, presenceOnly);
+	}
+
+	private static long distinctPresentValues(Map<Integer, ConfigEntry> entries) {
+		return entries.values().stream().map(Configs::value).distinct().count();
 	}
 
 	Object brokersLogdirs(ToolCall call) {
@@ -207,7 +293,13 @@ public class BrokerTools {
 						desc.error() == null ? null : KafkaErrors.explain(desc.error()), "partitions",
 						desc.replicaInfos().size(), "sizeBytes", size, "size", Format.bytes(size), "futureReplicas",
 						future > 0 ? future : null);
-				if (desc.totalBytes().isPresent() && desc.usableBytes().isPresent()) {
+				if (desc.totalBytes().isEmpty() || desc.usableBytes().isEmpty()) {
+					if (desc.error() == null) {
+						// DescribeLogDirs v4 (Kafka 3.3+) öncesi broker'lar disk boyutunu döndürmez
+						row.put("disk", KafkaErrors.UNSUPPORTED + ": disk boyutu Kafka 3.3+ broker'larda var");
+					}
+				}
+				else {
 					long total = desc.totalBytes().getAsLong();
 					long usable = desc.usableBytes().getAsLong();
 					row.put("totalBytes", total);

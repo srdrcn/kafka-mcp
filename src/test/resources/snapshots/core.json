@@ -1,6 +1,6 @@
 [ {
   "name" : "clusters_list",
-  "description" : "Config'teki cluster'ları ve erişilebilirliklerini listeler",
+  "description" : "Config'teki cluster'ları, erişilebilirliklerini ve modlarını (KRaft/ZooKeeper) listeler",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -33,7 +33,7 @@
   }
 }, {
   "name" : "clusters_get",
-  "description" : "Cluster özeti: id, KRaft/ZooKeeper, controller/quorum, Kafka sürümü, broker/topic/partition sayıları, URP ve offline partition'lar",
+  "description" : "Cluster özeti: id, mod (KRaft/ZooKeeper), aktif controller/quorum, Kafka sürümü, KRaft feature'ları ya da ZooKeeper bağlantısı, authorizer, broker/topic/partition sayıları, URP ve offline partition'lar",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -117,7 +117,7 @@
   }
 }, {
   "name" : "brokers_config_drift",
-  "description" : "Broker'lar arasında değeri farklı olan config'ler (broker'a özgü anahtarlar hariç)",
+  "description" : "Broker'lar arasında değeri farklı olan config'ler (broker'a özgü anahtarlar; ZooKeeper ve KRaft broker'ları karışıksa moda özgü anahtarlar hariç)",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -367,7 +367,7 @@
   }
 }, {
   "name" : "topics_get",
-  "description" : "Topic detayı: partition'lar (lider, replika, ISR, URP), varsayılandan farklı config'ler, boyut, offset'ler",
+  "description" : "Topic detayı: partition'lar (lider, replika, ISR, KRaft'ta ELR, URP), varsayılandan farklı config'ler, boyut, offset'ler",
   "inputSchema" : {
     "type" : "object",
     "properties" : {
@@ -586,7 +586,7 @@
   }
 }, {
   "name" : "topics_consumers",
-  "description" : "Topic'te commit'li offset'i olan consumer group'lar: durum, üye sayısı, bu topic'teki lag",
+  "description" : "Topic'te commit'li offset'i olan consumer group'lar: tip (Classic/Consumer), durum, üye sayısı, bu topic'teki lag",
   "inputSchema" : {
     "type" : "object",
     "properties" : {

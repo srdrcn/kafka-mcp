@@ -10,12 +10,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.DescribeClusterOptions;
 import org.apache.kafka.clients.admin.DescribeClusterResult;
+import org.apache.kafka.clients.admin.DescribeFeaturesOptions;
 import org.apache.kafka.clients.admin.FeatureMetadata;
-import org.apache.kafka.clients.admin.FinalizedVersionRange;
 import org.apache.kafka.clients.admin.PartitionReassignment;
 import org.apache.kafka.clients.admin.QuorumInfo;
 import org.apache.kafka.clients.admin.TopicDescription;
@@ -52,13 +53,14 @@ public class ClusterTools {
 
 	public List<ToolSpec> tools() {
 		return List.of(
-				ToolSpec.read("clusters_list", "Config'teki cluster'ları ve erişilebilirliklerini listeler")
+				ToolSpec.read("clusters_list",
+						"Config'teki cluster'ları, erişilebilirliklerini ve modlarını (KRaft/ZooKeeper) listeler")
 					.clusterOptional()
 					.listParams()
 					.param("check", P.bool("Bağlantıyı da test et (varsayılan true)"))
 					.handler(this::clustersList),
 				ToolSpec.read("clusters_get",
-						"Cluster özeti: id, KRaft/ZooKeeper, controller/quorum, Kafka sürümü, broker/topic/partition sayıları, URP ve offline partition'lar")
+						"Cluster özeti: id, mod (KRaft/ZooKeeper), aktif controller/quorum, Kafka sürümü, KRaft feature'ları ya da ZooKeeper bağlantısı, authorizer, broker/topic/partition sayıları, URP ve offline partition'lar")
 					.handler(this::clustersGet));
 	}
 
@@ -102,10 +104,13 @@ public class ClusterTools {
 	}
 
 	Object clustersGet(ToolCall call) {
-		KafkaFuture<FeatureMetadata> features = call.admin().describeFeatures().featureMetadata();
 		KafkaFuture<Map<TopicPartition, PartitionReassignment>> pendingReassignments = Topics
 			.submitReassignments(call);
 		ClusterMeta.Info info = ClusterMeta.describe(call, true);
+		// varsayılan broker'ın config'i: authorizer, ZooKeeper'da IBP ve zookeeper.connect
+		ConfigResource brokerResource = info.brokers().isEmpty() ? null : Configs.broker(info.defaultBrokerId());
+		KafkaFuture<Config> pendingBrokerConfig = brokerResource == null ? null
+				: Configs.submitOne(call, brokerResource);
 		Map<String, Boolean> listing = Topics.list(call, true);
 		Futures.Each<String, TopicDescription> topics = Topics.describe(call, listing.keySet());
 		Topics.Reassignments reassignments = Topics.reassignments(call, pendingReassignments);
@@ -126,18 +131,42 @@ public class ClusterTools {
 			}
 		}
 		long internal = listing.values().stream().filter(Boolean::booleanValue).count();
-		FinalizedVersionRange metadataVersion = metadataVersion(call, features);
-		String mode = info.mode();
-		if (mode == null && metadataVersion != null) {
-			// quorum sorgusu başarısız ama metadata.version finalize edilmiş: sadece KRaft'ta olur
-			mode = ClusterMeta.KRAFT;
+		ClusterMeta.Mode mode = info.clusterMode();
+		Config brokerConfig = null;
+		String brokerConfigError = null;
+		if (pendingBrokerConfig != null) {
+			try {
+				brokerConfig = Configs.awaitOne(call, brokerResource, pendingBrokerConfig);
+			}
+			catch (ToolException e) {
+				brokerConfigError = e.getMessage();
+			}
 		}
-		Map<String, Object> out = Results.map("cluster", call.cluster(), "clusterId", info.clusterId(), "mode", mode,
-				"controllerId", info.controllerId());
-		if (info.controllerId() == null && info.quorumError() != null) {
-			out.put("controllerNote", "Aktif controller belirlenemedi (metadata quorum sorgusu başarısız)");
+		if (!mode.isKnown() && brokerConfig != null) {
+			// quorum ve feature sorguları yanıtsız: broker'ın kendi config'i (process.roles / zookeeper.connect)
+			mode = BrokerTools.brokerMode(brokerConfig);
 		}
-		out.putAll(version(call, metadataVersion, info));
+		Map<String, Object> out = Results.map("cluster", call.cluster(), "clusterId", info.clusterId(), "mode",
+				mode.label(), "controllerId", info.controllerId());
+		String controllerNote = controllerNote(info);
+		if (controllerNote != null) {
+			out.put("controllerNote", controllerNote);
+		}
+		out.putAll(version(info, mode, brokerConfig, brokerConfigError));
+		if (mode.isKraft() && info.finalizedFeatures() != null && !info.finalizedFeatures().isEmpty()) {
+			out.put("features", info.finalizedFeatures());
+		}
+		if (brokerConfig != null) {
+			Map<String, Object> zk = zookeeper(brokerConfig, mode);
+			if (zk != null) {
+				out.put("zookeeper", zk);
+			}
+			String authorizer = value(brokerConfig, "authorizer.class.name");
+			out.put("authorizer", authorizer == null || authorizer.isBlank() ? "yok (ACL kapalı)" : authorizer);
+		}
+		else if (brokerConfigError != null) {
+			out.put("brokerConfigError", brokerConfigError);
+		}
 		out.put("brokerCount", info.brokers().size());
 		out.put("topicCount", listing.size() - internal);
 		out.put("internalTopicCount", internal);
@@ -163,40 +192,65 @@ public class ClusterTools {
 		return out;
 	}
 
-	/** Finalize edilmiş metadata.version (sadece KRaft) ya da null (ZooKeeper, eski broker ya da hata). */
-	private static FinalizedVersionRange metadataVersion(ToolCall call, KafkaFuture<FeatureMetadata> features) {
-		try {
-			return call.await(features).finalizedFeatures().get("metadata.version");
+	/**
+	 * Controller hakkında not: KRaft'ta quorum sorgusu başarısızsa controller bilinmez (describeCluster'ın
+	 * döndürdüğü rastgele broker raporlanmaz); quorum lideri broker değilse ayrı controller düğümüdür.
+	 */
+	static String controllerNote(ClusterMeta.Info info) {
+		if (info.controllerId() == null) {
+			return info.clusterMode().isZooKeeper() ? "Aktif controller yok (seçim sürüyor olabilir)"
+					: "Aktif controller belirlenemedi (metadata quorum sorgusu başarısız)";
 		}
-		catch (ToolException e) {
-			return null; // eski broker: describeFeatures yok
+		if (info.clusterMode().isKraft() && !info.controllerIsBroker()) {
+			return "Aktif controller ayrı bir KRaft controller düğümü (broker değil)";
 		}
+		return null;
 	}
 
-	/** metadata.version (KRaft) ya da inter.broker.protocol.version (ZooKeeper) üzerinden en iyi tahmin. */
-	private static Map<String, Object> version(ToolCall call, FinalizedVersionRange metadataVersion,
-			ClusterMeta.Info info) {
-		if (metadataVersion != null) {
-			int level = metadataVersion.maxVersionLevel();
+	/**
+	 * Kafka sürümü tahmini: KRaft'ta finalize edilmiş metadata.version, ZooKeeper'da (ya da mod bilinmiyorsa)
+	 * inter.broker.protocol.version. İkisi de en az sürümü gösterir; broker yazılımı daha yeni olabilir.
+	 */
+	private static Map<String, Object> version(ClusterMeta.Info info, ClusterMeta.Mode mode, Config brokerConfig,
+			String configError) {
+		Short level = info.metadataVersionLevel();
+		if (level != null) {
 			String name = KafkaVersions.metadataVersion(level);
 			return Results.map("kafkaVersion", KafkaVersions.release(level), "versionSource",
 					"metadata.version=" + level + (name == null ? "" : " (" + name + ")"));
 		}
-		if (info.brokers().isEmpty()) {
+		if (mode.isKraft()) {
 			return Map.of();
 		}
-		try {
-			Config c = Configs.describeOne(call, Configs.broker(info.defaultBrokerId()));
-			ConfigEntry ibp = c.get("inter.broker.protocol.version");
-			if (ibp != null && ibp.value() != null) {
-				return Results.map("kafkaVersion", KafkaVersions.releaseOf(ibp.value()), "versionSource",
-						"inter.broker.protocol.version=" + ibp.value());
-			}
+		if (brokerConfig == null) {
+			return configError == null ? Map.of() : Results.map("versionError", configError);
 		}
-		catch (ToolException e) {
-			return Results.map("versionError", e.getMessage());
+		ConfigEntry ibp = brokerConfig.get("inter.broker.protocol.version");
+		if (ibp != null && ibp.value() != null && !ibp.value().isBlank()) {
+			return Results.map("kafkaVersion", KafkaVersions.releaseOf(ibp.value()), "versionSource",
+					"inter.broker.protocol.version=" + ibp.value());
 		}
 		return Map.of();
+	}
+
+	/** ZooKeeper cluster'ı için bağlantı ve ZooKeeper→KRaft geçiş bilgisi; KRaft'ta null. */
+	static Map<String, Object> zookeeper(Config brokerConfig, ClusterMeta.Mode mode) {
+		if (mode.isKraft()) {
+			return null;
+		}
+		String connect = value(brokerConfig, "zookeeper.connect");
+		if (connect == null || connect.isBlank()) {
+			return null;
+		}
+		boolean migration = "true".equalsIgnoreCase(value(brokerConfig, "zookeeper.metadata.migration.enable"));
+		return Results.map("connect", connect, "migrationEnabled", migration ? true : null, "note",
+				migration ? "ZooKeeper→KRaft geçişi açık (aktif controller KRaft controller'ı olabilir)" : null);
+	}
+
+	/** Config değeri (hassas ise null). */
+	private static String value(Config c, String key) {
+		ConfigEntry e = c.get(key);
+		return e == null || e.isSensitive() ? null : e.value();
 	}
 
 	/** URP olan topic'lerde ISR, min.insync.replicas'ın altında olan partition sayısı (tek describeConfigs). */
@@ -247,15 +301,33 @@ public class ClusterTools {
 		return logEndOffset < 0 ? null : Math.max(0, highWatermark - logEndOffset);
 	}
 
+	/**
+	 * Bağlantı testi: describeCluster + describeFeatures (ucuz; mod için). controllerId sadece ZooKeeper'da
+	 * verilir: KRaft broker'ları describeCluster'da rastgele bir broker'ı controller diye döndürür (aktif
+	 * controller için clusters_get).
+	 */
 	private Map<String, Object> probe(ClusterConfig c, ToolCall call) {
 		try {
-			DescribeClusterResult r = clients.admin(c.getName())
-				.describeCluster(new DescribeClusterOptions().timeoutMs((int) Math.min(10_000, call.waitMillis())));
+			Admin admin = clients.admin(c.getName());
+			int timeout = (int) Math.min(10_000, call.waitMillis());
+			DescribeClusterResult r = admin.describeCluster(new DescribeClusterOptions().timeoutMs(timeout));
+			KafkaFuture<FeatureMetadata> features = admin
+				.describeFeatures(new DescribeFeaturesOptions().timeoutMs(timeout))
+				.featureMetadata();
 			String id = call.await(r.clusterId());
 			Node controller = call.await(r.controller());
 			int brokers = call.await(r.nodes()).size();
-			return Results.map("status", "ok", "clusterId", id, "controllerId",
-					controller == null || controller.isEmpty() ? null : controller.id(), "brokerCount", brokers);
+			ClusterMeta.Mode mode;
+			try {
+				mode = ClusterMeta.modeOf(call.await(features));
+			}
+			catch (ToolException e) {
+				mode = ClusterMeta.Mode.UNKNOWN;
+			}
+			Integer controllerId = mode.isZooKeeper() && controller != null && !controller.isEmpty() ? controller.id()
+					: null;
+			return Results.map("status", "ok", "clusterId", id, "mode", mode.label(), "controllerId", controllerId,
+					"brokerCount", brokers);
 		}
 		catch (Exception e) {
 			return Results.map("status", "error", "error", KafkaErrors.explain(e));

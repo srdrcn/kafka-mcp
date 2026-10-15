@@ -33,8 +33,17 @@ public final class ConsumerGroups {
 	private ConsumerGroups() {
 	}
 
-	/** Bir grubun bir topic'teki özeti: durum, üye sayısı, toplam lag, commit'li partition sayısı. */
-	public record TopicLag(String groupId, String state, Integer members, long lag, int partitions) {
+	/**
+	 * Bir grubun bir topic'teki özeti: durum, üye sayısı, toplam lag, commit'li partition sayısı ve grup tipi
+	 * ({@link #type}: "Classic" ya da KRaft 4.x'te KIP-848 "Consumer"; bilinmiyorsa null).
+	 */
+	public record TopicLag(String groupId, String state, Integer members, long lag, int partitions, String type) {
+
+		/** Tip bilgisi olmadan (geriye uyumluluk). */
+		public TopicLag(String groupId, String state, Integer members, long lag, int partitions) {
+			this(groupId, state, members, lag, partitions, null);
+		}
+
 	}
 
 	/**
@@ -125,6 +134,18 @@ public final class ConsumerGroups {
 		return new Futures.Each<>(values, raw.errors());
 	}
 
+	/**
+	 * Grup tipi: "Classic" (ZooKeeper cluster'larında hep) ya da "Consumer" (KRaft 4.x, KIP-848); bilinmiyorsa
+	 * null. Önce açıklama, yoksa listGroups kaydı kullanılır (eski broker'lar listede tip döndürmez).
+	 */
+	public static String type(ConsumerGroupDescription description, GroupListing listing) {
+		GroupType t = description != null ? description.type() : null;
+		if ((t == null || t == GroupType.UNKNOWN) && listing != null) {
+			t = listing.type().orElse(GroupType.UNKNOWN);
+		}
+		return t == null || t == GroupType.UNKNOWN ? null : t.toString();
+	}
+
 	/** describeConsumerGroups (tek çağrı); grup bazında hatalar ayrı. */
 	public static Futures.Each<String, ConsumerGroupDescription> describe(ToolCall call, Collection<String> groupIds) {
 		if (groupIds.isEmpty()) {
@@ -188,7 +209,7 @@ public final class ConsumerGroups {
 			String state = d != null ? String.valueOf(d.groupState())
 					: groups.get(g).groupState().map(String::valueOf).orElse(null);
 			Integer members = d != null ? d.members().size() : null;
-			out.add(new TopicLag(g, state, members, total, offsets.size()));
+			out.add(new TopicLag(g, state, members, total, offsets.size(), type(d, groups.get(g))));
 		});
 		out.sort(Comparator.comparingLong(TopicLag::lag).reversed().thenComparing(TopicLag::groupId));
 		return new TopicConsumers(out, groups.size(), errors, tps.size() - latest.size());

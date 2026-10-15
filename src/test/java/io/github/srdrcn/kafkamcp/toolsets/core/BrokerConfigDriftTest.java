@@ -11,6 +11,8 @@ import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.ConfigEntry.ConfigSource;
 import org.junit.jupiter.api.Test;
 
+import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
+
 /** brokers_config_drift karşılaştırma mantığı (çok broker'lı durum; test cluster'ı tek broker). */
 class BrokerConfigDriftTest {
 
@@ -43,6 +45,53 @@ class BrokerConfigDriftTest {
 		@SuppressWarnings("unchecked")
 		List<Map<String, Object>> retention = (List<Map<String, Object>>) diffs.get(0).get("values");
 		assertThat(retention.get(1)).containsEntry("value", "(yok)").containsEntry("brokers", List.of(3));
+	}
+
+	@Test
+	void mixedZooKeeperAndKraftBrokersSkipModeSpecificKeys() {
+		// ZooKeeper→KRaft geçişi: broker 1 hâlâ ZooKeeper, broker 2 KRaft broker'ı
+		Map<Integer, Config> byBroker = new TreeMap<>();
+		byBroker.put(1, config(entry("zookeeper.connect", "zk:2181", ConfigSource.STATIC_BROKER_CONFIG),
+				entry("process.roles", "", ConfigSource.DEFAULT_CONFIG),
+				entry("controller.quorum.voters", "", ConfigSource.DEFAULT_CONFIG),
+				entry("inter.broker.protocol.version", "3.9-IV0", ConfigSource.STATIC_BROKER_CONFIG),
+				entry("num.io.threads", "8", ConfigSource.DEFAULT_CONFIG)));
+		byBroker.put(2, config(entry("zookeeper.connect", null, ConfigSource.DEFAULT_CONFIG),
+				entry("process.roles", "broker", ConfigSource.STATIC_BROKER_CONFIG),
+				entry("controller.quorum.voters", "3000@c:9093", ConfigSource.STATIC_BROKER_CONFIG),
+				entry("inter.broker.protocol.version", "3.9-IV0", ConfigSource.DEFAULT_CONFIG),
+				entry("num.io.threads", "16", ConfigSource.STATIC_BROKER_CONFIG)));
+
+		assertThat(BrokerTools.brokerMode(byBroker.get(1))).isEqualTo(ClusterMeta.Mode.ZOOKEEPER);
+		assertThat(BrokerTools.brokerMode(byBroker.get(2))).isEqualTo(ClusterMeta.Mode.KRAFT);
+		Map<String, List<Integer>> modes = BrokerTools.brokerModes(byBroker);
+		assertThat(modes).containsEntry("ZooKeeper", List.of(1)).containsEntry("KRaft", List.of(2));
+
+		List<Map<String, Object>> mixed = BrokerTools.differences(byBroker,
+				name -> !BrokerTools.PER_BROKER_KEYS.contains(name) && !BrokerTools.modeSpecific(name));
+		assertThat(mixed).extracting(d -> d.get("name")).containsExactly("num.io.threads");
+		// aynı modda olsalardı zookeeper.connect / controller.quorum.voters farkı gerçek drift olurdu
+		List<Map<String, Object>> all = BrokerTools.differences(byBroker,
+				name -> !BrokerTools.PER_BROKER_KEYS.contains(name));
+		assertThat(all).extracting(d -> d.get("name"))
+			.contains("controller.quorum.voters", "zookeeper.connect", "num.io.threads")
+			.doesNotContain("process.roles");
+		assertThat(BrokerTools.modeSpecific("zookeeper.session.timeout.ms")).isTrue();
+		assertThat(BrokerTools.modeSpecific("controller.quorum.bootstrap.servers")).isTrue();
+		assertThat(BrokerTools.modeSpecific("controller.socket.timeout.ms")).isFalse();
+	}
+
+	@Test
+	void keysMissingOnSomeBrokersWithOnlyDefaultsAreNotDrift() {
+		// 3.9 broker'ında olan ama 4.x'te hiç olmayan anahtar (varsayılan değerli): sürüm farkı, drift değil
+		Map<Integer, Config> byBroker = new TreeMap<>();
+		byBroker.put(1, config(entry("log.message.format.version", "3.0-IV1", ConfigSource.DEFAULT_CONFIG),
+				entry("zookeeper.ssl.client.enable", "false", ConfigSource.DEFAULT_CONFIG),
+				entry("num.io.threads", "8", ConfigSource.DEFAULT_CONFIG)));
+		byBroker.put(2, config(entry("num.io.threads", "8", ConfigSource.DEFAULT_CONFIG)));
+		BrokerTools.Drift d = BrokerTools.drift(byBroker, name -> true);
+		assertThat(d.differences()).isEmpty();
+		assertThat(d.presenceOnly()).containsExactly("log.message.format.version", "zookeeper.ssl.client.enable");
 	}
 
 	private static Config config(ConfigEntry... entries) {

@@ -18,11 +18,13 @@ import org.apache.kafka.common.errors.InvalidPartitionsException;
 import org.apache.kafka.common.errors.InvalidReplicationFactorException;
 import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.errors.InvalidTopicException;
+import org.apache.kafka.common.errors.NoReassignmentInProgressException;
 import org.apache.kafka.common.errors.PolicyViolationException;
 import org.apache.kafka.common.errors.SaslAuthenticationException;
 import org.apache.kafka.common.errors.SecurityDisabledException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.TopicDeletionDisabledException;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
@@ -34,7 +36,38 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
  */
 public final class KafkaErrors {
 
+	/**
+	 * Broker'ın API'yi (ya da istenen sürümünü) desteklemediği durumların Türkçe açıklaması; eski
+	 * (ör. 2.x ZooKeeper) broker'larda bazı işlemler yoktur. Araçlar bu durumu tüm aracı düşürmek yerine
+	 * öğe bazında not olarak raporlar.
+	 */
+	public static final String UNSUPPORTED = "Broker bu işlemi desteklemiyor (sürüm)";
+
 	private KafkaErrors() {
+	}
+
+	/**
+	 * Hata (ya da ToolException'ın nedeni) UnsupportedVersionException mı? ExecutionException/
+	 * CompletionException sarmalları ve ToolException neden zinciri açılır.
+	 */
+	public static boolean isUnsupported(Throwable error) {
+		Throwable t = error;
+		for (int i = 0; t != null && i < 10; i++) {
+			Throwable u = unwrap(t);
+			if (u instanceof UnsupportedVersionException) {
+				return true;
+			}
+			if (u instanceof ToolException && isUnsupported(u.getMessage())) {
+				return true;
+			}
+			t = u.getCause() == u ? null : u.getCause();
+		}
+		return false;
+	}
+
+	/** {@link #explain} ile üretilmiş mesaj "desteklenmiyor (sürüm)" mesajı mı? */
+	public static boolean isUnsupported(String message) {
+		return message != null && message.startsWith(UNSUPPORTED);
 	}
 
 	public static String explain(Throwable error) {
@@ -134,6 +167,10 @@ public final class KafkaErrors {
 		if (e instanceof InvalidPartitionsException) {
 			return "Geçersiz partition sayısı";
 		}
+		// UnsupportedVersionException bir InvalidRequestException'dır: önce kontrol edilmeli
+		if (e instanceof UnsupportedVersionException) {
+			return UNSUPPORTED;
+		}
 		if (e instanceof InvalidConfigurationException || e instanceof InvalidRequestException) {
 			return "Geçersiz istek/config";
 		}
@@ -143,8 +180,11 @@ public final class KafkaErrors {
 		if (e instanceof SecurityDisabledException) {
 			return "Cluster'da authorizer kapalı (ACL desteklenmiyor)";
 		}
-		if (e instanceof UnsupportedVersionException) {
-			return "Broker bu işlemi desteklemiyor (sürüm)";
+		if (e instanceof TopicDeletionDisabledException) {
+			return "Broker'da topic silme kapalı (delete.topic.enable=false)";
+		}
+		if (e instanceof NoReassignmentInProgressException) {
+			return "Partition için devam eden reassignment yok";
 		}
 		return null;
 	}
