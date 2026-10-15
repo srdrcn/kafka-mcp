@@ -10,7 +10,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * Görevi FAILED olan connector (yazılamayan dosyaya yazan FileStreamSink): connectors_failed,
- * connectors_status trace özeti, connectors_restart (onlyFailed) ve connectors_task_restart.
+ * connectors_status trace özeti, connectors_restart (onlyFailed), connectors_task_restart ve config
+ * düzeltilince create_or_update'in eski FAILED durumu sonuç diye döndürmemesi.
  */
 class ConnectorFailureToolsTest extends ConnectToolTestBase {
 
@@ -75,6 +76,20 @@ class ConnectorFailureToolsTest extends ConnectToolTestBase {
 		assertThat(ok("connectors_failed", args("filter", "healthy " + token)).get("total").asInt()).isZero();
 		assertThat(ok("connectors_failed", Map.of("cluster", "test-ro", "filter", token)).get("total").asInt())
 			.isEqualTo(1);
+
+		// config düzeltilir: PUT 200'den sonra Connect görevi sonradan yeniden başlatır; araç güncelleme öncesi
+		// FAILED durumu "yerleşti" diye döndürmemeli
+		JsonNode fixed = ok("connectors_create_or_update",
+				args("name", name, "config", sinkConfig(topic, "/tmp/" + token + "-fixed.txt")));
+		assertThat(fixed.get("result").asText()).isEqualTo("updated");
+		if (fixed.get("settled").asBoolean()) {
+			assertThat(fixed.at("/status/tasks/0/state").asText()).as(fixed.toString()).isEqualTo("RUNNING");
+		}
+		else {
+			assertThat(fixed.get("note").asText()).as(fixed.toString()).contains("connectors_status");
+		}
+		awaitTaskState(name, "RUNNING");
+		assertThat(ok("connectors_failed", args("filter", token)).get("total").asInt()).isZero();
 	}
 
 }

@@ -118,9 +118,13 @@ public class ConnectClient {
 		return body == null || body.isBlank() ? status.toString() : body;
 	}
 
-	/** URL path parçası kodlaması (connector adlarında boşluk/özel karakter olabilir). */
+	/**
+	 * URL path parçası kodlaması (connector adlarında boşluk/özel karakter olabilir). Unreserved dışındaki her
+	 * karakter kodlanır: ';' gibi sub-delim'ler açık kalırsa Connect (Jetty) ';' sonrasını matrix parametresi
+	 * sayıp atar ve araç başka bir connector'a gider.
+	 */
 	public static String enc(String segment) {
-		return org.springframework.web.util.UriUtils.encodePathSegment(segment, java.nio.charset.StandardCharsets.UTF_8);
+		return org.springframework.web.util.UriUtils.encode(segment, java.nio.charset.StandardCharsets.UTF_8);
 	}
 
 	static RestClient build(String base) {

@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.function.Predicate;
 
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClientResponseException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -65,6 +66,19 @@ public class ConnectApi {
 
 	public ConnectorStatus status(String cluster, String connector) {
 		return ConnectorStatus.from(client.get(cluster, path(connector) + "/status"));
+	}
+
+	/** {@link #status}; Connect hata yanıtı dönerse (ör. connector henüz yok: 404) null. Erişim hataları atılır. */
+	public ConnectorStatus statusOrNull(String cluster, String connector) {
+		try {
+			return status(cluster, connector);
+		}
+		catch (ToolException e) {
+			if (e.getCause() instanceof RestClientResponseException) {
+				return null;
+			}
+			throw e;
+		}
 	}
 
 	public ConnectorInfo info(String cluster, String connector) {
