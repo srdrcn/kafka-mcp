@@ -9,18 +9,24 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.CloseOptions;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.record.TimestampType;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -144,6 +150,63 @@ class MessageHelpersTest {
 		assertThat(Timestamps.iso(-1)).isNull();
 		assertThatThrownBy(() -> Timestamps.parse("t", "dün")).isInstanceOf(ToolException.class)
 			.hasMessageContaining("ISO-8601");
+		// negatif değerler listOffsets'te LATEST(-1)/EARLIEST(-2)/MAX_TIMESTAMP(-3)... anlamına gelir
+		assertThat(Timestamps.parse("t", "0")).isZero();
+		assertThat(Timestamps.parse("t", "1970-01-01T00:00:00Z")).isZero();
+		for (String v : List.of("-1", "-2", "-3", "-5", "-1700000000000", "1969-12-31T23:59:59.999Z", "1969-12-31")) {
+			assertThatThrownBy(() -> Timestamps.parse("ts", v)).as(v)
+				.isInstanceOf(ToolException.class)
+				.hasMessageContaining("ts")
+				.hasMessageContaining("negatif")
+				.hasMessageContaining("1970");
+		}
+	}
+
+	private static ConsumerRecord<byte[], byte[]> rec(int partition, long offset, long timestamp) {
+		return new ConsumerRecord<>("t", partition, offset, timestamp,
+				timestamp < 0 ? TimestampType.NO_TIMESTAMP_TYPE : TimestampType.CREATE_TIME, 0, 0, null, null,
+				new RecordHeaders(), Optional.empty());
+	}
+
+	/** latest seçimi gibi: sınırlı min-heap en yenileri tutar. */
+	private static List<String> newest(List<ConsumerRecord<byte[], byte[]>> records, PartitionOffsets.Bounds b,
+			int max) {
+		List<TopicPartition> tps = List.of(new TopicPartition("t", 0), new TopicPartition("t", 1),
+				new TopicPartition("t", 2));
+		PriorityQueue<ConsumerRecord<byte[], byte[]>> heap = new PriorityQueue<>(MessageReader.newestLast(tps, b));
+		for (ConsumerRecord<byte[], byte[]> r : records) {
+			heap.add(r);
+			if (heap.size() > max) {
+				heap.poll();
+			}
+		}
+		List<ConsumerRecord<byte[], byte[]>> out = new ArrayList<>(heap);
+		out.sort(MessageReader.BY_TIME);
+		return out.stream().map(r -> r.partition() + "@" + r.offset()).toList();
+	}
+
+	@Test
+	void latestOrderIsFairAcrossPartitionsForRecordsWithoutTimestamp() {
+		// p0: 0..9, p1: 0..4, p2: 0..9 — hepsi zaman damgasız (v0): partition sonlarından sırayla
+		Map<TopicPartition, Long> latest = Map.of(new TopicPartition("t", 0), 10L, new TopicPartition("t", 1), 5L,
+				new TopicPartition("t", 2), 10L);
+		PartitionOffsets.Bounds b = new PartitionOffsets.Bounds(Map.of(), latest);
+		List<ConsumerRecord<byte[], byte[]>> untimed = new ArrayList<>();
+		for (int p = 0; p < 3; p++) {
+			for (long o = 0; o < latest.get(new TopicPartition("t", p)); o++) {
+				untimed.add(rec(p, o, -1));
+			}
+		}
+		assertThat(newest(untimed, b, 6)).containsExactly("0@8", "0@9", "1@3", "1@4", "2@8", "2@9");
+		assertThat(MessageReader.untimed(untimed.get(0))).isTrue();
+		// zamanlı kayıtlar: zamana göre (partition id'sinden bağımsız)
+		List<ConsumerRecord<byte[], byte[]>> timed = new ArrayList<>(List.of(rec(2, 0, 100), rec(0, 0, 300),
+				rec(1, 0, 200), rec(2, 1, 50), rec(0, 1, 400)));
+		assertThat(newest(timed, b, 3)).containsExactly("1@0", "0@0", "0@1");
+		// karışık: zamanlı kayıt zamansızlardan yeni sayılır
+		List<ConsumerRecord<byte[], byte[]>> mixed = new ArrayList<>(untimed);
+		mixed.add(rec(1, 5, 10));
+		assertThat(newest(mixed, b, 4)).containsExactly("0@9", "1@4", "2@9", "1@5");
 	}
 
 	@Test

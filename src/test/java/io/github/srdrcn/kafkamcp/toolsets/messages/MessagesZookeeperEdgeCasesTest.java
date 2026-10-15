@@ -2,6 +2,7 @@ package io.github.srdrcn.kafkamcp.toolsets.messages;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Instant;
@@ -28,6 +29,8 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.UnsupportedForMessageFormatException;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.record.RecordBatch;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -289,9 +292,122 @@ class MessagesZookeeperEdgeCasesTest extends MixedClusterIntegrationTest {
 		assertThat(consumed.get("notes").toString()).contains("partition [1]")
 			.contains("partition [2]")
 			.contains("desteklemiyor");
+		// okunmayan partition'lar okunmuş/bitmiş sayılmaz: reachedEnd false, partitions sadece okunanlar
+		assertThat(consumed.get("reachedEnd").asBoolean()).isFalse();
+		assertThat(consumed.get("partitions").asInt()).isEqualTo(1);
+		assertThat(consumed.get("skippedPartitions").toString()).isEqualTo("[1,2]");
+		// tek partition istenip o partition okunamadıysa nextOffset null (latest'e atlanıp partition kaçırılmaz)
+		JsonNode skipped = onLegacyBroker(consumeTools::consume, zkArgs("topic", topic, "partition", 1, "from",
+				"timestamp", "timestamp", Timestamps.iso(TestData.BASE_TS + 1_000L)));
+		assertThat(skipped.get("returned").asInt()).isZero();
+		assertThat(skipped.get("reachedEnd").asBoolean()).isFalse();
+		assertThat(skipped.has("nextOffset")).isTrue();
+		assertThat(skipped.get("nextOffset").isNull()).isTrue();
+		assertThat(skipped.get("skippedPartitions").toString()).isEqualTo("[1]");
+		assertThat(skipped.get("partial").asBoolean()).isTrue();
+		JsonNode readable = onLegacyBroker(consumeTools::consume, zkArgs("topic", topic, "partition", 0, "from",
+				"timestamp", "timestamp", Timestamps.iso(TestData.BASE_TS + 1_000L)));
+		assertThat(values(readable)).containsExactly("p0-1", "p0-2", "p0-3");
+		assertThat(readable.get("reachedEnd").asBoolean()).isTrue();
+		assertThat(readable.get("nextOffset").asLong()).isEqualTo(4);
+		assertThat(readable.has("skippedPartitions")).isFalse();
+		assertThat(readable.has("partial")).isFalse();
 		JsonNode latest = onLegacyBroker(consumeTools::consume, zkArgs("topic", topic, "maxRecords", 50));
 		assertThat(latest.get("returned").asInt()).isEqualTo(12);
 		assertThat(latest.has("partial")).isFalse();
+	}
+
+
+	@Test
+	void negativeTimestampsAreRejectedInsteadOfBecomingListOffsetsSentinels() throws Exception {
+		String topic = unique("mx-neg");
+		createZkTopic(new NewTopic(topic, 1, (short) 1));
+		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
+		for (int i = 0; i < 3; i++) {
+			records.add(TestData.record(topic, 0, TestData.BASE_TS + i * 1000L, null, "n" + i));
+		}
+		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
+			MessagesMixedClusterTest.send(p, records);
+		}
+		// -1/-2/-3 listOffsets'te LATEST/EARLIEST/MAX_TIMESTAMP anlamına gelir: zaman olarak gönderilmemeli
+		for (String ts : List.of("-1", "-2", "-3", "1969-12-31T23:59:59.997Z")) {
+			assertThat(error("messages_offset_for_timestamp", zkArgs("topic", topic, "timestamp", ts)))
+				.contains("negatif")
+				.contains("1970");
+		}
+		assertThat(error("messages_count", zkArgs("topic", topic, "fromTimestamp", "-1"))).contains("negatif");
+		assertThat(error("messages_count", zkArgs("topic", topic, "toTimestamp", "-2"))).contains("negatif");
+		assertThat(error("messages_consume", zkArgs("topic", topic, "timestamp", "-3"))).contains("negatif");
+		// 0 (epoch başlangıcı) geçerli bir zamandır: ilk kayıt
+		JsonNode zero = ok("messages_offset_for_timestamp", zkArgs("topic", topic, "timestamp", "0"));
+		assertThat(zero.at("/partitions/0/offset").asLong()).isZero();
+		assertThat(zero.at("/partitions/0/timestamp").asText()).isEqualTo(Timestamps.iso(TestData.BASE_TS));
+		JsonNode count = ok("messages_count", zkArgs("topic", topic, "fromTimestamp", "1970-01-01T00:00:00Z"));
+		assertThat(count.get("total").asLong()).isEqualTo(3);
+	}
+
+	/**
+	 * Zaman damgasız kayıt: eski (v0) mesaj formatındaki kayıtlar consumer'a timestamp = -1 ile gelir. 3.x+
+	 * broker'lar v0 yazmadığından aynı durum timestamp = -1 (RecordBatch.NO_TIMESTAMP) taşıyan kayıtla kurulur;
+	 * ProducerRecord negatif zamanı reddettiği için alan doğrudan yazılır (broker NO_TIMESTAMP'ı kabul eder).
+	 */
+	private static ProducerRecord<byte[], byte[]> untimed(String topic, int partition, String value) throws Exception {
+		ProducerRecord<byte[], byte[]> r = TestData.record(topic, partition, null, null, value);
+		Field f = ProducerRecord.class.getDeclaredField("timestamp");
+		f.setAccessible(true);
+		f.set(r, RecordBatch.NO_TIMESTAMP);
+		r.headers().add(new RecordHeader("p", String.valueOf(partition).getBytes()));
+		return r;
+	}
+
+	@Test
+	void latestPicksFairlyFromPartitionTailsWhenRecordsHaveNoTimestamp() throws Exception {
+		String topic = unique("mx-notime");
+		createZkTopic(new NewTopic(topic, 3, (short) 1));
+		List<ProducerRecord<byte[], byte[]>> records = new ArrayList<>();
+		for (int p = 0; p < 3; p++) {
+			for (int j = 0; j < 10; j++) {
+				records.add(untimed(topic, p, "{\"p" + p + "\":" + j + "}"));
+			}
+		}
+		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
+			MessagesMixedClusterTest.send(p, records);
+		}
+
+		JsonNode r = ok("messages_consume", zkArgs("topic", topic, "maxRecords", 6));
+		assertThat(r.at("/records/0").has("timestamp")).isFalse();
+		// en yüksek numaralı partition'ın son 6 kaydı değil, her partition'ın son 2 kaydı
+		assertThat(values(r)).containsExactly("{\"p0\":8}", "{\"p0\":9}", "{\"p1\":8}", "{\"p1\":9}",
+				"{\"p2\":8}", "{\"p2\":9}");
+		assertThat(r.get("order").asText()).isEqualTo("partition,offset");
+		assertThat(r.get("approximate").asBoolean()).isTrue();
+		assertThat(r.get("notes").toString()).contains("zaman damgası yok");
+
+		JsonNode filtered = ok("messages_consume",
+				zkArgs("topic", topic, "maxRecords", 3, "valueRegex", ":[0-4]}$"));
+		assertThat(values(filtered)).containsExactly("{\"p0\":4}", "{\"p1\":4}", "{\"p2\":4}");
+		assertThat(filtered.get("notes").toString()).contains("zaman damgası yok");
+
+		JsonNode headers = ok("messages_headers", zkArgs("topic", topic, "maxRecords", 3));
+		assertThat(headers.at("/headers/0/key").asText()).isEqualTo("p");
+		assertThat(headers.at("/headers/0/distinctValues").asInt()).isEqualTo(3);
+
+		JsonNode shape = ok("messages_sample_schema", zkArgs("topic", topic, "maxRecords", 3));
+		List<String> paths = new ArrayList<>();
+		shape.get("paths").forEach(n -> paths.add(n.get("path").asText()));
+		assertThat(paths).containsExactlyInAnyOrder("p0", "p1", "p2");
+
+		// zamanlı kayıt zamansızlardan (eski formattan kalan) daha yeni sayılır
+		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
+			MessagesMixedClusterTest.send(p, List.of(TestData.record(topic, 0, TestData.BASE_TS, null, "timed")));
+		}
+		JsonNode mixed = ok("messages_consume", zkArgs("topic", topic, "maxRecords", 4));
+		assertThat(mixed.get("returned").asInt()).isEqualTo(4);
+		assertThat(mixed.at("/records/3/value").asText()).isEqualTo("timed");
+		assertThat(mixed.at("/records/3/timestamp").asText()).isEqualTo(Timestamps.iso(TestData.BASE_TS));
+		assertThat(mixed.at("/records/0").has("timestamp")).isFalse();
+		assertThat(mixed.get("order").asText()).isEqualTo("timestamp");
+		assertThat(mixed.get("approximate").asBoolean()).isTrue();
 	}
 
 }

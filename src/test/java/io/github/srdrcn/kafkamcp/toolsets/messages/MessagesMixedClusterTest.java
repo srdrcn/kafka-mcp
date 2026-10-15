@@ -31,42 +31,66 @@ import io.github.srdrcn.kafkamcp.support.MixedClusterIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.ZkKafkaTestCluster;
 
 /**
- * messages araçları ZooKeeper modlu cluster'da ({@code zk}, Kafka 3.9) ve aynı veriyle KRaft cluster'ında
- * ({@code test}, Kafka 4.1): her araç zk'da gerçek veriyle doğru sonuç verir; mod bağımsız olduğu için aynı
- * veriye iki cluster'da birebir aynı yanıt döner.
+ * messages araçları ZooKeeper modlu cluster'da ({@code zk}, Kafka 3.9) ve KRaft cluster'ında ({@code test},
+ * Kafka 4.1). zk testlerinin verisi sadece zk'da vardır (ya da KRaft'takinden farklıdır): çağrı yanlışlıkla
+ * KRaft'a giderse test düşer. Mod bağımsız olduğu için iki cluster'daki birebir aynı veriye ({@link #same})
+ * aynı yanıt döner.
  */
 class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 
 	/**
-	 * Aynı ad iki cluster'da, 3 partition. i = 0..29: partition i%3, zaman BASE+i sn, key k{i%5}, JSON value
+	 * Sadece zk'da, 3 partition. i = 0..29: partition i%3, zaman BASE+i sn, key k{i%5}, JSON value
 	 * {id, level (i%4==0 ? ERROR : INFO), user.name, tags (çift i)}; header trace=t-i (çift i), source=svc-a
 	 * (i%3==0). Ayrıca p0'da BASE+30 sn'de tombstone (key k-del). Offset'ler: p0 0..10, p1 0..9, p2 0..9.
 	 */
 	private static String topic;
 
-	/** 4 partition; key'li, partition'sız gönderilen kayıtlar (varsayılan partitioner). */
+	/**
+	 * Key'li, partition'sız gönderilen kayıtlar (varsayılan partitioner). Aynı ad iki cluster'da farklı partition
+	 * sayısıyla: zk'da 4, KRaft'ta 6.
+	 */
 	private static String keyed;
 
 	/** zk'da producer'ın key başına seçtiği partition. */
 	private static Map<String, Integer> zkKeyPartitions;
 
+	/** KRaft'ta producer'ın key başına seçtiği partition. */
+	private static Map<String, Integer> kraftKeyPartitions;
+
+	/** İki cluster'da birebir aynı veri ({@link #topic} ile aynı yapı). */
+	private static String same;
+
+	/** Sadece KRaft'ta. */
+	private static String kraftOnly;
+
 	@BeforeAll
 	static void prepare() throws Exception {
 		topic = unique("mx-msg");
 		keyed = unique("mx-keyed");
-		for (Admin admin : List.of(zkAdmin(), testAdmin())) {
-			admin.createTopics(List.of(new NewTopic(topic, 3, (short) 1), new NewTopic(keyed, 4, (short) 1)))
-				.all()
-				.get(60, TimeUnit.SECONDS);
-		}
+		same = unique("mx-same");
+		kraftOnly = unique("mx-kraft");
+		zkAdmin()
+			.createTopics(List.of(new NewTopic(topic, 3, (short) 1), new NewTopic(keyed, 4, (short) 1),
+					new NewTopic(same, 3, (short) 1)))
+			.all()
+			.get(60, TimeUnit.SECONDS);
+		testAdmin()
+			.createTopics(List.of(new NewTopic(same, 3, (short) 1), new NewTopic(keyed, 6, (short) 1),
+					new NewTopic(kraftOnly, 1, (short) 1)))
+			.all()
+			.get(60, TimeUnit.SECONDS);
 		try (KafkaProducer<byte[], byte[]> p = ZkKafkaTestCluster.producer(null)) {
-			send(p, records());
+			send(p, records(topic));
+			send(p, records(same));
 			zkKeyPartitions = sendKeyed(p);
 		}
 		try (KafkaProducer<byte[], byte[]> p = KafkaTestCluster.producer(null)) {
-			send(p, records());
-			assertThat(sendKeyed(p)).as("aynı key aynı partition'a düşmeli").isEqualTo(zkKeyPartitions);
+			send(p, records(same));
+			kraftKeyPartitions = sendKeyed(p);
+			send(p, List.of(TestData.record(kraftOnly, 0, null, "k", "v")));
 		}
+		assertThat(kraftKeyPartitions).as("farklı partition sayısı: key'lerin bir kısmı farklı partition'a düşmeli")
+			.isNotEqualTo(zkKeyPartitions);
 	}
 
 	static String json(int i) {
@@ -74,7 +98,7 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 				+ (i % 4) + "\"}" + (i % 2 == 0 ? ",\"tags\":[\"a\",\"b" + i + "\"]" : "") + "}";
 	}
 
-	private static List<ProducerRecord<byte[], byte[]>> records() {
+	private static List<ProducerRecord<byte[], byte[]>> records(String topic) {
 		List<ProducerRecord<byte[], byte[]>> out = new ArrayList<>();
 		for (int i = 0; i < 30; i++) {
 			ProducerRecord<byte[], byte[]> r = TestData.record(topic, i % 3, TestData.BASE_TS + i * 1000L, "k" + (i % 5),
@@ -285,6 +309,14 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 			computed.put(key, r.get("partition").asInt());
 		}
 		assertThat(computed).as("araç, producer'ın gerçekte seçtiği partition'ı bulmalı").isEqualTo(zkKeyPartitions);
+		// aynı ad KRaft'ta 6 partition: partition sayısı her cluster'ın kendisinden okunur
+		Map<String, Integer> kraft = new HashMap<>();
+		for (String key : kraftKeyPartitions.keySet()) {
+			JsonNode r = ok("messages_partition_for_key", args("topic", keyed, "key", key));
+			assertThat(r.get("partitionCount").asInt()).isEqualTo(6);
+			kraft.put(key, r.get("partition").asInt());
+		}
+		assertThat(kraft).isEqualTo(kraftKeyPartitions);
 	}
 
 	@Test
@@ -318,24 +350,28 @@ class MessagesMixedClusterTest extends MixedClusterIntegrationTest {
 
 	@Test
 	void sameDataGivesSameAnswersOnKraftAndZookeeper() {
+		// çağrılar gerçekten ayrı cluster'lara gider: birinde olan topic diğerinde yok
+		assertThat(error("messages_consume", args("topic", topic))).contains("bulunamadı");
+		assertThat(error("messages_consume", zkArgs("topic", kraftOnly))).contains("bulunamadı");
+		assertThat(ok("messages_consume", args("topic", kraftOnly)).get("returned").asInt()).isEqualTo(1);
 		List<Object[]> calls = List.of(
-				new Object[] { "messages_consume", "topic", topic, "maxRecords", 7, "format", "json" },
-				new Object[] { "messages_consume", "topic", topic, "from", "earliest", "maxRecords", 9, "keyFormat",
+				new Object[] { "messages_consume", "topic", same, "maxRecords", 7, "format", "json" },
+				new Object[] { "messages_consume", "topic", same, "from", "earliest", "maxRecords", 9, "keyFormat",
 						"hex" },
-				new Object[] { "messages_consume", "topic", topic, "partition", 2, "offset", 4, "maxRecords", 3 },
-				new Object[] { "messages_consume", "topic", topic, "timestamp",
+				new Object[] { "messages_consume", "topic", same, "partition", 2, "offset", 4, "maxRecords", 3 },
+				new Object[] { "messages_consume", "topic", same, "timestamp",
 						Timestamps.iso(TestData.BASE_TS + 12_000L), "maxRecords", 4, "format", "json" },
-				new Object[] { "messages_consume", "topic", topic, "from", "earliest", "valueRegex", "ERROR",
+				new Object[] { "messages_consume", "topic", same, "from", "earliest", "valueRegex", "ERROR",
 						"headerKey", "trace" },
-				new Object[] { "messages_get", "topic", topic, "partition", 1, "offset", 6, "format", "json" },
-				new Object[] { "messages_headers", "topic", topic, "from", "earliest" },
-				new Object[] { "messages_offset_for_timestamp", "topic", topic, "timestamp",
+				new Object[] { "messages_get", "topic", same, "partition", 1, "offset", 6, "format", "json" },
+				new Object[] { "messages_headers", "topic", same, "from", "earliest" },
+				new Object[] { "messages_offset_for_timestamp", "topic", same, "timestamp",
 						Timestamps.iso(TestData.BASE_TS + 15_500L) },
-				new Object[] { "messages_count", "topic", topic, "fromTimestamp",
+				new Object[] { "messages_count", "topic", same, "fromTimestamp",
 						Timestamps.iso(TestData.BASE_TS + 3_000L), "toTimestamp",
 						Timestamps.iso(TestData.BASE_TS + 23_000L) },
-				new Object[] { "messages_partition_for_key", "topic", keyed, "key", "user-7" },
-				new Object[] { "messages_sample_schema", "topic", topic, "maxRecords", 20 });
+				new Object[] { "messages_partition_for_key", "topic", same, "key", "user-7" },
+				new Object[] { "messages_sample_schema", "topic", same, "maxRecords", 20 });
 		for (Object[] c : calls) {
 			String tool = (String) c[0];
 			Object[] kv = Arrays.copyOfRange(c, 1, c.length);

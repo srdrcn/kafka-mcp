@@ -13,6 +13,8 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.databind.node.NullNode;
+
 import io.github.srdrcn.kafkamcp.mcp.P;
 import io.github.srdrcn.kafkamcp.mcp.Results;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
@@ -106,10 +108,13 @@ public class ConsumeTools {
 		for (ConsumerRecord<byte[], byte[]> rec : r.records()) {
 			records.add(RecordJson.render(rec, decoder, keyFormat, valueFormat, maxChars));
 		}
+		// hiçbirinde zaman damgası yoksa (v0 mesaj formatı) latest de partition/offset sırasıyla listelenir
+		boolean allUntimed = !r.records().isEmpty() && r.records().stream().allMatch(MessageReader::untimed);
+		boolean byTime = from == From.LATEST && !allUntimed;
 		Map<String, Object> out = Results.map("topic", topic, "from", from.id(), "partition", partition,
 				"partitions", partition == null ? r.partitions().size() : null, "offset", offset, "timestamp",
-				timestamp == null ? null : Timestamps.iso(timestamp), "order",
-				from == From.LATEST ? "timestamp" : "partition,offset", "returned", records.size());
+				timestamp == null ? null : Timestamps.iso(timestamp), "order", byTime ? "timestamp" : "partition,offset",
+				"returned", records.size());
 		if (filter != null) {
 			out.put("filters", filter.describe());
 			out.put("scanned", r.scanned());
@@ -120,7 +125,9 @@ public class ConsumeTools {
 			out.put("scanLimitReached", true);
 		}
 		if (partition != null && from != From.LATEST) {
-			out.put("nextOffset", r.nextOffsets().get(new TopicPartition(topic, partition)));
+			// partition okunamadıysa (skippedPartitions) devam offset'i yok: latest verilirse partition atlanırdı
+			Long next = r.nextOffsets().get(new TopicPartition(topic, partition));
+			out.put("nextOffset", next == null ? NullNode.getInstance() : next);
 		}
 		status(out, r, decoder);
 		out.put("records", records);
@@ -128,12 +135,16 @@ public class ConsumeTools {
 	}
 
 	/**
-	 * Okuma/çözme durumunu çıktıya ekler: offlinePartitions, approximate, partial (okuma ya da şema isteği zaman
-	 * sınırına takıldıysa), schemaLookupsSkipped ve notes. {@code decoder} null olabilir.
+	 * Okuma/çözme durumunu çıktıya ekler: offlinePartitions, skippedPartitions, approximate, partial (okuma ya da
+	 * şema isteği zaman sınırına takıldıysa ya da okunmayan partition varsa), schemaLookupsSkipped ve notes.
+	 * {@code decoder} null olabilir.
 	 */
 	static void status(Map<String, Object> out, MessageReader.Result r, RecordDecoder decoder) {
 		if (!r.offlinePartitions().isEmpty()) {
 			out.put("offlinePartitions", r.offlinePartitions());
+		}
+		if (!r.skippedPartitions().isEmpty()) {
+			out.put("skippedPartitions", r.skippedPartitions());
 		}
 		if (r.approximate()) {
 			out.put("approximate", true);
