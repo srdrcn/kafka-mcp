@@ -87,7 +87,7 @@ public class SchemaRegistryClient {
 					e);
 		}
 		catch (ResourceAccessException e) {
-			throw new ToolException(
+			throw new UnreachableException(
 					"Cannot reach Schema Registry (" + base + "): " + e.getMostSpecificCause().getMessage(), e);
 		}
 		catch (java.io.IOException e) {
@@ -199,6 +199,18 @@ public class SchemaRegistryClient {
 
 		public String srMessage() {
 			return srMessage;
+		}
+
+	}
+
+	/**
+	 * Schema Registry could not be reached (connection refused, DNS, I/O timeout); no HTTP response came back. Callers
+	 * can check the type instead of the message, e.g. to stop further lookups while the registry is down.
+	 */
+	public static class UnreachableException extends ToolException {
+
+		public UnreachableException(String message, Throwable cause) {
+			super(message, cause);
 		}
 
 	}

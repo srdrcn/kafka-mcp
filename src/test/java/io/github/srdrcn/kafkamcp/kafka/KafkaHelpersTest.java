@@ -95,7 +95,7 @@ class KafkaHelpersTest {
 		long start = System.nanoTime();
 		Futures.Each<String, Integer> each = Futures.awaitEach(call, futures, 300);
 		assertThat(each.values()).containsExactly(Map.entry("fast", 1));
-		assertThat(each.errors()).containsEntry("slow", "timeout");
+		assertThat(each.errors()).containsEntry("slow", "No response (timeout)");
 		assertThatThrownBy(() -> Futures.awaitAtMost(call, never, 200)).isInstanceOf(ToolException.class)
 			.hasMessageContaining("timeout");
 		assertThat((System.nanoTime() - start) / 1_000_000).isLessThan(3_000);

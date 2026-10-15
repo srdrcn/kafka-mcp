@@ -28,7 +28,7 @@ public final class LogDirs {
 	}
 
 	/** Error message for a broker missing from the cluster metadata (down/fenced). */
-	public static final String OFFLINE = "broker unreachable (not in the cluster metadata)";
+	public static final String OFFLINE = "Broker unreachable (not in the cluster metadata)";
 
 	/**
 	 * Broker → (directory path → description); a single describeLogDirs, per-broker errors separately. Live

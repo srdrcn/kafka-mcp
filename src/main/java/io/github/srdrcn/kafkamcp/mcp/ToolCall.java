@@ -228,7 +228,7 @@ public final class ToolCall {
 		if (v instanceof Map<?, ?> m) {
 			return new LinkedHashMap<>((Map<String, Object>) m);
 		}
-		throw new ToolException("Parameter must be an object (JSON object): " + name);
+		throw new ToolException("Parameter must be a JSON object: " + name);
 	}
 
 	/** Map parameter with the values converted to strings (for configs). */

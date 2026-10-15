@@ -39,8 +39,8 @@ public final class Futures {
 	}
 
 	/**
-	 * Like {@link #awaitEach(ToolCall, Map)}, but waits at most {@code maxMillis}; unfinished ones get a "timeout"
-	 * error. So a stuck broker/coordinator does not use up the time of the following steps.
+	 * Like {@link #awaitEach(ToolCall, Map)}, but waits at most {@code maxMillis}; unfinished ones get a
+	 * "No response (timeout)" error. So a stuck broker/coordinator does not use up the time of the following steps.
 	 */
 	public static <K, V> Each<K, V> awaitEach(ToolCall call, Map<K, ? extends KafkaFuture<V>> futures,
 			long maxMillis) {
@@ -58,7 +58,7 @@ public final class Futures {
 		for (Map.Entry<K, ? extends KafkaFuture<V>> e : futures.entrySet()) {
 			KafkaFuture<V> f = e.getValue();
 			if (!f.isDone()) {
-				errors.put(e.getKey(), "timeout");
+				errors.put(e.getKey(), "No response (timeout)");
 				continue;
 			}
 			try {
