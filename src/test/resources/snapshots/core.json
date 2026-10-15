@@ -1,0 +1,34 @@
+[ {
+  "name" : "clusters_list",
+  "description" : "Config'teki cluster'ları ve erişilebilirliklerini listeler",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "filter" : {
+        "type" : "string",
+        "description" : "Ad filtresi (regex, kısmi eşleşme; büyük/küçük harf duyarsız için (?i))"
+      },
+      "limit" : {
+        "type" : "integer",
+        "description" : "En fazla kaç kayıt dönsün (varsayılan 100)",
+        "minimum" : 1,
+        "maximum" : 5000,
+        "default" : 100
+      },
+      "check" : {
+        "type" : "boolean",
+        "description" : "Bağlantıyı da test et (varsayılan true)"
+      }
+    },
+    "required" : [ ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+} ]

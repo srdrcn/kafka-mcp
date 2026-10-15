@@ -1,0 +1,25 @@
+# ConfigMap kafka-mcp-config içindeki krb5.conf şablonu. KDC adreslerini kendi ortamınıza göre doldurun.
+[libdefaults]
+  default_realm = EXAMPLE.COM
+  dns_lookup_realm = false
+  dns_lookup_kdc = false
+  rdns = false
+  dns_canonicalize_hostname = false
+  ticket_lifetime = 24h
+  renew_lifetime = 7d
+  forwardable = true
+  udp_preference_limit = 1
+  kdc_timeout = 3000
+  max_retries = 2
+
+[realms]
+  EXAMPLE.COM = {
+    kdc = <kdc-1>
+    kdc = <kdc-2>
+  }
+
+[domain_realm]
+  .example.com = EXAMPLE.COM
+  example.com = EXAMPLE.COM
+  .example.com = EXAMPLE.COM
+  example.com = EXAMPLE.COM

@@ -1,0 +1,16 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: kafka-mcp
+  annotations:
+    haproxy.router.openshift.io/timeout: 60s
+spec:
+  # host: kafka-mcp.<apps-domain>   # boş bırakılırsa OpenShift kafka-mcp-<namespace>.<apps-domain> üretir
+  to:
+    kind: Service
+    name: kafka-mcp
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

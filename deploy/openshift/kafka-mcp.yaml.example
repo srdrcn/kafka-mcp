@@ -1,0 +1,29 @@
+# ConfigMap kafka-mcp-config içindeki kafka-mcp.yaml şablonu. <...> alanlarını doldurun; gerçek değerleri repoya koymayın.
+port: 8080
+apiKey: <api-key>                # X-Authorization header'ı ile karşılaştırılır; boşsa auth yok
+readOnly: true
+disableDestructive: true
+toolsets: [core, messages, consumers, acl, connect, report, diagnose]
+
+kerberos:
+  krb5Conf: /etc/kafka-mcp/krb5/krb5.conf
+  keytab: /etc/kafka-mcp/keytabs/svc.keytab
+  principal: <principal>@<REALM>
+  serviceName: kafka
+
+clusters:
+  - name: kafka-dev
+    bootstrapServers: kafka-dev.example.com:9092
+    connectUrl: http://kafka-dev.example.com:8083
+  - name: kafka-test
+    bootstrapServers: kafka-test.example.com:9092
+  - name: kafka-uat
+    bootstrapServers: kafka-uat.example.com:9092
+    connectUrl: http://kafka-uat.example.com:8083
+  - name: kafka-sandbox
+    bootstrapServers: kafka-sandbox.example.com:9092
+    connectUrl: http://kafka-sandbox.example.com:8083
+    readOnly: false
+    # schemaRegistryUrl: http://...:8081
+    # properties:                   # Kafka client property override'ları
+    #   client.dns.lookup: use_all_dns_ips

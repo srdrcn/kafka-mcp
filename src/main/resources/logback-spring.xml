@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Loglar düz JSON (satır başına bir olay). HTTP modunda stdout, stdio modunda stderr. -->
+<configuration>
+  <springProperty scope="context" name="LOG_TARGET" source="kafka-mcp.log-target" defaultValue="System.out"/>
+  <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+    <target>${LOG_TARGET}</target>
+    <encoder class="org.springframework.boot.logging.logback.StructuredLogEncoder">
+      <format>logstash</format>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+  <root level="INFO">
+    <appender-ref ref="JSON"/>
+  </root>
+</configuration>

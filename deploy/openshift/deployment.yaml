@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-mcp
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: kafka-mcp
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kafka-mcp
+          image: kafka-mcp
+          imagePullPolicy: Always
+          args: ["--config", "/etc/kafka-mcp/config/kafka-mcp.yaml"]
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Djava.security.krb5.conf=/etc/kafka-mcp/krb5/krb5.conf -Djava.io.tmpdir=/tmp -XX:MaxRAMPercentage=75"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            # Kafka'ya bağlı değil: sadece JVM/uygulama ayakta mı.
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kafka-mcp/config
+              readOnly: true
+            - name: krb5
+              mountPath: /etc/kafka-mcp/krb5
+              readOnly: true
+            - name: keytab
+              mountPath: /etc/kafka-mcp/keytabs
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: kafka-mcp-config
+            items:
+              - key: kafka-mcp.yaml
+                path: kafka-mcp.yaml
+        - name: krb5
+          configMap:
+            name: kafka-mcp-config
+            items:
+              - key: krb5.conf
+                path: krb5.conf
+        - name: keytab
+          secret:
+            secretName: kafka-mcp-keytab
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

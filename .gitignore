@@ -1,0 +1,7 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.keytab
+kafka-mcp.local.yaml
