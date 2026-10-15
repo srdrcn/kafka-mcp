@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
@@ -107,7 +108,7 @@ public final class ConsumerGroups {
 		}
 		List<String> errorMessages = new ArrayList<>();
 		if (errors.ok() && errors.value() != null) {
-			errors.value().forEach(e -> errorMessages.add(KafkaErrors.explain(e)));
+			errors.value().forEach(e -> errorMessages.add(Settled.explain(e)));
 		}
 		if (valid.value().isEmpty() && !errorMessages.isEmpty()) {
 			throw new ToolException(errorMessages.get(0));
@@ -115,11 +116,40 @@ public final class ConsumerGroups {
 		List<GroupSummary> groups = new ArrayList<>();
 		for (GroupListing g : valid.value()) {
 			String protocol = g.protocol() == null || g.protocol().isBlank() ? null : g.protocol();
+			// GroupListing.isSimpleConsumerGroup() broker'ın type bildirmesini (ListGroups v5+, Kafka 3.8+)
+			// şart koşar; eski (ZooKeeper) broker'larda simple grup hiç işaretlenmezdi. Boş protocol type'ı
+			// sadece classic gruplarda olur: type yoksa da simple sayılır.
+			boolean simple = protocol == null && g.type().map(t -> t == GroupType.CLASSIC).orElse(true);
 			groups.add(new GroupSummary(g.groupId(), g.groupState().map(ConsumerGroups::state).orElse(null),
-					g.type().map(ConsumerGroups::type).orElse(null), protocol, g.isSimpleConsumerGroup()));
+					g.type().map(ConsumerGroups::type).orElse(null), protocol, simple));
 		}
 		groups.sort(Comparator.comparing(GroupSummary::groupId));
-		return new GroupList(groups, errorMessages);
+		return new GroupList(completeStates(call, groups, reserveMillis), errorMessages);
+	}
+
+	/**
+	 * Kafka 2.6 öncesi broker'lar (ListGroups v4 öncesi) listede state döndürmez: Empty/Stable filtreleri
+	 * ve consumer_groups_empty bu grupları sessizce kaçırmasın diye state'i (ve type'ı) bilinmeyen gruplar
+	 * tek describeConsumerGroups çağrısıyla tamamlanır. Yanıt gelmeyenlerde state null kalır.
+	 */
+	private static List<GroupSummary> completeStates(ToolCall call, List<GroupSummary> groups, long reserveMillis) {
+		List<String> unknown = groups.stream().filter(g -> g.state() == null).map(GroupSummary::groupId).toList();
+		if (unknown.isEmpty()) {
+			return groups;
+		}
+		Map<String, Settled<ConsumerGroupDescription>> described = describe(call, unknown, reserveMillis);
+		List<GroupSummary> out = new ArrayList<>(groups.size());
+		for (GroupSummary g : groups) {
+			Settled<ConsumerGroupDescription> s = g.state() == null ? described.get(g.groupId()) : null;
+			if (s == null || !s.ok()) {
+				out.add(g);
+				continue;
+			}
+			ConsumerGroupDescription d = s.value();
+			String type = g.type() != null ? g.type() : type(d.type());
+			out.add(new GroupSummary(g.groupId(), state(d.groupState()), type, g.protocol(), g.simple()));
+		}
+		return out;
 	}
 
 	/**
@@ -261,10 +291,47 @@ public final class ConsumerGroups {
 			}
 		}
 		int omitted = total - assignment.values().stream().mapToInt(List::size).sum();
-		return Results.map("memberId", m.consumerId(), "groupInstanceId", m.groupInstanceId().orElse(null),
-				"clientId", m.clientId(), "host", m.host(), "assignment",
+		Map<String, Object> out = Results.map("memberId", m.consumerId(), "groupInstanceId",
+				m.groupInstanceId().orElse(null), "clientId", m.clientId(), "host", m.host(), "assignment",
 				assignment.isEmpty() && omitted > 0 ? null : assignment, "assignedPartitions",
 				omitted > 0 ? total : null, "assignmentPartitionsOmitted", omitted > 0 ? omitted : null);
+		out.putAll(consumerProtocolFields(m));
+		return out;
+	}
+
+	/**
+	 * KIP-848 (consumer tipi, sadece KRaft) üye alanları: memberEpoch; Reconciling sırasında hedef atamaya
+	 * henüz geçilmediyse alınacak (pendingPartitions) ve bırakılacak (revokingPartitions) partition sayıları;
+	 * consumer tipi gruba hâlâ classic protokolle bağlı üye (online geçiş) için classicMember. Classic
+	 * gruplarda (ZooKeeper'da hep) bu alanlar yoktur; boş map döner.
+	 */
+	public static Map<String, Object> consumerProtocolFields(MemberDescription m) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		m.memberEpoch().ifPresent(e -> out.put("memberEpoch", e));
+		if (m.upgraded().isPresent() && !m.upgraded().get()) {
+			out.put("classicMember", Boolean.TRUE);
+		}
+		if (m.targetAssignment().isPresent()) {
+			Set<TopicPartition> current = m.assignment() == null ? Set.of() : m.assignment().topicPartitions();
+			Set<TopicPartition> target = m.targetAssignment().get().topicPartitions();
+			long pending = target.stream().filter(tp -> !current.contains(tp)).count();
+			long revoking = current.stream().filter(tp -> !target.contains(tp)).count();
+			if (pending > 0) {
+				out.put("pendingPartitions", pending);
+			}
+			if (revoking > 0) {
+				out.put("revokingPartitions", revoking);
+			}
+		}
+		return out;
+	}
+
+	/** KIP-848 grup epoch'ları (groupEpoch, targetAssignmentEpoch); classic gruplarda boş map. */
+	public static Map<String, Object> consumerProtocolFields(ConsumerGroupDescription d) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		d.groupEpoch().ifPresent(e -> out.put("groupEpoch", e));
+		d.targetAssignmentEpoch().ifPresent(e -> out.put("targetAssignmentEpoch", e));
+		return out;
 	}
 
 }

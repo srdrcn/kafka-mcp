@@ -70,7 +70,9 @@ public class GroupTools {
 		return List.of(
 				ToolSpec.read("consumer_groups_list", "Consumer group'ları listeler (groupId, state, type, protocol)")
 					.listParams()
-					.param("state", P.enumOf("Sadece bu durumdaki gruplar", STATES))
+					.param("state", P.enumOf(
+							"Sadece bu durumdaki gruplar (Assigning/Reconciling sadece KRaft'taki consumer tipi gruplarda)",
+							STATES))
 					.handler(this::list),
 				ToolSpec
 					.read("consumer_groups_get",
@@ -181,15 +183,18 @@ public class GroupTools {
 				withoutEnd > 0 ? withoutEnd : null);
 		String assignor = d.partitionAssignor() == null || d.partitionAssignor().isBlank() ? null
 				: d.partitionAssignor();
-		return Results.map("groupId", d.groupId(), "state", g.state(), "type", ConsumerGroups.type(d.type()),
-				"simple", d.isSimpleConsumerGroup() ? Boolean.TRUE : null, "coordinator",
-				ConsumerGroups.node(d.coordinator()), "partitionAssignor", assignor, "memberCount", members.size(),
-				"members", members, "assignmentPartitionsOmitted", assignmentOmitted > 0 ? assignmentOmitted : null,
-				"offsets", topics, "totals", totals, "partitionRowsOmitted", omitted > 0 ? omitted : null,
+		Map<String, Object> out = Results.map("groupId", d.groupId(), "state", g.state(), "type",
+				ConsumerGroups.type(d.type()), "simple", d.isSimpleConsumerGroup() ? Boolean.TRUE : null,
+				"coordinator", ConsumerGroups.node(d.coordinator()), "partitionAssignor", assignor);
+		// KIP-848 consumer tipi gruplar (sadece KRaft): groupEpoch, targetAssignmentEpoch.
+		out.putAll(ConsumerGroups.consumerProtocolFields(d));
+		out.putAll(Results.map("memberCount", members.size(), "members", members, "assignmentPartitionsOmitted",
+				assignmentOmitted > 0 ? assignmentOmitted : null, "offsets", topics, "totals", totals, "partitionRowsOmitted", omitted > 0 ? omitted : null,
 				"topicsOmitted", topicsOmitted > 0 ? topicsOmitted : null, "partial",
 				withoutEnd > 0 ? Boolean.TRUE : null, "note",
 				withoutCommit > 0 ? "noCommit: atanmış ama commit edilmiş offset'i olmayan partition (lag hesaplanmadı)"
-						: null);
+						: null));
+		return out;
 	}
 
 	/** Sıralı map'in ilk max girdisi. */

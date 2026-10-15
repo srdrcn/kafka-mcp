@@ -22,7 +22,7 @@
       },
       "state" : {
         "type" : "string",
-        "description" : "Sadece bu durumdaki gruplar",
+        "description" : "Sadece bu durumdaki gruplar (Assigning/Reconciling sadece KRaft'taki consumer tipi gruplarda)",
         "enum" : [ "Stable", "Empty", "PreparingRebalance", "CompletingRebalance", "Dead", "Assigning", "Reconciling", "Unknown" ]
       }
     },

@@ -27,9 +27,12 @@ import org.apache.kafka.common.GroupState;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.errors.FencedInstanceIdException;
+import org.apache.kafka.common.errors.FencedMemberEpochException;
 import org.apache.kafka.common.errors.GroupNotEmptyException;
 import org.apache.kafka.common.errors.GroupSubscribedToTopicException;
+import org.apache.kafka.common.errors.IllegalGenerationException;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
+import org.apache.kafka.common.errors.StaleMemberEpochException;
 import org.apache.kafka.common.errors.UnknownMemberIdException;
 import org.springframework.stereotype.Component;
 
@@ -271,12 +274,15 @@ public class OffsetTools {
 
 	private static String resetError(String group, Throwable e) {
 		Throwable root = KafkaErrors.unwrap(e);
+		// classic: UnknownMemberId/RebalanceInProgress/IllegalGeneration/FencedInstanceId; KIP-848 consumer tipi
+		// gruplar (KRaft): StaleMemberEpoch/FencedMemberEpoch.
 		if (root instanceof UnknownMemberIdException || root instanceof RebalanceInProgressException
-				|| root instanceof FencedInstanceIdException) {
-			return "'" + group + "' grubuna arada aktif üye katıldı; grup Empty olmalı (" + KafkaErrors.explain(root)
+				|| root instanceof FencedInstanceIdException || root instanceof IllegalGenerationException
+				|| root instanceof StaleMemberEpochException || root instanceof FencedMemberEpochException) {
+			return "'" + group + "' grubuna arada aktif üye katıldı; grup Empty olmalı (" + Settled.explain(root)
 					+ ")";
 		}
-		return KafkaErrors.explain(root);
+		return Settled.explain(root);
 	}
 
 	static Instant parseTimestamp(String value) {
@@ -349,6 +355,11 @@ public class OffsetTools {
 			}
 		}
 		if (tps.isEmpty()) {
+			// ZooKeeper (classic coordinator) olmayan grubun offset sorgusunda hata değil boş sonuç döner:
+			// "commit yok" yerine KRaft'taki gibi "grup bulunamadı" denmesi için grup varlığı kontrol edilir.
+			if (committed.isEmpty() && !groupExists(call, group)) {
+				throw ConsumerGroups.notFoundError(group);
+			}
 			throw new ToolException("'" + group + "' grubunun '" + topic + "' topic'inde"
 					+ (requested.isEmpty() ? "" : " istenen partition'larda " + requested)
 					+ " commit edilmiş offset'i yok");
@@ -384,13 +395,28 @@ public class OffsetTools {
 				"partitions", new ArrayList<>(rows.values()));
 	}
 
+	/**
+	 * Grup var mı: KRaft (4.x) olmayan grup için GroupIdNotFound, ZooKeeper/eski broker'lar Dead + üyesiz
+	 * döner. Describe başarısızsa (yetki, yanıt yok) var sayılır: yanlışlıkla "bulunamadı" denmez.
+	 */
+	private static boolean groupExists(ToolCall call, String group) {
+		Settled<ConsumerGroupDescription> s = ConsumerGroups.describe(call, List.of(group)).get(group);
+		if (s == null) {
+			return true;
+		}
+		if (!s.ok()) {
+			return !ConsumerGroups.notFound(s.error());
+		}
+		return !ConsumerGroups.deadOrUnknown(s.value());
+	}
+
 	private static String deleteOffsetsError(String group, String topic, Throwable e) {
 		Throwable root = KafkaErrors.unwrap(e);
 		if (root instanceof GroupSubscribedToTopicException) {
 			return "'" + group + "' grubu '" + topic + "' topic'ine hâlâ abone (aktif üyeler bu topic'i tüketiyor); "
 					+ "Kafka silmeyi reddetti. Önce consumer'ları durdurun";
 		}
-		return KafkaErrors.explain(root);
+		return Settled.explain(root);
 	}
 
 	Object deleteGroup(ToolCall call) {
@@ -409,7 +435,7 @@ public class OffsetTools {
 				throw new ToolException("'" + group + "' grubu silinemedi: grup boş değil, aktif üyeleri var" + detail
 						+ ". Önce consumer'ları durdurun; grup Empty olunca tekrar deneyin.", root);
 			}
-			throw new ToolException("'" + group + "' grubu silinemedi: " + KafkaErrors.explain(root), root);
+			throw new ToolException("'" + group + "' grubu silinemedi: " + Settled.explain(root), root);
 		}
 		Map<String, Object> offsets = null;
 		if (committed != null && committed.error() == null) {
