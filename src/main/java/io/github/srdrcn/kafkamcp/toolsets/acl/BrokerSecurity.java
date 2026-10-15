@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -15,6 +16,7 @@ import org.apache.kafka.common.Node;
 import org.apache.kafka.common.config.ConfigResource;
 
 import io.github.srdrcn.kafkamcp.kafka.ClusterMeta;
+import io.github.srdrcn.kafkamcp.kafka.KafkaVersions;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 
@@ -24,7 +26,10 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
  * Kafka bunları sensitive (değersiz) döndürür (ölçülen: ZooKeeper 3.9 AclAuthorizer ve KRaft 4.1
  * StandardAuthorizer); bu durumda değerleri "gizli" kabul edilir ve çağıran not düşer. Metadata modu
  * (KRaft/ZooKeeper) aynı config'lerden çıkarılır: {@code process.roles} doluysa KRaft, değilse
- * {@code zookeeper.connect} doluysa ZooKeeper.
+ * {@code zookeeper.connect} doluysa ZooKeeper. {@code sasl.mechanism.inter.broker.protocol} ve
+ * {@code sasl.mechanism.controller.protocol} listener SASL kullanmasa da varsayılanla (GSSAPI) döner; bu
+ * yüzden ilgili listener'ın security protocol'ü ({@code listener.security.protocol.map}) gösterilir ve
+ * mekanizma sadece SASL_* listener'da gösterilir.
  */
 public final class BrokerSecurity {
 
@@ -34,10 +39,26 @@ public final class BrokerSecurity {
 
 	public static final String AUTHORIZER = "authorizer.class.name";
 
+	public static final String INTER_BROKER_SASL_MECHANISM = "sasl.mechanism.inter.broker.protocol";
+
+	public static final String CONTROLLER_SASL_MECHANISM = "sasl.mechanism.controller.protocol";
+
+	/** ZooKeeper broker'ında inter.broker.protocol.version (ör. 3.9-IV0); KRaft 4.x'te yok. */
+	public static final String INTER_BROKER_PROTOCOL_VERSION = "inter.broker.protocol.version";
+
+	/** render(): broker'lar arası listener'ın security protocol'ü (ör. PLAINTEXT, SASL_SSL). */
+	public static final String INTER_BROKER_SECURITY_PROTOCOL = "interBrokerSecurityProtocol";
+
+	/** render(): KRaft broker'ının controller'lara bağlandığı listener'ın security protocol'ü. */
+	public static final String CONTROLLER_SECURITY_PROTOCOL = "controllerListenerSecurityProtocol";
+
+	/** listener.security.protocol.map'te yoksa listener adı protokol adının kendisi olabilir. */
+	private static final List<String> SECURITY_PROTOCOLS = List.of("PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL");
+
 	/** security_summary'de gösterilen anahtarlar. */
 	public static final List<String> KEYS = List.of("listener.security.protocol.map", "listeners",
-			"inter.broker.listener.name", "sasl.enabled.mechanisms", "sasl.mechanism.inter.broker.protocol",
-			AUTHORIZER, SUPER_USERS, ALLOW_EVERYONE, "ssl.client.auth");
+			"inter.broker.listener.name", "sasl.enabled.mechanisms", INTER_BROKER_SASL_MECHANISM, AUTHORIZER,
+			SUPER_USERS, ALLOW_EVERYONE, "ssl.client.auth");
 
 	public static final String HIDDEN = "gizli (broker sensitive döndürdü)";
 
@@ -53,10 +74,11 @@ public final class BrokerSecurity {
 	/**
 	 * Sadece KRaft broker'larında anlamlı güvenlik anahtarları (broker→controller bağlantısı). ZooKeeper 3.x
 	 * broker'ları bunları varsayılan değerleriyle (ör. sasl.mechanism.controller.protocol=GSSAPI) döndürür,
-	 * bu yüzden mod bilinmeden gösterilmez.
+	 * bu yüzden mod bilinmeden gösterilmez. sasl.mechanism.controller.protocol KRaft'ta da sadece controller
+	 * listener'ı SASL_* ise gösterilir.
 	 */
 	public static final List<String> KRAFT_KEYS = List.of(PROCESS_ROLES, "controller.listener.names",
-			"sasl.mechanism.controller.protocol");
+			CONTROLLER_SASL_MECHANISM);
 
 	/**
 	 * Sadece ZooKeeper broker'larında anlamlı güvenlik anahtarları (ACL ve SCRAM bilgileri ZooKeeper'da
@@ -223,6 +245,101 @@ public final class BrokerSecurity {
 		return out;
 	}
 
+	/**
+	 * Listener adının security protocol'ü: listener.security.protocol.map'teki karşılığı; map'te yoksa ad bir
+	 * protokol adıysa (PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL) kendisi; bilinmiyorsa null.
+	 */
+	public String securityProtocolOf(String listenerName) {
+		if (listenerName == null || listenerName.isBlank()) {
+			return null;
+		}
+		String name = listenerName.trim();
+		String map = value("listener.security.protocol.map");
+		if (map != null) {
+			for (String pair : map.split(",")) {
+				int i = pair.indexOf(':');
+				if (i > 0 && pair.substring(0, i).trim().equalsIgnoreCase(name)) {
+					String protocol = pair.substring(i + 1).trim().toUpperCase(Locale.ROOT);
+					return protocol.isEmpty() ? null : protocol;
+				}
+			}
+		}
+		String upper = name.toUpperCase(Locale.ROOT);
+		return SECURITY_PROTOCOLS.contains(upper) ? upper : null;
+	}
+
+	/**
+	 * Broker'lar arası bağlantının security protocol'ü: inter.broker.listener.name tanımlıysa onun protokolü,
+	 * değilse security.inter.broker.protocol; bilinmiyorsa null.
+	 */
+	public String interBrokerSecurityProtocol() {
+		if (error != null) {
+			return null;
+		}
+		String listener = value("inter.broker.listener.name");
+		if (listener != null) {
+			return securityProtocolOf(listener);
+		}
+		String protocol = value("security.inter.broker.protocol");
+		return protocol == null ? null : protocol.trim().toUpperCase(Locale.ROOT);
+	}
+
+	/** KRaft broker'ının controller'lara bağlandığı listener (controller.listener.names'in ilki); KRaft değilse null. */
+	public String controllerListener() {
+		if (!ClusterMeta.KRAFT.equals(mode())) {
+			return null;
+		}
+		String v = value("controller.listener.names");
+		if (v == null) {
+			return null;
+		}
+		String first = v.split(",")[0].trim();
+		return first.isEmpty() ? null : first;
+	}
+
+	/** KRaft: controller listener'ının security protocol'ü; KRaft değilse ya da bilinmiyorsa null. */
+	public String controllerSecurityProtocol() {
+		return securityProtocolOf(controllerListener());
+	}
+
+	/** SASL_PLAINTEXT ya da SASL_SSL mi? */
+	public static boolean isSasl(String securityProtocol) {
+		return securityProtocol != null && securityProtocol.startsWith("SASL_");
+	}
+
+	/**
+	 * Transactional olmayan idempotent producer'ın (3.0+ client varsayılanı) CLUSTER IDEMPOTENT_WRITE'a
+	 * ihtiyacı var mı? Kafka 2.8'den (KIP-679) beri herhangi bir topic'te WRITE yeterli. true: ZooKeeper
+	 * broker'ı ve inter.broker.protocol.version 2.8'den eski ya da okunamadı (IBP yazılım sürümünden düşük
+	 * sabitlenebildiği için ihtiyatlı); false: KRaft ya da IBP 2.8+; null: mod bilinmiyor.
+	 */
+	public Boolean idempotentWriteRequired() {
+		String mode = mode();
+		if (ClusterMeta.KRAFT.equals(mode)) {
+			return false;
+		}
+		if (!ClusterMeta.ZOOKEEPER.equals(mode)) {
+			return null;
+		}
+		return !atLeast(KafkaVersions.releaseOf(value(INTER_BROKER_PROTOCOL_VERSION)), 2, 8);
+	}
+
+	/** "3.9" gibi sürüm major.minor'dan büyük ya da eşit mi? Okunamazsa false. */
+	static boolean atLeast(String release, int major, int minor) {
+		if (release == null) {
+			return false;
+		}
+		String[] parts = release.split("\\.");
+		try {
+			int ma = Integer.parseInt(parts[0].trim());
+			int mi = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : 0;
+			return ma > major || (ma == major && mi >= minor);
+		}
+		catch (NumberFormatException e) {
+			return false;
+		}
+	}
+
 	/** "User:a;User:b" → {User:a, User:b}. */
 	public static Set<String> parseSuperUsers(String value) {
 		Set<String> out = new LinkedHashSet<>();
@@ -275,23 +392,47 @@ public final class BrokerSecurity {
 		return new SuperUsers(users, true, null);
 	}
 
-	/** allow.everyone.if.no.acl.found için kullanılacak değer ve (gizliyse) notu. */
-	public record AllowEveryone(boolean value, String note) {
+	/**
+	 * allow.everyone.if.no.acl.found için kullanılacak değer ve (gizliyse) notu. {@code assumed=true}: broker
+	 * değeri gizli/okunamadı ve parametre verilmedi, Kafka varsayılanı false kabul edildi.
+	 */
+	public record AllowEveryone(boolean value, String note, boolean assumed) {
+
+		public AllowEveryone(boolean value, String note) {
+			this(value, note, false);
+		}
+
 	}
 
 	public AllowEveryone allowEveryone() {
+		return allowEveryone(null);
+	}
+
+	/**
+	 * Broker değeri okunabiliyorsa o; gizliyse/okunamadıysa çağıranın verdiği değer; o da yoksa false
+	 * (assumed).
+	 */
+	public AllowEveryone allowEveryone(Boolean provided) {
 		Boolean v = allowEveryoneIfNoAclFound();
-		if (v == null) {
-			String why = error != null ? "okunamadı" : "broker'da gizli (sensitive) döndü";
-			return new AllowEveryone(false, "allow.everyone.if.no.acl.found " + why + "; Kafka varsayılanı false kabul "
-					+ "edildi. Broker'da true ise hiç ACL'i olmayan kaynaklar herkese açıktır.");
+		if (v != null) {
+			return new AllowEveryone(v, provided != null && !provided.equals(v)
+					? "allowEveryoneIfNoAclFound parametresi yok sayıldı: broker değeri " + v + " kullanıldı" : null);
 		}
-		return new AllowEveryone(v, null);
+		String why = error != null ? "okunamadı" : "broker'da gizli (sensitive) döndü";
+		if (provided != null) {
+			return new AllowEveryone(provided, "allow.everyone.if.no.acl.found " + why
+					+ "; allowEveryoneIfNoAclFound parametresindeki değer (" + provided + ") kullanıldı.");
+		}
+		return new AllowEveryone(false, "allow.everyone.if.no.acl.found " + why + "; Kafka varsayılanı false kabul "
+				+ "edildi. Broker'da true ise hiç ACL'i olmayan kaynaklar herkese açıktır; biliyorsanız "
+				+ "allowEveryoneIfNoAclFound parametresiyle verin.", true);
 	}
 
 	/**
 	 * security_summary için seçili config'ler (gizliler "gizli ..." olarak): {@link #KEYS} ve moda özgü
 	 * {@link #KRAFT_KEYS} / {@link #ZOOKEEPER_KEYS}; mod bilinmiyorsa moda özgü anahtarlar gösterilmez.
+	 * Broker'lar arası ve (KRaft) controller listener'ının security protocol'ü eklenir; SASL mekanizmaları
+	 * sadece ilgili listener SASL_* ise gösterilir.
 	 */
 	public Map<String, Object> render() {
 		Map<String, Object> m = new LinkedHashMap<>();
@@ -310,12 +451,31 @@ public final class BrokerSecurity {
 				}
 				continue;
 			}
+			// SASL mekanizması listener SASL değilse varsayılan (GSSAPI) döner: protokolü göster, mekanizmayı gizle
+			String protocol = null;
+			if (INTER_BROKER_SASL_MECHANISM.equals(k)) {
+				protocol = interBrokerSecurityProtocol();
+				putIfNotNull(m, INTER_BROKER_SECURITY_PROTOCOL, protocol);
+			}
+			else if (CONTROLLER_SASL_MECHANISM.equals(k)) {
+				protocol = controllerSecurityProtocol();
+				putIfNotNull(m, CONTROLLER_SECURITY_PROTOCOL, protocol);
+			}
+			if (protocol != null && !isSasl(protocol)) {
+				continue;
+			}
 			String v = display(k);
 			if (v != null) {
 				m.put(k, v);
 			}
 		}
 		return m;
+	}
+
+	private static void putIfNotNull(Map<String, Object> m, String key, Object value) {
+		if (value != null) {
+			m.put(key, value);
+		}
 	}
 
 }

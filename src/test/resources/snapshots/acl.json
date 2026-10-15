@@ -98,6 +98,10 @@
         "items" : {
           "type" : "string"
         }
+      },
+      "allowEveryoneIfNoAclFound" : {
+        "type" : "boolean",
+        "description" : "Broker'ın allow.everyone.if.no.acl.found değeri; broker gizli döndürdüğünde kullanılır (verilmezse false varsayılır)"
       }
     },
     "required" : [ "cluster", "principal", "operation", "resourceType", "resourceName" ]
@@ -132,6 +136,10 @@
         "items" : {
           "type" : "string"
         }
+      },
+      "allowEveryoneIfNoAclFound" : {
+        "type" : "boolean",
+        "description" : "Broker'ın allow.everyone.if.no.acl.found değeri; broker gizli döndürdüğünde kullanılır (verilmezse false varsayılır)"
       }
     },
     "required" : [ "cluster", "topic" ]

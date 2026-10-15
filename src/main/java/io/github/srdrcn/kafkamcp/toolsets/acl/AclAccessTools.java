@@ -39,6 +39,11 @@ public class AclAccessTools {
 	private static final String SUPER_USERS_DESC = "Bilinen süper kullanıcılar (ör. User:admin); broker super.users'ı "
 			+ "gizli döndürdüğünde kullanılır";
 
+	private static final String ALLOW_EVERYONE_PARAM = "allowEveryoneIfNoAclFound";
+
+	private static final String ALLOW_EVERYONE_DESC = "Broker'ın allow.everyone.if.no.acl.found değeri; broker "
+			+ "gizli döndürdüğünde kullanılır (verilmezse false varsayılır)";
+
 	public List<ToolSpec> tools() {
 		return List.of(ToolSpec
 			.read("acls_explain",
@@ -49,6 +54,7 @@ public class AclAccessTools {
 			.required("resourceName", P.string("Kaynak adı (CLUSTER için kafka-cluster)"))
 			.param("host", P.string("İstemci IP'si (varsayılan *: sadece host'u * olan ACL'ler eşleşir)"))
 			.param("superUsers", P.stringArray(SUPER_USERS_DESC))
+			.param(ALLOW_EVERYONE_PARAM, P.bool(ALLOW_EVERYONE_DESC))
 			.handler(this::explain),
 				ToolSpec
 					.read("acls_who_can_access_topic",
@@ -56,6 +62,7 @@ public class AclAccessTools {
 					.required("topic", P.string("Topic adı"))
 					.param("operation", Acls.operationParam("İşlem (varsayılan READ ve WRITE)", false))
 					.param("superUsers", P.stringArray(SUPER_USERS_DESC))
+					.param(ALLOW_EVERYONE_PARAM, P.bool(ALLOW_EVERYONE_DESC))
 					.handler(this::whoCanAccessTopic),
 				ToolSpec
 					.read("acls_principal_permissions",
@@ -86,9 +93,14 @@ public class AclAccessTools {
 			return Results.map("decision", "ALLOW", "reason", Acls.NO_AUTHORIZER_NOTE, "authorizerEnabled", false);
 		}
 		BrokerSecurity.SuperUsers superUsers = broker.superUsers(call.strings("superUsers"));
-		BrokerSecurity.AllowEveryone allowEveryone = broker.allowEveryone();
+		BrokerSecurity.AllowEveryone allowEveryone = broker.allowEveryone(allowEveryoneParam(call));
 		AclEvaluator.Decision d = new AclEvaluator(bindings, superUsers.users(), allowEveryone.value())
 			.authorize(principal, operation, type, name, host);
+		String reason = d.reason();
+		if (allowEveryone.assumed() && d.noAclOnResource() && !d.superUser()) {
+			reason = "Kaynakta hiç ACL yok; allow.everyone.if.no.acl.found bilinmiyor, false varsayıldı → DENY "
+					+ "(broker'da true ise ALLOW)";
+		}
 
 		List<String> notes = new ArrayList<>();
 		if (superUsers.note() != null && !d.superUser()) {
@@ -106,10 +118,16 @@ public class AclAccessTools {
 		if (type == ResourceType.CLUSTER && !Acls.CLUSTER_NAME.equals(name)) {
 			notes.add("CLUSTER kaynağının adı her zaman " + Acls.CLUSTER_NAME + " olmalı");
 		}
+		if (operation == AclOperation.IDEMPOTENT_WRITE && type == ResourceType.CLUSTER && !d.allowed()
+				&& !Boolean.TRUE.equals(broker.idempotentWriteRequired())) {
+			notes.add("Kafka 2.8+ broker'larda (KRaft dahil) idempotent producer IDEMPOTENT_WRITE olmadan da çalışır: "
+					+ "herhangi bir topic'te WRITE yetkisi yeterli (KIP-679); bu karar sadece IDEMPOTENT_WRITE ACL'ini "
+					+ "değerlendirir");
+		}
 		if (broker.customAuthorizerNote() != null) {
 			notes.add(broker.customAuthorizerNote());
 		}
-		return Results.map("decision", d.decision(), "reason", d.reason(), "principal", principal, "operation",
+		return Results.map("decision", d.decision(), "reason", reason, "principal", principal, "operation",
 				operation.name(), "resourceType", type.name(), "resourceName", name, "host", host, "authorizer",
 				broker.authorizer(), "superUser", d.superUser(), "allowEveryoneIfNoAclFound", allowEveryone.value(),
 				"resourceAclCount", d.resourceAclCount(), "matchedAllow", Acls.render(d.matchedAllow()),
@@ -142,7 +160,7 @@ public class AclAccessTools {
 			exists = Acls.causedBy(e, UnknownTopicOrPartitionException.class) ? false : null;
 		}
 		BrokerSecurity.SuperUsers superUsers = broker.superUsers(call.strings("superUsers"));
-		BrokerSecurity.AllowEveryone allowEveryone = broker.allowEveryone();
+		BrokerSecurity.AllowEveryone allowEveryone = broker.allowEveryone(allowEveryoneParam(call));
 		// ACL'ler süper kullanıcılar olmadan değerlendirilir; süper kullanıcılar ayrıca işaretlenir.
 		AclEvaluator evaluator = new AclEvaluator(bindings, Set.of(), allowEveryone.value());
 		Set<String> principals = new TreeSet<>();
@@ -195,9 +213,12 @@ public class AclAccessTools {
 
 		List<String> notes = new ArrayList<>();
 		if (bindings.isEmpty()) {
-			notes.add(allowEveryone.value()
-					? "Topic'e uygulanan hiç ACL yok ve allow.everyone.if.no.acl.found=true: herkes erişebilir"
-					: "Topic'e uygulanan hiç ACL yok: süper kullanıcılar dışında kimse erişemez (allow.everyone.if.no.acl.found=false)");
+			notes.add(allowEveryone.assumed()
+					? "Topic'e uygulanan hiç ACL yok; allow.everyone.if.no.acl.found bilinmiyor (false varsayıldı): "
+							+ "false ise süper kullanıcılar dışında kimse erişemez, true ise herkes erişebilir"
+					: allowEveryone.value()
+							? "Topic'e uygulanan hiç ACL yok ve allow.everyone.if.no.acl.found=true: herkes erişebilir"
+							: "Topic'e uygulanan hiç ACL yok: süper kullanıcılar dışında kimse erişemez (allow.everyone.if.no.acl.found=false)");
 			if (allowEveryone.note() != null) {
 				notes.add(allowEveryone.note());
 			}
@@ -314,6 +335,11 @@ public class AclAccessTools {
 				"notes", notes.isEmpty() ? null : notes);
 		out.putAll(Results.page("resources", rows, call.limit()));
 		return out;
+	}
+
+	/** allowEveryoneIfNoAclFound parametresi; verilmediyse null. */
+	private static Boolean allowEveryoneParam(ToolCall call) {
+		return call.has(ALLOW_EVERYONE_PARAM) ? call.bool(ALLOW_EVERYONE_PARAM, false) : null;
 	}
 
 	private static List<String> names(Set<AclOperation> ops) {

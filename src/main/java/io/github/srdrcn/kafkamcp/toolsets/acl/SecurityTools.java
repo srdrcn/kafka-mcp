@@ -44,8 +44,9 @@ import io.github.srdrcn.kafkamcp.mcp.ToolSpec;
 @Component
 public class SecurityTools {
 
-	/** describeUserScramCredentials (KIP-554) gereksinimi. */
-	static final String SCRAM_REQUIREMENT = "SCRAM kullanıcılarını listelemek Kafka 2.7+ gerektirir";
+	/** describeUserScramCredentials gereksinimi: ZooKeeper'da KIP-554 (2.7), KRaft'ta KIP-900 (3.5). */
+	static final String SCRAM_REQUIREMENT = "SCRAM kullanıcılarını listelemek ZooKeeper'da Kafka 2.7+, "
+			+ "KRaft'ta 3.5+ (metadata.version 3.5-IV2+) gerektirir";
 
 	/** describeClientQuotas (KIP-546) gereksinimi. */
 	static final String QUOTA_REQUIREMENT = "kotaları Admin API ile okumak Kafka 2.6+ gerektirir";
@@ -137,7 +138,8 @@ public class SecurityTools {
 	/** Delegation token kapalı/desteklenmiyor hataları için Türkçe not; başka hata ise null. */
 	public static String tokenNote(Throwable e) {
 		if (Acls.causedBy(e, DelegationTokenDisabledException.class)) {
-			return "Delegation token'lar bu cluster'da kapalı (broker'da delegation.token.secret.key tanımlı değil)";
+			return "Delegation token'lar bu cluster'da kapalı (broker'da delegation.token.secret.key tanımlı değil; "
+					+ "Kafka 3.0 öncesi ZooKeeper broker'larında delegation.token.master.key)";
 		}
 		if (Acls.causedBy(e, UnsupportedByAuthenticationException.class)) {
 			return "Delegation token istekleri bu bağlantı tipinde yapılamaz (PLAINTEXT, tek yönlü SSL ya da token ile kimlik doğrulama)";
@@ -315,6 +317,13 @@ public class SecurityTools {
 			notes.add("ZooKeeper modu: ACL'ler ve SCRAM kimlik bilgileri ZooKeeper'da saklanıyor ve "
 					+ "zookeeper.set.acl=false; ZooKeeper'a ağ erişimi olan herkes bunları okuyup değiştirebilir "
 					+ "(ZooKeeper erişimini kısıtlayın ya da ZooKeeper SASL/mTLS ile zookeeper.set.acl=true kullanın)");
+		}
+		String controllerProtocol = broker.controllerSecurityProtocol();
+		if ("PLAINTEXT".equals(controllerProtocol)) {
+			notes.add("KRaft modu: controller listener'ı (" + broker.controllerListener() + ") PLAINTEXT; ACL, SCRAM "
+					+ "ve delegation token metadata'sı broker ile controller'lar arasında şifresiz ve kimlik doğrulamasız "
+					+ "taşınıyor (controller'lar bağlananı ANONYMOUS görür). Controller portlarına ağ erişimini "
+					+ "kısıtlayın ya da SSL/SASL_SSL kullanın");
 		}
 		if (!notes.isEmpty()) {
 			out.put("notes", notes);

@@ -214,6 +214,10 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zb.has("controller.listener.names")).isFalse();
 		assertThat(zb.has("sasl.mechanism.controller.protocol")).isFalse();
 		assertThat(zb.get("listeners").toString()).contains("SASL", "INTERNAL").doesNotContain("CONTROLLER");
+		// INTERNAL listener'ı PLAINTEXT: varsayılan sasl.mechanism.inter.broker.protocol=GSSAPI gösterilmez
+		assertThat(zb.get("interBrokerSecurityProtocol").asText()).isEqualTo("PLAINTEXT");
+		assertThat(zb.has("sasl.mechanism.inter.broker.protocol")).isFalse();
+		assertThat(zb.has("controllerListenerSecurityProtocol")).isFalse();
 		assertThat(zb.get("super.users").asText()).contains("gizli");
 		assertThat(zb.get("allow.everyone.if.no.acl.found").asText()).contains("gizli");
 		assertThat(zk.at("/acls/total").isInt()).isTrue();
@@ -223,7 +227,8 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 		assertThat(zk.get("notes").toString()).contains("zookeeper.set.acl=false")
 			.contains("super.users")
 			.doesNotContain("4.x")
-			.doesNotContain("yerleşik değil");
+			.doesNotContain("yerleşik değil")
+			.doesNotContain("controller listener");
 
 		JsonNode kraft = ok("security_summary", args());
 		assertThat(kraft.get("mode").asText()).isEqualTo("KRaft");
@@ -232,11 +237,17 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 			.isEqualTo("org.apache.kafka.metadata.authorizer.StandardAuthorizer");
 		assertThat(kb.get("process.roles").asText()).isEqualTo("broker,controller");
 		assertThat(kb.get("controller.listener.names").asText()).isEqualTo("CONTROLLER");
-		assertThat(kb.get("sasl.mechanism.controller.protocol").asText()).isNotBlank();
+		// CONTROLLER:PLAINTEXT — broker'ın döndürdüğü varsayılan GSSAPI Kerberos kullanılıyormuş gibi gösterilmez
+		assertThat(kb.get("controllerListenerSecurityProtocol").asText()).isEqualTo("PLAINTEXT");
+		assertThat(kb.has("sasl.mechanism.controller.protocol")).isFalse();
+		assertThat(kb.get("interBrokerSecurityProtocol").asText()).isEqualTo("PLAINTEXT");
+		assertThat(kb.has("sasl.mechanism.inter.broker.protocol")).isFalse();
 		assertThat(kb.has("zookeeper.set.acl")).isFalse();
 		assertThat(kb.has("zookeeper.ssl.client.enable")).isFalse();
 		assertThat(kb.get("listeners").toString()).contains("CONTROLLER");
-		assertThat(kraft.get("notes").toString()).doesNotContain("zookeeper").contains("super.users");
+		assertThat(kraft.get("notes").toString()).doesNotContain("zookeeper")
+			.contains("super.users")
+			.contains("controller listener'ı (CONTROLLER) PLAINTEXT");
 		// readOnly cluster'ı da aynı KRaft
 		assertThat(ok("security_summary", args("cluster", TestConfigs.READ_ONLY_CLUSTER)).get("mode").asText())
 			.isEqualTo("KRaft");
@@ -260,7 +271,9 @@ class AclSecurityMixedClusterTest extends MixedClusterIntegrationTest {
 
 		JsonNode scram = JSON.valueToTree(securityTools.scramUsers(call(oldClients, deadline)));
 		assertThat(scram.get("supported").asBoolean()).isFalse();
-		assertThat(scram.get("note").asText()).contains("Broker bu işlemi desteklemiyor (sürüm)").contains("2.7");
+		assertThat(scram.get("note").asText()).contains("Broker bu işlemi desteklemiyor (sürüm)")
+			.contains("ZooKeeper'da Kafka 2.7+")
+			.contains("KRaft'ta 3.5+");
 
 		JsonNode quotas = JSON.valueToTree(quotaTools.list(call(oldClients, deadline)));
 		assertThat(quotas.get("supported").asBoolean()).isFalse();
