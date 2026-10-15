@@ -1,0 +1,167 @@
+[ {
+  "name" : "diagnose_topic",
+  "description" : "Topic sağlık teşhisi: partition/ISR, config, boyut/dağılım, yazma, consumer lag/takılma, transaction, connector, ACL",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "İki offset örneği arası bekleme, sn (varsayılan 3, 1-10; süre sınırına göre kısaltılabilir)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 3
+      }
+    },
+    "required" : [ "cluster", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_consumer_group",
+  "description" : "Consumer group teşhisi: durum/tip, üyeler ve atama, lag ve eğilimi, takılı partition'lar, eksik topic'ler, coordinator, ACL",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group adı (groupId)"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "İki offset örneği arası bekleme, sn (varsayılan 5, 1-10; süre sınırına göre kısaltılabilir)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster", "group" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_connector",
+  "description" : "Connector teşhisi: connector/görev durumu ve hata özetleri, config/plugin/converter, topic'ler, sink lag, kaynak yazma, worker dağılımı",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha" ]
+      },
+      "name" : {
+        "type" : "string",
+        "description" : "Connector adı"
+      },
+      "intervalSeconds" : {
+        "type" : "integer",
+        "description" : "İki offset örneği arası bekleme, sn (varsayılan 5, 1-10; süre sınırına göre kısaltılabilir)",
+        "minimum" : 1,
+        "maximum" : 10,
+        "default" : 5
+      }
+    },
+    "required" : [ "cluster", "name" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_cluster",
+  "description" : "Cluster teşhisi: mod/sürüm, controller/quorum, broker'lar, URP/offline/min ISR, disk, dağılım, config farkı, lag, connector",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_access",
+  "description" : "Principal bir amaç (produce/consume/transactional-produce/admin-topic) için yetkili mi; eksik ACL'leri acls_create biçiminde önerir",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      },
+      "principal" : {
+        "type" : "string",
+        "description" : "Principal (ör. User:alice; sadece ad verilirse User: eklenir)"
+      },
+      "intent" : {
+        "type" : "string",
+        "description" : "Amaç",
+        "enum" : [ "produce", "consume", "transactional-produce", "admin-topic" ]
+      },
+      "topic" : {
+        "type" : "string",
+        "description" : "Topic adı"
+      },
+      "group" : {
+        "type" : "string",
+        "description" : "Consumer group (consume için zorunlu; transactional-produce'ta offset commit için)"
+      },
+      "transactionalId" : {
+        "type" : "string",
+        "description" : "transactional.id (transactional-produce için zorunlu)"
+      },
+      "host" : {
+        "type" : "string",
+        "description" : "İstemci IP'si (varsayılan *: sadece host'u * olan ACL'ler eşleşir)"
+      }
+    },
+    "required" : [ "cluster", "principal", "intent", "topic" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+}, {
+  "name" : "diagnose_connectivity",
+  "description" : "Bağlantı teşhisi (adım adım, süreli): DNS, TCP, güvenlik/Kerberos, yeni client ile Kafka, advertised adresler, Connect/SR",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cluster" : {
+        "type" : "string",
+        "description" : "Cluster adı",
+        "enum" : [ "alpha", "beta" ]
+      }
+    },
+    "required" : [ "cluster" ]
+  },
+  "annotations" : {
+    "readOnlyHint" : true,
+    "destructiveHint" : false
+  }
+} ]
