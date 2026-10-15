@@ -13,14 +13,14 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 
 /**
- * Yazan/geri alınamaz consumers araçları ZooKeeper modlu cluster'da (Kafka 3.9, classic group coordinator):
- * offsets_reset (tüm hedefler), offsets_delete, delete; etkiler zkAdmin ile doğrulanır.
+ * Writing/irreversible consumers tools on a ZooKeeper-mode cluster (Kafka 3.9, classic group coordinator):
+ * offsets_reset (all targets), offsets_delete, delete; the effects are verified with zkAdmin.
  */
 class ConsumersMixedOffsetsTest extends ConsumersMixedTestBase {
 
 	private static final long BASE_TS = Instant.parse("2024-05-01T10:00:00Z").toEpochMilli();
 
-	/** ZooKeeper'da 2 partition, her birinde 10 mesaj (timestamp BASE_TS + i sn); grup Empty, commit {0:5, 1:5}. */
+	/** On ZooKeeper: 2 partitions with 10 messages each (timestamp BASE_TS + i s); group Empty, commit {0:5, 1:5}. */
 	private String[] zkEmptyGroupWithData(String prefix) throws Exception {
 		String topic = prefix + "-t";
 		createTopic(ZK, topic, 2);
@@ -80,15 +80,15 @@ class ConsumersMixedOffsetsTest extends ConsumersMixedTestBase {
 		KafkaConsumer<byte[], byte[]> consumer = join(ZK, CLASSIC, group, prefix + "-c", topic);
 		commit(consumer, topic, Map.of(0, 6L));
 		assertThat(error("consumer_groups_offsets_reset", on(ZK, "group", group, "topic", topic, "to", "earliest")))
-			.contains("aktif üye")
-			.contains("Empty olmalı");
+			.contains("active member")
+			.contains("must be Empty");
 		assertThat(committed(ZK, group, topic)).isEqualTo(Map.of(0, 6L));
 
-		// ZooKeeper broker'ı olmayan grubu hata yerine Dead olarak describe eder: yeni grup gibi ele alınmalı.
+		// The ZooKeeper broker describes a missing group as Dead instead of failing: it must be treated as a new group.
 		String fresh = prefix + "-new";
 		JsonNode r = ok("consumer_groups_offsets_reset", on(ZK, "group", fresh, "topic", topic, "to", "offset", "offset", 3));
 		assertThat(r.has("groupState")).isFalse();
-		assertThat(r.get("note").asText()).contains("yeni");
+		assertThat(r.get("note").asText()).contains("new group");
 		assertThat(r.at("/partitions/0").has("before")).isFalse();
 		assertThat(r.at("/partitions/0/after").asLong()).isEqualTo(3);
 		assertThat(committed(ZK, fresh, topic)).isEqualTo(Map.of(0, 3L));
@@ -119,13 +119,13 @@ class ConsumersMixedOffsetsTest extends ConsumersMixedTestBase {
 		assertThat(committed(ZK, group, other)).isEqualTo(Map.of(0, 0L));
 
 		assertThat(error("consumer_groups_offsets_delete", on(ZK, "group", group, "topic", topic)))
-			.contains("commit edilmiş offset'i yok");
-		// Olmayan grup: ZooKeeper offset sorgusunda hata vermez (boş döner); KRaft ile aynı mesaj verilmeli.
+			.contains("has no committed offsets");
+		// Missing group: ZooKeeper does not fail the offset query (returns empty); the message must match KRaft's.
 		for (String cluster : List.of(ZK, KRAFT)) {
 			awaitGroupCoordinator(cluster);
 			assertThat(error("consumer_groups_offsets_delete", on(cluster, "group", unique("zk-missing"), "topic", topic)))
 				.as(cluster)
-				.contains("Consumer group bulunamadı");
+				.contains("Consumer group not found");
 		}
 	}
 
@@ -138,7 +138,7 @@ class ConsumersMixedOffsetsTest extends ConsumersMixedTestBase {
 		String group = prefix + "-g";
 		KafkaConsumer<byte[], byte[]> consumer = join(ZK, CLASSIC, group, prefix + "-c", topic);
 		commit(consumer, topic, Map.of(0, 2L));
-		assertThat(error("consumer_groups_offsets_delete", on(ZK, "group", group, "topic", topic))).contains("abone");
+		assertThat(error("consumer_groups_offsets_delete", on(ZK, "group", group, "topic", topic))).contains("still subscribed");
 		assertThat(committed(ZK, group, topic)).isEqualTo(Map.of(0, 2L));
 	}
 
@@ -151,9 +151,9 @@ class ConsumersMixedOffsetsTest extends ConsumersMixedTestBase {
 		String activeGroup = group + "-active";
 		join(ZK, CLASSIC, activeGroup, activeGroup + "-c", topic);
 		assertThat(error("consumer_groups_delete", on(ZK, "group", activeGroup)))
-			.contains("boş değil")
+			.contains("not empty")
 			.contains("state=Stable")
-			.contains("üye=1");
+			.contains("members=1");
 		assertThat(groupIds(ZK)).contains(activeGroup);
 
 		JsonNode r = ok("consumer_groups_delete", on(ZK, "group", group));
@@ -163,7 +163,7 @@ class ConsumersMixedOffsetsTest extends ConsumersMixedTestBase {
 		assertThat(groupIds(ZK)).doesNotContain(group);
 		assertThat(committed(ZK, group, topic)).isEmpty();
 
-		assertThat(error("consumer_groups_delete", on(ZK, "group", group))).contains("bulunamadı");
+		assertThat(error("consumer_groups_delete", on(ZK, "group", group))).contains("not found");
 	}
 
 }

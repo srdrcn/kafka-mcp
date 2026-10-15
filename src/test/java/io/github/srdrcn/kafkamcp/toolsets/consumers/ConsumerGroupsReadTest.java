@@ -50,7 +50,7 @@ class ConsumerGroupsReadTest extends ConsumersTestBase {
 
 		assertThat(ok("consumer_groups_list", args("cluster", "test-ro", "filter", "^" + prefix)).get("total").asInt())
 			.isEqualTo(2);
-		assertThat(error("consumer_groups_list", args("state", "Sleeping"))).contains("Geçersiz state");
+		assertThat(error("consumer_groups_list", args("state", "Sleeping"))).contains("Invalid state");
 	}
 
 	@Test
@@ -106,7 +106,7 @@ class ConsumerGroupsReadTest extends ConsumersTestBase {
 
 	@Test
 	void getUnknownGroupFails() {
-		assertThat(error("consumer_groups_get", args("group", unique("missing-group")))).contains("bulunamadı");
+		assertThat(error("consumer_groups_get", args("group", unique("missing-group")))).contains("not found");
 		assertThat(error("consumer_groups_get", args())).contains("group");
 	}
 
@@ -153,8 +153,8 @@ class ConsumerGroupsReadTest extends ConsumersTestBase {
 		assertThat(none.get("matchedGroups").asInt()).isZero();
 		assertThat(none.get("groups").size()).isZero();
 
-		assertThat(error("consumer_groups_find_by_member", args())).contains("en az biri");
-		assertThat(error("consumer_groups_find_by_member", args("clientId", "(["))).contains("Geçersiz regex");
+		assertThat(error("consumer_groups_find_by_member", args())).contains("At least one");
+		assertThat(error("consumer_groups_find_by_member", args("clientId", "(["))).contains("Invalid regex");
 	}
 
 	@Test
@@ -217,7 +217,7 @@ class ConsumerGroupsReadTest extends ConsumersTestBase {
 		assertThat(member.at("/assignment/" + t1).toString()).isEqualTo("[0,1]");
 		assertThat(member.at("/assignment").has(t2)).isFalse();
 		assertThat(get.get("assignmentPartitionsOmitted").asInt()).isEqualTo(3);
-		assertThat(get.get("offsets").size()).as("bütçe bitince kalan topic'ler boş dizi olarak eklenmemeli").isEqualTo(1);
+		assertThat(get.get("offsets").size()).as("topics past the budget must not appear as empty arrays").isEqualTo(1);
 		assertThat(get.at("/offsets/0/topic").asText()).isEqualTo(t1);
 		assertThat(get.at("/offsets/0/partitions").size()).isEqualTo(2);
 		assertThat(get.at("/offsets/0/partitionsOmitted").asInt()).isEqualTo(1);

@@ -36,14 +36,14 @@ import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
 
 /**
- * Gerçek Admin'i saran ve iki arıza senaryosunu üreten test proxy'si:
+ * Test proxy that wraps the real Admin and produces two failure scenarios:
  * <ul>
- * <li>hangTopics: bu topic'lerin partition'ları listOffsets'te var olmayan partition numarasına çevrilir;
- * gerçek AdminClient "leader unknown, will retry" diye istek timeoutMs'i (yoksa default.api.timeout.ms)
- * dolana kadar dener: leader'ı olmayan partition'ın birebir davranışı.</li>
- * <li>hangGroups: listConsumerGroupOffsets/describeConsumerGroups'ta bu grupların future'ı, AdminClient'ın
- * COORDINATOR_LOAD_IN_PROGRESS'i yeniden denemesi gibi, istek timeoutMs'i (yoksa 60 sn) dolunca
- * TimeoutException ile biter.</li>
+ * <li>hangTopics: the partitions of these topics are mapped to non-existent partition numbers in listOffsets;
+ * the real AdminClient retries with "leader unknown, will retry" until the request timeoutMs (or
+ * default.api.timeout.ms) elapses: exactly the behaviour of a partition without a leader.</li>
+ * <li>hangGroups: in listConsumerGroupOffsets/describeConsumerGroups the futures of these groups end with a
+ * TimeoutException when the request timeoutMs (or 60 s) elapses, like the AdminClient retrying
+ * COORDINATOR_LOAD_IN_PROGRESS.</li>
  * </ul>
  */
 final class FaultyAdmin implements InvocationHandler {
@@ -144,7 +144,7 @@ final class FaultyAdmin implements InvocationHandler {
 		return new DescribeConsumerGroupsResult(futures);
 	}
 
-	/** İsteğin timeoutMs'i dolunca TimeoutException ile biten future (AdminClient'ın yeniden deneme davranışı). */
+	/** Future that ends with a TimeoutException once the request timeoutMs elapses (AdminClient retry behaviour). */
 	private static <T> KafkaFuture<T> hanging(AbstractOptions<?> options) {
 		KafkaFutureImpl<T> f = new KafkaFutureImpl<>();
 		int timeout = options.timeoutMs() == null ? DEFAULT_API_TIMEOUT_MS : options.timeoutMs();

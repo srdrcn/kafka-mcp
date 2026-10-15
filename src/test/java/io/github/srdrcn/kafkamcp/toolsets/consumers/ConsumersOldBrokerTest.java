@@ -16,14 +16,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.github.srdrcn.kafkamcp.kafka.KafkaClients;
+import io.github.srdrcn.kafkamcp.kafka.KafkaErrors;
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
 import io.github.srdrcn.kafkamcp.mcp.ToolHandler;
 
 /**
- * Eski ZooKeeper broker'ları (Kafka 2.x, bkz. {@link OldBrokerAdmin}): listede state/type gelmese de gruplar
- * doğru state, type ve simple bilgisiyle listelenir (Empty gruplar kaçmaz); OffsetDelete'i olmayan broker'da
- * araç asılmadan Türkçe "desteklemiyor" hatası verir.
+ * Old ZooKeeper brokers (Kafka 2.x, see {@link OldBrokerAdmin}): even without state/type in the listing, groups
+ * are listed with the correct state, type and simple flag (Empty groups are not missed); on a broker without
+ * OffsetDelete the tool fails fast with a readable "does not support" error instead of hanging.
  */
 class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 
@@ -38,12 +39,12 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 	@Autowired
 	private OffsetTools offsetTools;
 
-	/** Handler'ı Kafka 2.3 broker'ını taklit eden admin'le (ZooKeeper cluster'ı, 15 sn deadline) çağırır. */
+	/** Calls the handler with an admin that mimics a Kafka 2.3 broker (ZooKeeper cluster, 15 s deadline). */
 	private JsonNode runOnOldBroker(ToolHandler handler, Map<String, Object> args) throws Exception {
 		return run(OldBrokerAdmin.wrap(zkAdmin()), handler, args);
 	}
 
-	/** Handler'ı verilen admin'le (15 sn deadline) çağırır. */
+	/** Calls the handler with the given admin (15 s deadline). */
 	private JsonNode run(Admin old, ToolHandler handler, Map<String, Object> args) throws Exception {
 		KafkaClients oldClients = new KafkaClients(clients.config()) {
 			@Override
@@ -81,7 +82,7 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 		assertThat(list.at("/groups/1/state").asText()).isEqualTo("Empty");
 		assertThat(list.at("/groups/2/groupId").asText()).isEqualTo(simple);
 		assertThat(list.at("/groups/2/state").asText()).isEqualTo("Empty");
-		// type'ı bildirmeyen broker'da da simple grup işaretlenir.
+		// the simple group is marked even on a broker that does not report the type.
 		assertThat(list.at("/groups/2/simple").asBoolean()).isTrue();
 
 		JsonNode emptyOnly = runOnOldBroker(groupTools::list,
@@ -101,8 +102,8 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 	}
 
 	/**
-	 * Kafka 2.6-3.7 (ListGroups v4): listede state var, type yok. ZooKeeper'daki gruplar hep classic: type
-	 * describe etmeden (tek describeFeatures ile) tamamlanır; get ile aynı type'ı gösterir.
+	 * Kafka 2.6-3.7 (ListGroups v4): state but no type in the listing. Groups on ZooKeeper are always classic: the
+	 * type is completed without describe (with a single describeFeatures) and matches the type shown by get.
 	 */
 	@Test
 	void zooKeeperGroupsWithStateButWithoutTypeAreClassicWithoutDescribe() throws Exception {
@@ -127,7 +128,7 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 		assertThat(list.at("/groups/0/state").asText()).isEqualTo("Stable");
 		assertThat(list.at("/groups/1/state").asText()).isEqualTo("Empty");
 		assertThat(list.at("/groups/2/simple").asBoolean()).isTrue();
-		// state listede var, consumer tipi grup ZooKeeper'da olamaz: hiçbir grup describe edilmedi.
+		// the state is in the listing and consumer-type groups are impossible on ZooKeeper: no group was described.
 		assertThat(old.describedGroups()).isEmpty();
 
 		JsonNode emptyGroups = run(old.admin(), groupTools::empty, on(ZK, "filter", Pattern.quote(prefix)));
@@ -141,8 +142,8 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 	}
 
 	/**
-	 * KRaft 3.7 (KIP-848 early access, ListGroups v4): consumer tipi grup olabilir; type'ı state'ten
-	 * çıkarılamayan gruplar describe edilir (simple gruplar hariç).
+	 * KRaft 3.7 (KIP-848 early access, ListGroups v4): consumer-type groups are possible; groups whose type cannot
+	 * be inferred from the state are described (except simple groups).
 	 */
 	@Test
 	void kraftGroupsWithoutTypeAreDescribedToTellConsumerFromClassic() throws Exception {
@@ -170,8 +171,8 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 	}
 
 	/**
-	 * Kafka 2.3: state'i describe ile de alınamayan grup sessizce kaybolmaz; liste partial işaretlenir.
-	 * find_by_member list()'in zaten describe ettiği grupları tekrar describe etmez.
+	 * Kafka 2.3: a group whose state cannot be fetched with describe either is not silently lost; the list is marked
+	 * partial. find_by_member does not describe again the groups list() has already described.
 	 */
 	@Test
 	void groupsWhoseStateCannotBeCompletedMarkResultPartialAndAreNotDescribedTwice() throws Exception {
@@ -199,17 +200,17 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 		assertThat(list.get("total").asInt()).isEqualTo(3);
 		assertThat(list.at("/byState/Unknown").asInt()).isEqualTo(1);
 		assertThat(list.get("partial").asBoolean()).isTrue();
-		assertThat(list.at("/listErrors/0").asText()).contains("State'i alınamayan grup: 1");
+		assertThat(list.at("/listErrors/0").asText()).contains("Groups whose state could not be fetched: 1");
 
 		JsonNode emptyGroups = run(faulty, groupTools::empty, on(ZK, "filter", Pattern.quote(prefix)));
 		assertThat(emptyGroups.get("total").asInt()).isEqualTo(1);
 		assertThat(emptyGroups.at("/groups/0/groupId").asText()).isEqualTo(empty);
 		assertThat(emptyGroups.get("partial").asBoolean()).isTrue();
-		assertThat(emptyGroups.at("/listErrors/0").asText()).contains("State'i alınamayan grup: 1");
+		assertThat(emptyGroups.at("/listErrors/0").asText()).contains("Groups whose state could not be fetched: 1");
 	}
 
 	@Test
-	void offsetsDeleteOnBrokerWithoutOffsetDeleteFailsWithTurkishMessage() throws Exception {
+	void offsetsDeleteOnBrokerWithoutOffsetDeleteFailsWithUnsupportedMessage() throws Exception {
 		String prefix = unique("zkold");
 		String topic = prefix + "-t";
 		createTopic(ZK, topic, 1);
@@ -219,8 +220,8 @@ class ConsumersOldBrokerTest extends ConsumersMixedTestBase {
 
 		assertThatThrownBy(() -> runOnOldBroker(offsetTools::deleteOffsets, on(ZK, "group", group, "topic", topic)))
 			.isInstanceOf(ToolException.class)
-			.hasMessageContaining("Offset'ler silinemedi")
-			.hasMessageContaining("desteklemiyor (sürüm)");
+			.hasMessageContaining("Could not delete the offsets")
+			.hasMessageContaining(KafkaErrors.UNSUPPORTED);
 		assertThat(committed(ZK, group, topic)).isEqualTo(Map.of(0, 3L));
 	}
 

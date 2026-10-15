@@ -24,24 +24,24 @@ import org.apache.kafka.common.internals.KafkaFutureImpl;
 import org.apache.kafka.common.protocol.Errors;
 
 /**
- * Gerçek Admin'i saran ve eski broker'ların yanıtlarını taklit eden test proxy'si ({@link Era}):
+ * Test proxy that wraps the real Admin and mimics the responses of old brokers ({@link Era}):
  * <ul>
- * <li>{@link Era#KAFKA_2_3}: listGroups'ta state ve type yok (ListGroups v4 öncesi, Kafka &lt; 2.6);
- * deleteConsumerGroupOffsets'te OffsetDelete API'si yok (Kafka &lt; 2.4), AdminClient'ın verdiği gibi
- * UnsupportedVersionException.</li>
- * <li>{@link Era#KAFKA_3_7}: listGroups'ta state var, type yok (ListGroups v4, Kafka 2.6-3.7; gerçek
- * ZooKeeper filolarının çoğu).</li>
+ * <li>{@link Era#KAFKA_2_3}: no state and no type in listGroups (before ListGroups v4, Kafka &lt; 2.6); no
+ * OffsetDelete API for deleteConsumerGroupOffsets (Kafka &lt; 2.4), an UnsupportedVersionException as the
+ * AdminClient gives it.</li>
+ * <li>{@link Era#KAFKA_3_7}: state but no type in listGroups (ListGroups v4, Kafka 2.6-3.7; most real
+ * ZooKeeper fleets).</li>
  * </ul>
- * describeConsumerGroups'a giden grup id'leri {@link #describedGroups()}'ta toplanır.
+ * Group ids sent to describeConsumerGroups are collected in {@link #describedGroups()}.
  */
 final class OldBrokerAdmin implements InvocationHandler {
 
 	enum Era {
 
-		/** ListGroups v3 (state/type yok), OffsetDelete yok. */
+		/** ListGroups v3 (no state/type), no OffsetDelete. */
 		KAFKA_2_3,
 
-		/** ListGroups v4 (state var, type yok). */
+		/** ListGroups v4 (state, no type). */
 		KAFKA_3_7
 
 	}
@@ -61,7 +61,7 @@ final class OldBrokerAdmin implements InvocationHandler {
 				this);
 	}
 
-	/** Kafka 2.3 broker'ı ({@link Era#KAFKA_2_3}). */
+	/** Kafka 2.3 broker ({@link Era#KAFKA_2_3}). */
 	static Admin wrap(Admin real) {
 		return of(real, Era.KAFKA_2_3).admin();
 	}
@@ -74,7 +74,7 @@ final class OldBrokerAdmin implements InvocationHandler {
 		return proxy;
 	}
 
-	/** describeConsumerGroups'a gönderilen grup id'leri (çağrı sırasıyla, tekrarlar dahil). */
+	/** Group ids sent to describeConsumerGroups (in call order, including repeats). */
 	List<String> describedGroups() {
 		return List.copyOf(described);
 	}

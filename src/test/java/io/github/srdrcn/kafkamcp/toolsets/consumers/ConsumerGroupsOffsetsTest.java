@@ -13,12 +13,12 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** consumer_groups_offsets_reset, _offsets_delete, _delete ve koruma kuralları. */
+/** consumer_groups_offsets_reset, _offsets_delete, _delete and the safety rules. */
 class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 
 	private static final long BASE_TS = Instant.parse("2024-05-01T10:00:00Z").toEpochMilli();
 
-	/** 2 partition, her birinde 10 mesaj (timestamp BASE_TS + i sn); grup Empty, commit {0:5, 1:5}. */
+	/** 2 partitions with 10 messages each (timestamp BASE_TS + i s); group Empty, commit {0:5, 1:5}. */
 	private String[] emptyGroupWithData(String prefix) throws Exception {
 		String topic = prefix + "-t";
 		createTopic(topic, 2);
@@ -93,21 +93,21 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		String group = gt[0];
 		String topic = gt[1];
 		assertThat(error("consumer_groups_offsets_reset", args("group", group, "topic", topic, "to", "offset")))
-			.contains("offset parametresi gerekli");
+			.contains("offset parameter is required");
 		assertThat(error("consumer_groups_offsets_reset", args("group", group, "topic", topic, "to", "shift")))
-			.contains("shiftBy parametresi gerekli");
+			.contains("shiftBy parameter is required");
 		assertThat(error("consumer_groups_offsets_reset",
-				args("group", group, "topic", topic, "to", "timestamp", "timestamp", "dün")))
-			.contains("Geçersiz timestamp");
+				args("group", group, "topic", topic, "to", "timestamp", "timestamp", "yesterday")))
+			.contains("Invalid timestamp");
 		assertThat(error("consumer_groups_offsets_reset",
 				args("group", group, "topic", topic, "to", "earliest", "partitions", List.of(0, 7))))
-			.contains("olmayan partition")
+			.contains("Partitions not in topic")
 			.contains("[7]");
 		assertThat(error("consumer_groups_offsets_reset", args("group", group, "topic", topic, "to", "middle")))
-			.contains("Geçersiz to");
+			.contains("Invalid to");
 		assertThat(error("consumer_groups_offsets_reset",
 				args("group", group, "topic", unique("no-topic"), "to", "earliest")))
-			.contains("bulunamadı");
+			.contains("not found");
 		assertThat(committed(group, topic)).isEqualTo(Map.of(0, 5L, 1, 5L));
 	}
 
@@ -121,7 +121,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		var consumer = join(group, prefix + "-c", topic);
 		commit(consumer, topic, Map.of(0, 6L));
 		String err = error("consumer_groups_offsets_reset", args("group", group, "topic", topic, "to", "earliest"));
-		assertThat(err).contains("aktif üye").contains("Empty olmalı");
+		assertThat(err).contains("active member").contains("must be Empty");
 		assertThat(committed(group, topic)).isEqualTo(Map.of(0, 6L));
 	}
 
@@ -135,7 +135,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		JsonNode r = ok("consumer_groups_offsets_reset",
 				args("group", group, "topic", topic, "to", "offset", "offset", 3));
 		assertThat(r.has("groupState")).isFalse();
-		assertThat(r.get("note").asText()).contains("yeni");
+		assertThat(r.get("note").asText()).contains("new group");
 		assertThat(r.at("/partitions/0").has("before")).isFalse();
 		assertThat(r.at("/partitions/0/after").asLong()).isEqualTo(3);
 		assertThat(committed(group, topic)).isEqualTo(Map.of(0, 3L));
@@ -162,7 +162,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		assertThat(committed(group, other)).isEqualTo(Map.of(0, 0L));
 
 		assertThat(error("consumer_groups_offsets_delete", args("group", group, "topic", topic)))
-			.contains("commit edilmiş offset'i yok");
+			.contains("has no committed offsets");
 	}
 
 	@Test
@@ -175,7 +175,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		var consumer = join(group, prefix + "-c", topic);
 		commit(consumer, topic, Map.of(0, 2L));
 		String err = error("consumer_groups_offsets_delete", args("group", group, "topic", topic));
-		assertThat(err).contains("abone");
+		assertThat(err).contains("still subscribed");
 		assertThat(committed(group, topic)).isEqualTo(Map.of(0, 2L));
 	}
 
@@ -189,7 +189,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		alter(group, topic, Map.of(0, 3L));
 
 		assertThat(error("consumer_groups_offsets_delete", args("group", group, "topic", topic, "partitions", List.of(1, 2))))
-			.contains("commit edilmiş offset'i yok")
+			.contains("has no committed offsets")
 			.contains("[1, 2]");
 		assertThat(committed(group, topic)).isEqualTo(Map.of(0, 3L));
 
@@ -203,7 +203,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		assertThat(r.at("/partitions/0/committedBefore").asLong()).isEqualTo(3);
 		assertThat(r.at("/partitions/1/partition").asInt()).isEqualTo(1);
 		assertThat(r.at("/partitions/1/deleted").asBoolean()).isFalse();
-		assertThat(r.at("/partitions/1/note").asText()).contains("Commit edilmiş offset yoktu");
+		assertThat(r.at("/partitions/1/note").asText()).contains("No committed offset");
 		assertThat(r.at("/partitions/2/partition").asInt()).isEqualTo(99);
 		assertThat(r.at("/partitions/2/deleted").asBoolean()).isFalse();
 		assertThat(committed(group, topic)).isEmpty();
@@ -219,7 +219,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		assertThat(r.at("/deletedOffsets/topics/0").asText()).isEqualTo(gt[1]);
 		assertThat(groupIds()).doesNotContain(group);
 
-		assertThat(error("consumer_groups_delete", args("group", group))).contains("bulunamadı");
+		assertThat(error("consumer_groups_delete", args("group", group))).contains("not found");
 
 		String prefix = unique("gda");
 		String topic = prefix + "-t";
@@ -227,7 +227,7 @@ class ConsumerGroupsOffsetsTest extends ConsumersTestBase {
 		String active = prefix + "-g";
 		join(active, prefix + "-c", topic);
 		String err = error("consumer_groups_delete", args("group", active));
-		assertThat(err).contains("boş değil").contains("üye=1");
+		assertThat(err).contains("not empty").contains("members=1");
 		assertThat(groupIds()).contains(active);
 	}
 

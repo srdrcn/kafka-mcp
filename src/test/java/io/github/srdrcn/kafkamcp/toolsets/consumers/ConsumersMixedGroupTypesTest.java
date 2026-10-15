@@ -21,9 +21,9 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 
 /**
- * Moda göre farklı çıktı: KRaft (Kafka 4.1) cluster'ında KIP-848 {@code consumer} tipi group'lar (sunucu
- * tarafı assignor, group/member epoch'ları) ve classic group'lar bir arada; ZooKeeper cluster'ında group'lar
- * hep {@code classic}. Aynı araçlar her iki tipte doğru alanları raporlamalı.
+ * Output that differs by mode: on the KRaft (Kafka 4.1) cluster, KIP-848 {@code consumer} type groups (server-side
+ * assignor, group/member epochs) and classic groups side by side; on the ZooKeeper cluster groups are always
+ * {@code classic}. The same tools must report the right fields for both types.
  */
 class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 
@@ -53,7 +53,7 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 			createTopic(cluster, topic, 2);
 			produce(cluster, topic, 0, 8);
 			produce(cluster, topic, 1, 4);
-			// ZooKeeper broker'ları KIP-848'i desteklemez: orada aynı grup classic protokolle kurulur.
+			// ZooKeeper brokers do not support KIP-848: there the same group is set up with the classic protocol.
 			String protocol = KRAFT.equals(cluster) ? CONSUMER : CLASSIC;
 			List<KafkaConsumer<byte[], byte[]>> m = joinAll(cluster, protocol, group, prefix + "-cli", 2,
 					List.of(topic));
@@ -79,7 +79,7 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 		JsonNode kraft = ok("consumer_groups_get", on(KRAFT, "group", group));
 		assertThat(kraft.get("type").asText()).isEqualTo("consumer");
 		assertThat(kraft.get("state").asText()).isEqualTo("Stable");
-		// KIP-848: atamayı broker'daki (sunucu tarafı) assignor yapar.
+		// KIP-848: the assignment is made by the (server-side) assignor on the broker.
 		assertThat(kraft.get("partitionAssignor").asText()).isEqualTo("uniform");
 		assertThat(kraft.get("groupEpoch").asInt()).isPositive();
 		assertThat(kraft.get("targetAssignmentEpoch").asInt()).isEqualTo(kraft.get("groupEpoch").asInt());
@@ -89,7 +89,7 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 			clientIds.add(m.get("clientId").asText());
 			assertThat(m.get("memberEpoch").asInt()).isPositive();
 			assertThat(m.get("assignment").get(topic)).hasSize(1);
-			// Stable: mevcut atama hedef atamayla aynı; alınacak/bırakılacak partition yok.
+			// Stable: the current assignment equals the target assignment; no partitions to take or release.
 			assertThat(m.has("pendingPartitions")).isFalse();
 			assertThat(m.has("classicMember")).isFalse();
 		}
@@ -126,19 +126,19 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 			assertThat(withLag.at("/groups/0/totalLag").asLong()).as(cluster).isEqualTo(8);
 		}
 
-		// Aktif üyeli consumer tipi grubun offset'i değiştirilmez/silinemez.
+		// The offsets of a consumer-type group with active members cannot be changed or deleted.
 		assertThat(error("consumer_groups_offsets_reset", on(KRAFT, "group", group, "topic", topic, "to", "earliest")))
-			.contains("aktif üye");
+			.contains("active member");
 		assertThat(error("consumer_groups_offsets_delete", on(KRAFT, "group", group, "topic", topic)))
-			.contains("abone");
-		assertThat(error("consumer_groups_delete", on(KRAFT, "group", group))).contains("boş değil");
+			.contains("still subscribed");
+		assertThat(error("consumer_groups_delete", on(KRAFT, "group", group))).contains("not empty");
 		assertThat(committed(KRAFT, group, topic)).isEqualTo(Map.of(0, 3L, 1, 1L));
 
-		// Üyeler ayrılınca consumer tipi grup Empty olur; reset/delete araçları çalışır.
+		// Once the members leave, the consumer-type group becomes Empty; the reset/delete tools work.
 		for (KafkaConsumer<byte[], byte[]> c : members.get(KRAFT)) {
 			leave(c);
 		}
-		waitUntil(() -> state(KRAFT, group) == GroupState.EMPTY, "consumer tipi grup Empty olmadı");
+		waitUntil(() -> state(KRAFT, group) == GroupState.EMPTY, "consumer-type group did not become Empty");
 		JsonNode emptyGroups = ok("consumer_groups_empty", on(KRAFT, "filter", Pattern.quote(group)));
 		assertThat(emptyGroups.at("/groups/0/type").asText()).isEqualTo("consumer");
 		assertThat(emptyGroups.at("/groups/0/totalLag").asLong()).isEqualTo(8);
@@ -156,16 +156,16 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 		JsonNode del = ok("consumer_groups_delete", on(KRAFT, "group", group));
 		assertThat(del.get("deleted").asBoolean()).isTrue();
 		assertThat(groupIds(KRAFT)).doesNotContain(group);
-		// ZooKeeper'daki aynı adlı classic grup etkilenmez.
+		// The classic group with the same name on ZooKeeper is not affected.
 		assertThat(groupIds(ZK)).contains(group);
 		assertThat(committed(ZK, group, topic)).isEqualTo(Map.of(0, 3L, 1, 1L));
 	}
 
 	/**
-	 * KIP-848 revoke sırasında (sadece KRaft): ConsumerGroupDescribe'daki atama broker'ın mevcut ∩ hedef
-	 * kümesidir, revoke edilmekte olan partition yanıtta yoktur. Bırakan üyede uydurma bir "revoking" sayısı
-	 * çıkmaz; sahipsiz görünen partition hedef üyesiyle (reassigningTo) işaretlenir, bekleyen üyede
-	 * pendingPartitions görünür.
+	 * During a KIP-848 revoke (KRaft only): the assignment in ConsumerGroupDescribe is the broker's current ∩ target
+	 * set; the partition being revoked is not in the response. The releasing member shows no made-up "revoking"
+	 * count; the partition that looks ownerless is marked with its target member (reassigningTo), and the waiting
+	 * member shows pendingPartitions.
 	 */
 	@Test
 	void revokingMemberOfConsumerTypeGroupOnKraft() throws Exception {
@@ -176,7 +176,7 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 		createTopic(KRAFT, topic, 2);
 		produce(KRAFT, topic, 0, 6);
 		produce(KRAFT, topic, 1, 4);
-		// A'nın revoke callback'i uygulama thread'inde (poll içinde) çalışır: A poll edilmedikçe revoke bitmez.
+		// A's revoke callback runs on the application thread (inside poll): the revoke does not finish until A polls.
 		KafkaConsumer<byte[], byte[]> a = newGroupConsumer(KRAFT, CONSUMER, group, prefix + "-a");
 		a.subscribe(List.of(topic), new ConsumerRebalanceListener() {
 
@@ -191,18 +191,18 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 		});
 		long deadline = System.currentTimeMillis() + 120_000;
 		while (a.assignment().size() < 2 || state(KRAFT, group) != GroupState.STABLE) {
-			assertThat(System.currentTimeMillis()).as("A gruba katılamadı").isLessThan(deadline);
+			assertThat(System.currentTimeMillis()).as("A could not join the group").isLessThan(deadline);
 			a.poll(Duration.ofMillis(100));
 		}
 		commit(a, topic, Map.of(0, 1L, 1, 1L));
 
 		KafkaConsumer<byte[], byte[]> b = newGroupConsumer(KRAFT, CONSUMER, group, prefix + "-b");
 		b.subscribe(List.of(topic));
-		// Sadece B poll edilir: hedef atamada A bir partition'ı B'ye bırakmalı, ama callback'i çalışmadığı için
-		// A revoke'ta (UNREVOKED_PARTITIONS) kalır, B o partition'ı bekler (Reconciling).
+		// Only B polls: in the target assignment A must release a partition to B, but since its callback does not
+		// run, A stays in revoke (UNREVOKED_PARTITIONS) and B waits for that partition (Reconciling).
 		ConsumerGroupDescription d = null;
 		while (d == null) {
-			assertThat(System.currentTimeMillis()).as("grup revoke aşamasına gelmedi").isLessThan(deadline);
+			assertThat(System.currentTimeMillis()).as("group did not reach the revoke phase").isLessThan(deadline);
 			b.poll(Duration.ofMillis(200));
 			ConsumerGroupDescription now = describe(KRAFT, group);
 			MemberDescription ma = member(now, prefix + "-a");
@@ -256,10 +256,10 @@ class ConsumersMixedGroupTypesTest extends ConsumersMixedTestBase {
 		}
 		assertThat(lag.get("note").asText()).contains("reassigningTo");
 
-		// A poll edince revoke biter: partition B'ye geçer, grup Stable olur ve reassigningTo kalkar.
+		// Once A polls, the revoke finishes: the partition moves to B, the group becomes Stable, reassigningTo is gone.
 		long settle = System.currentTimeMillis() + 120_000;
 		while (b.assignment().isEmpty() || state(KRAFT, group) != GroupState.STABLE) {
-			assertThat(System.currentTimeMillis()).as("revoke tamamlanmadı").isLessThan(settle);
+			assertThat(System.currentTimeMillis()).as("revoke did not complete").isLessThan(settle);
 			a.poll(Duration.ofMillis(100));
 			b.poll(Duration.ofMillis(100));
 		}

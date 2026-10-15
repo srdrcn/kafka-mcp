@@ -35,7 +35,7 @@ import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.support.KafkaIntegrationTest;
 import io.github.srdrcn.kafkamcp.support.KafkaTestCluster;
 
-/** consumers testleri için ortak hazırlık: topic, veri, gerçek consumer group'lar (subscribe + commit). */
+/** Shared setup for the consumers tests: topics, data, real consumer groups (subscribe + commit). */
 abstract class ConsumersTestBase extends KafkaIntegrationTest {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -53,20 +53,20 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 	@Autowired
 	protected LagTools lagTools;
 
-	/** Handler'ı doğrudan çağırmak için ToolCall (test cluster'ı, 15 sn deadline). */
+	/** ToolCall for calling a handler directly (test cluster, 15 s deadline). */
 	protected ToolCall call(String tool, Map<String, Object> args) {
 		return new ToolCall(tool, args, clients, Instant.now().plusMillis(KafkaClients.TIMEOUT_MS));
 	}
 
-	/** Handler sonucunu (Map/List) JSON ağacına çevirir. */
+	/** Converts a handler result (Map/List) to a JSON tree. */
 	protected static JsonNode json(Object result) {
 		return MAPPER.valueToTree(result);
 	}
 
 	protected static synchronized KafkaProducer<byte[], byte[]> producer() {
 		if (producer == null) {
-			// Yeni topic'te ilk batch NOT_LEADER alınca idempotent producer'ın OUT_OF_ORDER_SEQUENCE
-			// döngüsüne girmemesi için idempotence kapalı, tek in-flight istek.
+			// Idempotence off and a single in-flight request, so that the idempotent producer does not loop on
+			// OUT_OF_ORDER_SEQUENCE when the first batch on a new topic gets NOT_LEADER.
 			producer = KafkaTestCluster.producer(Map.of(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, false,
 					ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 1, ProducerConfig.ACKS_CONFIG, "all"));
 		}
@@ -88,7 +88,7 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 				c.close();
 			}
 			catch (RuntimeException ignored) {
-				// test bitti
+				// test is over
 			}
 		}
 		consumers.clear();
@@ -108,10 +108,10 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 			catch (Exception e) {
 				return false;
 			}
-		}, "topic hazır olmadı: " + topic);
+		}, "topic not ready: " + topic);
 	}
 
-	/** Partition'a count mesaj yazar (timestamp: baseTs + i*1000, baseTs < 0 ise broker zamanı). */
+	/** Writes count messages to the partition (timestamp: baseTs + i*1000, broker time if baseTs < 0). */
 	protected static void produce(String topic, int partition, int count, long baseTs) throws Exception {
 		List<Future<RecordMetadata>> sent = new ArrayList<>();
 		for (int i = 0; i < count; i++) {
@@ -128,14 +128,14 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		produce(topic, partition, count, -1);
 	}
 
-	/** Gruba katılan aktif consumer (assignment gelene kadar poll eder; test sonunda kapanır). */
+	/** Active consumer that joins the group (polls until it gets an assignment; closed at the end of the test). */
 	protected KafkaConsumer<byte[], byte[]> join(String group, String clientId, String topic) {
 		KafkaConsumer<byte[], byte[]> c = newGroupConsumer(group, clientId);
 		c.subscribe(List.of(topic));
 		long deadline = System.currentTimeMillis() + 90_000;
 		while (c.assignment().isEmpty()) {
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("Consumer gruba katılamadı: " + group);
+				throw new IllegalStateException("Consumer could not join the group: " + group);
 			}
 			c.poll(Duration.ofMillis(200));
 		}
@@ -143,8 +143,9 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 	}
 
 	/**
-	 * count consumer'ı aynı gruba topics aboneliğiyle katar; rebalance tamamlansın diye hepsi atama alana kadar
-	 * sırayla poll eder (test sonunda kapanır). clientId'ler clientIdPrefix-0, -1, ...
+	 * Joins count consumers subscribed to topics to the same group; polls them in turn until all have an
+	 * assignment so that the rebalance completes (closed at the end of the test). clientIds are clientIdPrefix-0,
+	 * -1, ...
 	 */
 	protected List<KafkaConsumer<byte[], byte[]>> joinAll(String group, String clientIdPrefix, int count,
 			List<String> topics) {
@@ -157,7 +158,7 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		long deadline = System.currentTimeMillis() + 90_000;
 		while (members.stream().anyMatch(c -> c.assignment().isEmpty()) || state(group) != GroupState.STABLE) {
 			if (System.currentTimeMillis() > deadline) {
-				throw new IllegalStateException("Consumer'lar gruba katılamadı: " + group);
+				throw new IllegalStateException("Consumers could not join the group: " + group);
 			}
 			members.forEach(c -> c.poll(Duration.ofMillis(100)));
 		}
@@ -183,13 +184,13 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		c.commitSync(m, Duration.ofSeconds(60));
 	}
 
-	/** Gerçek consumer ile katılıp commit eder ve kapanır: grup Empty kalır. */
+	/** Joins with a real consumer, commits and closes it: the group stays Empty. */
 	protected void emptyGroup(String group, String topic, Map<Integer, Long> offsets) {
 		KafkaConsumer<byte[], byte[]> c = join(group, group + "-client", topic);
 		commit(c, topic, offsets);
 		c.close();
 		consumers.remove(c);
-		waitUntil(() -> state(group) == GroupState.EMPTY, "grup Empty olmadı: " + group);
+		waitUntil(() -> state(group) == GroupState.EMPTY, "group did not become Empty: " + group);
 	}
 
 	protected static GroupState state(String group) {
@@ -205,7 +206,7 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		}
 	}
 
-	/** partition → committed offset (testAdmin ile). */
+	/** partition → committed offset (via testAdmin). */
 	protected static Map<Integer, Long> committed(String group, String topic) throws Exception {
 		Map<TopicPartition, OffsetAndMetadata> m = testAdmin().listConsumerGroupOffsets(group)
 			.partitionsToOffsetAndMetadata()
@@ -219,7 +220,7 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		return out;
 	}
 
-	/** Admin ile offset commit'i (üyesi olmayan gruplar için). */
+	/** Offset commit via admin (for groups without members). */
 	protected static void alter(String group, String topic, Map<Integer, Long> offsets) throws Exception {
 		Map<TopicPartition, OffsetAndMetadata> m = new java.util.HashMap<>();
 		offsets.forEach((p, o) -> m.put(new TopicPartition(topic, p), new OffsetAndMetadata(o)));
@@ -242,7 +243,7 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 		}
 	}
 
-	/** Arka planda iş çalıştırır (ör. araç çağrısı sürerken üretim); stop() ile durur. */
+	/** Runs a task in the background (e.g. producing while a tool call runs); stops on close(). */
 	protected static final class Background implements AutoCloseable {
 
 		private final Thread thread;
@@ -274,7 +275,7 @@ abstract class ConsumersTestBase extends KafkaIntegrationTest {
 			running = false;
 			thread.join(30_000);
 			if (failure != null) {
-				throw new AssertionError("Arka plan işi hata verdi", failure);
+				throw new AssertionError("Background task failed", failure);
 			}
 		}
 

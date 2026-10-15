@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.GroupLag.OffsetLookup;
 import io.github.srdrcn.kafkamcp.toolsets.consumers.OffsetTools.Target;
 
-/** consumer_groups_offsets_reset'in partition bazında hedef offset hesabı (Kafka'sız). */
+/** Per-partition target offset computation of consumer_groups_offsets_reset (without Kafka). */
 class OffsetTargetTest {
 
 	private static final TopicPartition P0 = new TopicPartition("t", 0);
@@ -21,15 +21,15 @@ class OffsetTargetTest {
 
 	@Test
 	void timestampLookupFailureSkipsPartitionInsteadOfMovingToLatest() {
-		OffsetLookup byTime = new OffsetLookup(Map.of(P0, 4L, P1, -1L), Map.of(P2, "Topic ya da partition bulunamadı"),
+		OffsetLookup byTime = new OffsetLookup(Map.of(P0, 4L, P1, -1L), Map.of(P2, "Topic or partition not found"),
 				0);
 		assertThat(OffsetTools.target("timestamp", P0, 0, 10, 7L, null, null, byTime)).isEqualTo(Target.of(4));
 		assertThat(OffsetTools.target("timestamp", P1, 0, 10, 7L, null, null, byTime))
-			.as("timestamp'ten sonra kayıt yok → latest")
+			.as("no record after the timestamp → latest")
 			.isEqualTo(Target.of(10));
 		Target failed = OffsetTools.target("timestamp", P2, 0, 10, 7L, null, null, byTime);
 		assertThat(failed.offset()).isNull();
-		assertThat(failed.skipped()).contains("Timestamp offset'i alınamadı").contains("bulunamadı");
+		assertThat(failed.skipped()).contains("Could not fetch the timestamp offset").contains("not found");
 	}
 
 	@Test
