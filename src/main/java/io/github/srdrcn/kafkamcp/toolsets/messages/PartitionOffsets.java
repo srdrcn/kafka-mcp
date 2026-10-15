@@ -11,8 +11,12 @@ import java.util.Map;
 import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
+import org.apache.kafka.common.errors.UnsupportedForMessageFormatException;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 
 import io.github.srdrcn.kafkamcp.mcp.ToolCall;
 import io.github.srdrcn.kafkamcp.mcp.ToolException;
@@ -20,6 +24,11 @@ import io.github.srdrcn.kafkamcp.mcp.ToolException;
 /**
  * Topic partition'larını çözer ve offset'leri partition başına değil tek {@code listOffsets} çağrısıyla
  * toplu alır (earliest/latest/forTimestamp). Birden çok istek önce başlatılıp sonra beklenebilir.
+ * <p>
+ * Karışık ortam (KRaft + ZooKeeper): describeTopics/listOffsets/fetch her iki modda aynıdır. Zamana göre arama
+ * ise eski ZooKeeper broker'larında partition bazında reddedilebilir (v0 mesaj formatı:
+ * UnsupportedForMessageFormatException; eski protokol: UnsupportedVersionException); bunlar
+ * {@link #awaitEach} ile partition başına Türkçe not olur, aracı düşürmez.
  */
 public final class PartitionOffsets {
 
@@ -31,6 +40,24 @@ public final class PartitionOffsets {
 
 		public boolean found() {
 			return offset >= 0;
+		}
+
+	}
+
+	/**
+	 * Partition başına sonuç: bulunan offset'ler ve broker'ın desteklemediği (eski sürüm/mesaj formatı) için
+	 * sonucu olmayan partition'ların Türkçe nedeni.
+	 */
+	public record Lookup(Map<TopicPartition, OffsetAt> offsets, Map<TopicPartition, String> unsupported) {
+
+		/** Nedeni aynı olan partition'lar (id sırasıyla); not üretmek için. */
+		public Map<String, List<Integer>> unsupportedByReason() {
+			Map<String, List<Integer>> out = new LinkedHashMap<>();
+			unsupported.entrySet()
+				.stream()
+				.sorted(Comparator.comparingInt(e -> e.getKey().partition()))
+				.forEach(e -> out.computeIfAbsent(e.getValue(), k -> new ArrayList<>()).add(e.getKey().partition()));
+			return out;
 		}
 
 	}
@@ -93,7 +120,7 @@ public final class PartitionOffsets {
 				if (i.partition() == partition) {
 					if (!hasLeader(i)) {
 						throw new ToolException("Partition " + partition + " offline: lideri yok (broker kapalı ya da "
-								+ "ISR'da replika yok); offset/mesaj okunamaz");
+								+ "ISR'da replika yok); offset/mesaj okunamaz" + elrHint(i));
 					}
 					return new Selection(topic, List.of(new TopicPartition(topic, partition)), List.of());
 				}
@@ -116,6 +143,38 @@ public final class PartitionOffsets {
 
 	private static boolean hasLeader(TopicPartitionInfo i) {
 		return i.leader() != null && !i.leader().isEmpty();
+	}
+
+	/**
+	 * Lidersiz partition için ELR bilgisi (KIP-966, sadece KRaft). ZooKeeper broker'larında (ve ELR kapalıyken)
+	 * elr()/lastKnownElr() null ya da boştur: ek bilgi yok.
+	 */
+	static String elrHint(TopicPartitionInfo i) {
+		List<Integer> elr = ids(i.elr());
+		List<Integer> lastKnown = ids(i.lastKnownElr());
+		if (elr.isEmpty() && lastKnown.isEmpty()) {
+			return "";
+		}
+		StringBuilder sb = new StringBuilder(" (KRaft");
+		if (!elr.isEmpty()) {
+			sb.append("; ELR: ").append(elr).append(", bu replikalardan biri dönünce veri kaybı olmadan lider seçilir");
+		}
+		if (!lastKnown.isEmpty()) {
+			sb.append("; son bilinen ELR: ").append(lastKnown);
+		}
+		return sb.append(')').toString();
+	}
+
+	private static List<Integer> ids(List<Node> nodes) {
+		List<Integer> out = new ArrayList<>();
+		if (nodes != null) {
+			for (Node n : nodes) {
+				if (n != null) {
+					out.add(n.id());
+				}
+			}
+		}
+		return out;
 	}
 
 	private static TopicDescription describe(ToolCall call, String topic) {
@@ -141,6 +200,43 @@ public final class PartitionOffsets {
 		return out;
 	}
 
+	/**
+	 * {@link #request} sonucunu partition başına bekler. Broker'ın desteklemediği partition'lar
+	 * (UnsupportedVersionException / UnsupportedForMessageFormatException; eski ZooKeeper broker'ları)
+	 * {@link Lookup#unsupported()}'a Türkçe nedenle düşer; diğer hatalar ve zaman aşımı yine Türkçe
+	 * {@link ToolException} olur.
+	 */
+	public static Lookup awaitEach(ToolCall call, Collection<TopicPartition> tps, ListOffsetsResult result) {
+		Map<TopicPartition, OffsetAt> offsets = new HashMap<>();
+		Map<TopicPartition, String> unsupported = new LinkedHashMap<>();
+		for (TopicPartition tp : tps) {
+			KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo> f = result.partitionResult(tp);
+			try {
+				ListOffsetsResult.ListOffsetsResultInfo info = call.await(f);
+				offsets.put(tp, new OffsetAt(info.offset(), info.timestamp()));
+			}
+			catch (ToolException e) {
+				String reason = unsupportedReason(e.getCause());
+				if (reason == null) {
+					throw e;
+				}
+				unsupported.put(tp, reason);
+			}
+		}
+		return new Lookup(offsets, unsupported);
+	}
+
+	/** Broker'ın bu isteği desteklemediğini gösteren hata için Türkçe neden; başka hata ise null. */
+	static String unsupportedReason(Throwable error) {
+		if (error instanceof UnsupportedForMessageFormatException) {
+			return "broker bu işlemi desteklemiyor (eski mesaj formatı: v0 kayıtlarda zaman damgası yok)";
+		}
+		if (error instanceof UnsupportedVersionException) {
+			return "broker bu işlemi desteklemiyor (sürüm)";
+		}
+		return null;
+	}
+
 	/** earliest ve latest offset'leri (iki istek paralel). */
 	public static Bounds bounds(ToolCall call, Collection<TopicPartition> tps) {
 		if (tps.isEmpty()) {
@@ -155,6 +251,17 @@ public final class PartitionOffsets {
 	public static Map<TopicPartition, OffsetAt> forTimestamp(ToolCall call, Collection<TopicPartition> tps,
 			long timestamp) {
 		return tps.isEmpty() ? Map.of() : await(call, request(call, tps, OffsetSpec.forTimestamp(timestamp)));
+	}
+
+	/**
+	 * {@link #forTimestamp} gibi, ama zamana göre aramayı desteklemeyen partition'lar (eski ZooKeeper
+	 * broker'ı/mesaj formatı) hata yerine {@link Lookup#unsupported()}'a düşer.
+	 */
+	public static Lookup forTimestampEach(ToolCall call, Collection<TopicPartition> tps, long timestamp) {
+		if (tps.isEmpty()) {
+			return new Lookup(Map.of(), Map.of());
+		}
+		return awaitEach(call, tps, request(call, tps, OffsetSpec.forTimestamp(timestamp)));
 	}
 
 	public static Map<TopicPartition, Long> offsets(Map<TopicPartition, OffsetAt> m) {
